@@ -9,46 +9,80 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     public static class ServerAuthorityPatches
     {
+        private static readonly int DefaultActiveArea = 3;   // vanilla values as fallback
+        private static readonly int DefaultDistantArea = 5;
+
         // ====================================================================
-        // 1. Server creates/destroys objects for ALL connected peers
+        // TELEPORT FIX — MUST RUN BEFORE OTHER IsActiveAreaLoaded PATCHES
+        // ====================================================================
+        [HarmonyPatch(typeof(ZoneSystem), "IsActiveAreaLoaded")]
+        [HarmonyPriority(Priority.First)] // Ensures this runs before the server-authority version below
+        [HarmonyPrefix]
+        public static bool IsActiveAreaLoaded_TeleportFix(ref bool __result)
+        {
+            // Client-side: if the local player is teleporting, force "loaded" to prevent black screen / hmap NRE
+            if (Player.m_localPlayer != null && Player.m_localPlayer.IsTeleporting())
+            {
+                __result = true;
+                return false;
+            }
+            return true; // Continue to other patches
+        }
+
+        // ====================================================================
+        // 1. Server creates/destroys objects for ALL connected peers — SAFE
         // ====================================================================
         [HarmonyPatch(typeof(ZNetScene), "CreateDestroyObjects")]
         [HarmonyPrefix]
         public static bool CreateDestroyObjects_Prefix(ZNetScene __instance)
         {
-            if (!ZNet.instance || !ZNet.instance.IsServer()) return true;
+            // Only run on dedicated/listen server AND when there are actual connected peers
+            if (!ZNet.instance || !ZNet.instance.IsServer() || ZNet.instance.GetConnectedPeers().Count == 0)
+                return true;
+
             int extendedRadius = FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value;
-            int activeArea = ZoneSystem.instance.m_activeArea + extendedRadius;
-            int distantArea = ZoneSystem.instance.m_activeDistantArea + extendedRadius;
-            List<ZDO> near = new List<ZDO>();
-            List<ZDO> distant = new List<ZDO>();
+            int activeArea = (ZoneSystem.instance?.m_activeArea ?? DefaultActiveArea) + extendedRadius;
+            int distantArea = (ZoneSystem.instance?.m_activeDistantArea ?? DefaultDistantArea) + extendedRadius;
+
+            var near = new List<ZDO>();
+            var distant = new List<ZDO>();
+
             foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers())
             {
+                if (!peer.IsReady()) continue; // Skip not-fully-connected peers
                 Vector3 pos = peer.GetRefPos();
                 Vector2i zone = ZoneSystem.GetZone(pos);
                 ZDOMan.instance.FindSectorObjects(zone, activeArea, distantArea, near, distant);
             }
-            List<ZDO> distinctNear = near.Distinct().ToList();
-            List<ZDO> distinctDistant = distant.Distinct().ToList();
-            Traverse createTraverse = Traverse.Create(__instance);
-            createTraverse.Method("CreateObjects", distinctNear, distinctDistant).GetValue();
-            createTraverse.Method("RemoveObjects", distinctNear, distinctDistant).GetValue();
-            return false;
+
+            var distinctNear = near.Distinct().ToList();
+            var distinctDistant = distant.Distinct().ToList();
+
+            var traverse = Traverse.Create(__instance);
+            traverse.Method("CreateObjects", distinctNear, distinctDistant).GetValue();
+            traverse.Method("RemoveObjects", distinctNear, distinctDistant).GetValue();
+
+            return false; // Skip original
         }
 
         // ====================================================================
-        // 2. IsActiveAreaLoaded checks ALL peers (SERVER ONLY!)
+        // 2. IsActiveAreaLoaded checks ALL peers — SAFE
         // ====================================================================
         [HarmonyPatch(typeof(ZoneSystem), "IsActiveAreaLoaded")]
         [HarmonyPrefix]
         public static bool IsActiveAreaLoaded_Prefix(ref bool __result, ZoneSystem __instance, Dictionary<Vector2i, object> ___m_zones)
         {
-            if (!ZNet.instance || !ZNet.instance.IsServer()) return true;
+            if (!ZNet.instance || !ZNet.instance.IsServer() || ZNet.instance.GetPeers().Count == 0)
+                return true;
+
             int extendedRadius = FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value;
             int activeArea = __instance.m_activeArea + extendedRadius;
+
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
             {
+                if (!peer.IsReady()) continue;
                 Vector2i zone = ZoneSystem.GetZone(peer.GetRefPos());
+
                 for (int y = zone.y - activeArea; y <= zone.y + activeArea; y++)
                 {
                     for (int x = zone.x - activeArea; x <= zone.x + activeArea; x++)
@@ -61,12 +95,13 @@ namespace FiresGhettoNetworkMod
                     }
                 }
             }
+
             __result = true;
             return false;
         }
 
         // ====================================================================
-        // 3. ZoneSystem.Update runs fully on server
+        // 3. ZoneSystem.Update runs fully on server — SAFE
         // ====================================================================
         [HarmonyPatch(typeof(ZoneSystem), "Update")]
         [HarmonyPrefix]
@@ -74,83 +109,101 @@ namespace FiresGhettoNetworkMod
         {
             if (ZNet.GetConnectionStatus() != ZNet.ConnectionStatus.Connected)
                 return false;
+
             ___m_updateTimer += Time.deltaTime;
-            if ((double)___m_updateTimer > 0.1f)
+            if (___m_updateTimer > 0.1f)
             {
                 ___m_updateTimer = 0f;
                 Traverse.Create(__instance).Method("UpdateTTL", 0.1f).GetValue();
-                if (ZNet.instance && ZNet.instance.IsServer())
+
+                if (ZNet.instance && ZNet.instance.IsServer() && ZNet.instance.GetPeers().Count > 0)
                 {
+                    var traverse = Traverse.Create(__instance);
                     foreach (ZNetPeer peer in ZNet.instance.GetPeers())
-                        Traverse.Create(__instance).Method("CreateLocalZones", peer.GetRefPos()).GetValue();
+                    {
+                        if (peer.IsReady())
+                            traverse.Method("CreateLocalZones", peer.GetRefPos()).GetValue();
+                    }
                 }
             }
+
             return false;
         }
 
         // ====================================================================
-        // 4. Server owns all persistent ZDOs in active areas
+        // 4. Server owns all persistent ZDOs in active areas — SAFE
         // ====================================================================
         [HarmonyPatch(typeof(ZDOMan), "ReleaseNearbyZDOS")]
         [HarmonyPrefix]
         public static bool ReleaseNearbyZDOS_Prefix(ZDOMan __instance, ref Vector3 refPosition, ref long uid)
         {
-            if (!ZNet.instance || !ZNet.instance.IsServer()) return true;
+            if (!ZNet.instance || !ZNet.instance.IsServer() || ZNet.instance.GetPeers().Count == 0)
+                return true;
+
             int extendedRadius = FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value;
-            int activeArea = ZoneSystem.instance.m_activeArea + extendedRadius;
+            int activeArea = (ZoneSystem.instance?.m_activeArea ?? DefaultActiveArea) + extendedRadius;
+
             Vector2i zone = ZoneSystem.GetZone(refPosition);
-            List<ZDO> sectorObjects = Traverse.Create(__instance).Field("m_tempNearObjects").GetValue<List<ZDO>>();
+            var sectorObjects = Traverse.Create(__instance).Field<List<ZDO>>("m_tempNearObjects").Value;
             sectorObjects.Clear();
             __instance.FindSectorObjects(zone, activeArea, 0, sectorObjects);
+
             foreach (ZDO zdo in sectorObjects)
             {
-                if (zdo.Persistent)
+                if (!zdo.Persistent) continue;
+
+                bool inAnyActiveArea = false;
+                foreach (ZNetPeer peer in ZNet.instance.GetPeers())
                 {
-                    bool inAnyActiveArea = false;
-                    foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+                    if (peer.IsReady() && ZNetScene.InActiveArea(zdo.GetSector(), ZoneSystem.GetZone(peer.GetRefPos())))
                     {
-                        if (ZNetScene.InActiveArea(zdo.GetSector(), ZoneSystem.GetZone(peer.GetRefPos())))
-                        {
-                            inAnyActiveArea = true;
-                            break;
-                        }
-                    }
-                    long owner = zdo.GetOwner();
-                    if (owner == uid || owner == ZNet.GetUID())
-                    {
-                        if (!inAnyActiveArea)
-                            zdo.SetOwner(0L);
-                    }
-                    else
-                    {
-                        bool shouldOwn = owner == 0L || !Traverse.Create(__instance).Method("IsInPeerActiveArea", zdo.GetSector(), owner).GetValue<bool>();
-                        if (shouldOwn && inAnyActiveArea)
-                            zdo.SetOwner(ZNet.GetUID());
+                        inAnyActiveArea = true;
+                        break;
                     }
                 }
+
+                long owner = zdo.GetOwner();
+                if (owner == uid || owner == ZNet.GetUID())
+                {
+                    if (!inAnyActiveArea)
+                        zdo.SetOwner(0L);
+                }
+                else
+                {
+                    bool shouldOwn = owner == 0L ||
+                                     !Traverse.Create(__instance).Method("IsInPeerActiveArea", zdo.GetSector(), owner).GetValue<bool>();
+
+                    if (shouldOwn && inAnyActiveArea)
+                        zdo.SetOwner(ZNet.GetUID());
+                }
             }
+
             return false;
         }
 
         // ====================================================================
-        // 5. OutsideActiveArea checks ALL peers
+        // 5. OutsideActiveArea checks ALL peers — SAFE
         // ====================================================================
         [HarmonyPatch(typeof(ZNetScene), "OutsideActiveArea", new[] { typeof(Vector3) })]
         [HarmonyPrefix]
         public static bool OutsideActiveArea_Prefix(ref bool __result, Vector3 point)
         {
-            if (!ZNet.instance || !ZNet.instance.IsServer()) return true;
+            if (!ZNet.instance || !ZNet.instance.IsServer() || ZNet.instance.GetPeers().Count == 0)
+                return true;
+
             int extendedRadius = FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value;
-            int activeArea = ZoneSystem.instance.m_activeArea + extendedRadius;
+            int activeArea = (ZoneSystem.instance?.m_activeArea ?? DefaultActiveArea) + extendedRadius;
+
             __result = true;
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
             {
-                if (!ZNetScene.OutsideActiveArea(point, ZoneSystem.GetZone(peer.GetRefPos()), activeArea))
+                if (peer.IsReady() && !ZNetScene.OutsideActiveArea(point, ZoneSystem.GetZone(peer.GetRefPos()), activeArea))
                 {
                     __result = false;
                     break;
                 }
             }
+
             return false;
         }
 
@@ -173,14 +226,12 @@ namespace FiresGhettoNetworkMod
 
         // ====================================================================
         // FIX: Suppress "Can not play a disabled audio source" spam on server ONLY
-        // (Ashlands ambient sounds, etc. — server has no audio listener)
         // ====================================================================
         [HarmonyPatch(typeof(AudioMan), "Update")]
         [HarmonyPrefix]
         public static bool AudioMan_Update_Prefix()
         {
-            // Run vanilla on client (full audio), skip entirely on server (no warnings)
-            return !ZNet.instance.IsServer();
+            return !ZNet.instance?.IsServer() ?? true;
         }
     }
 }

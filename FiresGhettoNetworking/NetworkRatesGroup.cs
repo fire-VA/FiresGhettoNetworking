@@ -1,8 +1,10 @@
 ﻿using BepInEx.Configuration;
 using HarmonyLib;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
@@ -11,13 +13,13 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     public static class NetworkingRatesGroup
     {
-        private const int VANILLA_QUEUE_SIZE = 10240;
         public static void Init(ConfigFile config)
         {
             FiresGhettoNetworkMod.ConfigUpdateRate.SettingChanged += (_, __) => ApplyUpdateRate();
             FiresGhettoNetworkMod.ConfigSendRateMin.SettingChanged += (_, __) => ApplySendRates();
             FiresGhettoNetworkMod.ConfigSendRateMax.SettingChanged += (_, __) => ApplySendRates();
             FiresGhettoNetworkMod.ConfigQueueSize.SettingChanged += (_, __) => LoggerOptions.LogInfo("Queue size changed - restart recommended.");
+
             ApplyUpdateRate();
             ApplySendRates(); // Apply immediately on load
         }
@@ -30,10 +32,13 @@ namespace FiresGhettoNetworkMod
         public static void ApplySendRates()
         {
             if (ZNet.instance == null) return;
+
             int min = GetSendRateValue(FiresGhettoNetworkMod.ConfigSendRateMin.Value);
             int max = GetSendRateValue(FiresGhettoNetworkMod.ConfigSendRateMax.Value);
+
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMin", min);
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", max);
+
             LoggerOptions.LogMessage($"Steam send rates applied: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
         }
 
@@ -71,7 +76,6 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         static void EnsureRatesOnStart()
         {
-            // Apply on both client and server (especially important for dedicated servers)
             ApplySendRates();
         }
 
@@ -83,9 +87,11 @@ namespace FiresGhettoNetworkMod
             {
                 var allTypes = AppDomain.CurrentDomain.GetAssemblies()
                     .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } });
+
                 var enumType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigValue");
                 var scopeType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigScope");
                 var dataType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigDataType");
+
                 if (enumType == null || scopeType == null || dataType == null)
                 {
                     LoggerOptions.LogWarning("Steamworks.NET types not found - send rate config skipped.");
@@ -135,28 +141,69 @@ namespace FiresGhettoNetworkMod
             ApplySendRates();
         }
 
-        // ====================== QUEUE SIZE PATCH (fixed sign) ======================
-        [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.GetSendQueueSize))]
-        [HarmonyPostfix]
-        static void AdjustSteamQueueSize(ref int __result)
+        // ====================== QUEUE SIZE PATCH - WORKING ON CURRENT VALHEIM ======================
+        [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> SendZDOs_QueueLimitTranspiler(IEnumerable<CodeInstruction> instructions)
         {
-            int configBytes = FiresGhettoNetworkMod.ConfigQueueSize.Value switch
+            var code = new List<CodeInstruction>(instructions);
+            int patchedCount = 0;
+
+            int newLimit = GetConfiguredQueueLimit();
+
+            for (int i = 0; i < code.Count; i++)
+            {
+                // Find large constants (>=10240) that are likely queue limits
+                if ((code[i].opcode == OpCodes.Ldc_I4 || code[i].opcode == OpCodes.Ldc_I4_S) &&
+                    code[i].operand is int constant &&
+                    constant >= 10240)
+                {
+                    bool isQueueLimit = false;
+
+                    // Check nearby for GetSendQueueSize call (using string literal to avoid any compile issues)
+                    for (int j = Math.Max(0, i - 15); j < Math.Min(code.Count, i + 15); j++)
+                    {
+                        if (code[j].opcode == OpCodes.Callvirt &&
+                            code[j].operand is MethodInfo mi &&
+                            mi.Name == "GetSendQueueSize")
+                        {
+                            isQueueLimit = true;
+                            break;
+                        }
+                    }
+
+                    if (isQueueLimit)
+                    {
+                        LoggerOptions.LogInfo($"Overriding ZDOMan.SendZDOs queue limit #{patchedCount + 1}: original {constant} → {newLimit} bytes");
+                        code[i].opcode = OpCodes.Ldc_I4;
+                        code[i].operand = newLimit;
+                        patchedCount++;
+                    }
+                }
+            }
+
+            if (patchedCount == 0)
+            {
+                LoggerOptions.LogWarning("No queue limit constants found in ZDOMan.SendZDOs — queue size config not applied (game update may have changed IL).");
+            }
+            else
+            {
+                LoggerOptions.LogInfo($"Successfully patched {patchedCount} queue limit constant(s).");
+            }
+
+            return code.AsEnumerable();
+        }
+
+        private static int GetConfiguredQueueLimit()
+        {
+            return FiresGhettoNetworkMod.ConfigQueueSize.Value switch
             {
                 QueueSizeOptions._80KB => 80 * 1024,
                 QueueSizeOptions._64KB => 64 * 1024,
                 QueueSizeOptions._48KB => 48 * 1024,
                 QueueSizeOptions._32KB => 32 * 1024,
-                _ => VANILLA_QUEUE_SIZE
+                _ => 10240 // vanilla fallback
             };
-
-            if (configBytes == VANILLA_QUEUE_SIZE) return;
-
-            // Negative adjustment to allow the actual queue to grow larger before forcing a send
-            int adjustment = VANILLA_QUEUE_SIZE - configBytes;
-            __result += adjustment;
-
-            // Clamp to 0 to avoid negative reported sizes (vanilla check is > 10240)
-            if (__result < 0) __result = 0;
         }
     }
 }
