@@ -17,7 +17,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.0.1";
+        public const string PluginVersion = "1.1.0";
         internal static Harmony Harmony { get; private set; }
 
         // ====================== CONFIG ENTRIES ======================
@@ -50,9 +50,13 @@ namespace FiresGhettoNetworkMod
         // Server-authority toggle — now server-only with warning
         public static ConfigEntry<bool> ConfigEnableServerAuthority;
 
+        private static bool _dummyRpcRegistered = false;
+        private bool _delayedInitDone = false;
+
         private void Awake()
         {
             Harmony = new Harmony(PluginGUID);
+
             BindConfigs();
             try { Config.Save(); }
             catch (Exception ex) { Logger.LogWarning($"Failed to save config file immediately: {ex.Message}"); }
@@ -74,7 +78,7 @@ namespace FiresGhettoNetworkMod
             // === NEW: Initialize Player Position Sync (reduces floaty movement) ===
             PlayerPositionSyncPatches.Init(Config);
 
-            // Patch core networking features
+            // Patch core networking features (always safe and needed early)
             Harmony.PatchAll(typeof(CompressionGroup));
             Harmony.PatchAll(typeof(NetworkingRatesGroup));
             Harmony.PatchAll(typeof(DedicatedServerGroup));
@@ -82,14 +86,17 @@ namespace FiresGhettoNetworkMod
             Harmony.PatchAll(typeof(ZDOMemoryManager));
             Harmony.PatchAll(typeof(PlayerPositionSyncPatches));
 
-            // NEW: Server-authority patches — ONLY apply on server
+            // Apply WackyDatabase compatibility patch (safe, no timing issues)
+            WackyDatabaseCompatibilityPatch.Init(Harmony);
+
+            // Server-authority patches — apply immediately (server-only, guarded inside the classes)
             bool isServer = ZNet.instance != null && ZNet.instance.IsServer();
             if (isServer && ConfigEnableServerAuthority.Value)
             {
                 Harmony.PatchAll(typeof(ServerAuthorityPatches));
                 Harmony.PatchAll(typeof(MonsterAIPatches));
-                Harmony.PatchAll(typeof(ZDOThrottlingPatches)); // ZDO throttling
-                Harmony.PatchAll(typeof(AILODPatches)); // AI LOD throttling
+                Harmony.PatchAll(typeof(ZDOThrottlingPatches));
+                Harmony.PatchAll(typeof(AILODPatches));
                 LoggerOptions.LogInfo("Server-authority patches enabled (zone loading, ZDO ownership, AI, events, ZDO throttling, AI LOD, etc.)");
             }
             else if (!isServer)
@@ -101,8 +108,77 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogInfo("Server-authority patches disabled via config.");
             }
 
+            // Register dummy RPC (safe to do early — ZRoutedRpc becomes available very quickly)
+            StartCoroutine(RegisterDummyRpcWhenReady());
+
             Logger.LogInfo($"{PluginName} v{PluginVersion} loaded.");
         }
+
+        // Compatibility patch for WackyDatabase — safely skips SnapshotItem for broken/null items
+        [HarmonyPatch]
+        public static class WackyDatabaseCompatibilityPatch
+        {
+            public static void Init(Harmony harmony)
+            {
+                // Safely detect if WackyDatabase is present
+                Type functionsType = Type.GetType("wackydatabase.Util.Functions, WackysDatabase");
+                if (functionsType == null)
+                {
+                    LoggerOptions.LogInfo("WackyDatabase not detected — skipping compatibility patch.");
+                    return;
+                }
+
+                MethodInfo snapshotMethod = functionsType.GetMethod("SnapshotItem", BindingFlags.Static | BindingFlags.Public);
+                if (snapshotMethod == null)
+                {
+                    LoggerOptions.LogWarning("WackyDatabase detected but SnapshotItem method not found — patch skipped.");
+                    return;
+                }
+
+                // Apply the prefix patch
+                harmony.Patch(
+                    original: snapshotMethod,
+                    prefix: new HarmonyMethod(typeof(WackyDatabaseCompatibilityPatch), nameof(SnapshotItem_Prefix))
+                );
+
+                LoggerOptions.LogInfo("WackyDatabase compatibility patch applied — will skip snapshots for invalid/broken clones.");
+            }
+
+            // Prefix for SnapshotItem(ItemDrop item, ...)
+            [HarmonyPrefix]
+            public static bool SnapshotItem_Prefix(ref ItemDrop item) // Use ref to allow null check + early exit
+            {
+                // First and most important: null item
+                if (item == null)
+                {
+                    LoggerOptions.LogWarning("WDB: Skipping snapshot for null ItemDrop (likely broken clone).");
+                    return false; // Skip original
+                }
+
+                // Second: item has no valid gameObject (common when cloneFrom prefab is missing)
+                if (item.gameObject == null)
+                {
+                    LoggerOptions.LogWarning($"WDB: Skipping snapshot for {item.name} — gameObject is null (missing prefab from removed mod).");
+                    return false;
+                }
+
+                // Third: no renderable components (prevents NRE in bounds calculation and rendering)
+                bool hasRenderer = item.GetComponentsInChildren<Renderer>(true).Length > 0;
+                bool hasMesh = item.GetComponentsInChildren<MeshFilter>(true).Length > 0;
+
+                if (!hasRenderer && !hasMesh)
+                {
+                    LoggerOptions.LogWarning($"WDB: Skipping snapshot for {item.name} — no renderers or meshes (broken model).");
+                    return false;
+                }
+
+                // All good — allow original method to run
+                return true;
+            }
+        }
+
+
+        
 
         private void TryPatchAll(Type type)
         {
@@ -342,11 +418,21 @@ namespace FiresGhettoNetworkMod
             StartCoroutine(RegisterDummyRpcWhenReady());
         }
 
+        
+
         private IEnumerator RegisterDummyRpcWhenReady()
         {
             while (ZRoutedRpc.instance == null)
                 yield return null;
+
+            if (_dummyRpcRegistered)
+            {
+                Logger.LogInfo("Dummy ForceUpdateZDO RPC already registered — skipping.");
+                yield break;
+            }
+
             ZRoutedRpc.instance.Register("ForceUpdateZDO", (Action<long>)((sender) => { }));
+            _dummyRpcRegistered = true;
             Logger.LogInfo("Dummy ForceUpdateZDO RPC registered.");
         }
     }
