@@ -1,8 +1,8 @@
 {
     "name": "FiresGhettoNetworking",
-    "version_number": "1.0.0",
+    "version_number": "1.3.2",
     "website_url": "https://github.com/fire-VA/FiresGhettoNetworking",
-    "description": "BetterNetworking and Serverside Simulations had a baby... Features extended zone pre-loading, ZSTD compression, higher Steam send rates, server-side AI/events, ZDO throttling, AI LOD, and more for smoother, more stable multiplayer on dedicated servers.",
+    "description": "Comprehensive networking + server-authority mod with ZDO delta compression, WearNTear server/client CPU skips for invulnerable pieces, AoI-filtered RPC broadcasts, and a built-in per-client config auto-tuner.",
     "dependencies": [
         "denikson-BepInExPack_Valheim-5.4.2202"
     ]

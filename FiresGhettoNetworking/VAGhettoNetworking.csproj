@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{F234BD11-429C-45E2-B280-1FB9121D050D}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>VAGhettoNetworking</RootNamespace>
+    <AssemblyName>VAGhettoNetworking</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <LangVersion>latest</LangVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NuGetPackageImportStamp>
+    </NuGetPackageImportStamp>
+    <!--
+      Public-test build toggle.
+      Default flipped to `true` on 2026-05-11 when the HintPath'd
+      assembly_valheim_publicized.dll (Steam install path) was refreshed against
+      the upcoming public-test build. With the publicized DLL now exposing
+      Vector2s-style ZoneSystem.GetZone and the new ZDOExtraData internals,
+      the live-build (#else) code path no longer compiles — Vector2i ↔ Vector2s
+      mismatches and missing ZDOExtraData.Get*/GetSave* methods are the
+      expected failure mode if you try to build with this back to `false`.
+
+      To return to live-build compilation: regenerate
+      assembly_valheim_publicized.dll from a live assembly_valheim.dll AND
+      flip this default back to `false`. Don't do one without the other.
+
+      Override at the command line with: msbuild /p:PublicTest=false
+      The conditional <DefineConstants> append lives BELOW the Debug/Release
+      groups so it post-extends whatever DefineConstants those set.
+    -->
+    <PublicTest Condition=" '$(PublicTest)' == '' ">false</PublicTest>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <!--
+    Append PUBLIC_TEST to DefineConstants when the toggle is on. Placed AFTER
+    the Debug/Release groups so $(DefineConstants) already holds DEBUG;TRACE
+    (or TRACE) — the append produces DEBUG;TRACE;PUBLIC_TEST without losing
+    the configuration-specific symbols. Toggle by setting <PublicTest>true</PublicTest>
+    in the top property group, or pass /p:PublicTest=true at the msbuild CLI.
+  -->
+  <PropertyGroup Condition=" '$(PublicTest)' == 'true' ">
+    <DefineConstants>$(DefineConstants);PUBLIC_TEST</DefineConstants>
+  </PropertyGroup>
+  <Choose>
+    <When Condition="($(OS) == 'Unix' OR $(OS) == 'OSX') AND $(GamePath) == ''">
+      <PropertyGroup>
+        <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/.steam/steam/steamapps/common/Valheim</GamePath>
+        <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/Library/Application Support/Steam/steamapps/common/Valheim/Contents/MacOS</GamePath>
+      </PropertyGroup>
+    </When>
+    <When Condition="($(OS) == 'Windows_NT') AND $(GamePath) == ''">
+      <PropertyGroup>
+        <GamePath Condition="!Exists('$(GamePath)')">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 892970', 'InstallLocation', null, RegistryView.Registry64, RegistryView.Registry32))</GamePath>
+        <_SteamLibraryPath>$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\SOFTWARE\Valve\Steam', 'SteamPath', null, RegistryView.Registry32))</_SteamLibraryPath>
+        <GamePath Condition="!Exists('$(GamePath)') AND '$(_SteamLibraryPath)' != ''">$(_SteamLibraryPath)\steamapps\common\Valheim</GamePath>
+        <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files\Steam\steamapps\common\Valheim</GamePath>
+        <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files (x86)\Steam\steamapps\common\Valheim</GamePath>
+      </PropertyGroup>
+    </When>
+  </Choose>
+  <ItemGroup>
+    <Reference Include="0Harmony">
+      <HintPath>..\..\..\customspawnsmod\lib\0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp_publicized">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\publicized_assemblies\Assembly-CSharp_publicized.dll</HintPath>
+    </Reference>
+    <Reference Include="assembly_guiutils">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\assembly_guiutils.dll</HintPath>
+    </Reference>
+    <Reference Include="assembly_guiutils_publicized">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\publicized_assemblies\assembly_guiutils_publicized.dll</HintPath>
+    </Reference>
+    <Reference Include="assembly_utils">
+      <!-- Pinned to the stashed legacy DLL on purpose; see FiresRPGmaker.csproj. -->
+      <HintPath>..\..\assembly_valheim\lib\assembly_utils.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="assembly_valheim_publicized">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\publicized_assemblies\assembly_valheim_publicized.dll</HintPath>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>..\..\..\customspawnsmod\lib\BepInEx.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="gui_framework">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\gui_framework.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.Bcl.AsyncInterfaces, Version=10.0.0.1, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
+      <HintPath>..\packages\Microsoft.Bcl.AsyncInterfaces.10.0.1\lib\net462\Microsoft.Bcl.AsyncInterfaces.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
+      <HintPath>..\packages\Newtonsoft.Json.13.0.4\lib\net45\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <Reference Include="PlayFab">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\PlayFab.dll</HintPath>
+    </Reference>
+    <Reference Include="PlayFabParty">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\PlayFabParty.dll</HintPath>
+    </Reference>
+    <Reference Include="Splatform, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\Splatform.dll</HintPath>
+    </Reference>
+    <!-- Reference Valheim's bundled Steamworks wrapper (assembly name
+         "com.rlabrecque.steamworks.net", version 0.0.0.0) rather than the
+         standalone NuGet package (assembly name "Steamworks.NET", version
+         2025.162.1.0). Any [HarmonyPatch(typeof(Steamworks.X))] attribute
+         bakes the referenced assembly identity into our IL — if that
+         identity doesn't match the runtime DLL Valheim loaded, Harmony's
+         attribute decode throws TypeLoadException during PatchAll and the
+         entire mod's patch class fails to load. -->
+    <Reference Include="com.rlabrecque.steamworks.net">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\com.rlabrecque.steamworks.net.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Buffers, Version=4.0.5.0, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
+      <HintPath>..\packages\System.Buffers.4.6.1\lib\net462\System.Buffers.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Memory, Version=4.0.5.0, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
+      <HintPath>..\packages\System.Memory.4.6.3\lib\net462\System.Memory.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Numerics" />
+    <Reference Include="System.Numerics.Vectors, Version=4.1.6.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
+      <HintPath>..\packages\System.Numerics.Vectors.4.6.1\lib\net462\System.Numerics.Vectors.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Runtime.CompilerServices.Unsafe, Version=6.0.3.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
+      <HintPath>..\packages\System.Runtime.CompilerServices.Unsafe.6.1.2\lib\net462\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Threading.Tasks.Extensions, Version=4.2.4.0, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
+      <HintPath>..\packages\System.Threading.Tasks.Extensions.4.6.3\lib\net462\System.Threading.Tasks.Extensions.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule">
+      <HintPath>$(GamePath)\valheim_Data\Managed\UnityEngine.AssetBundleModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AssetBundleModule_publicized">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\publicized_assemblies\UnityEngine.AssetBundleModule_publicized.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.AudioModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GamePath)\valheim_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Xml" />
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim - Copy\valheim_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim - Copy\valheim_Data\Managed\UnityEngine.UI.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim - Copy\valheim_Data\Managed\UnityEngine.UIModule.dll</HintPath>
+    </Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule">
+      <HintPath>..\..\..\ValheimDll\UnityEngine.UnityWebRequestModule.dll</HintPath>
+    </Reference>
+    <Reference Include="ZstdSharp, Version=0.8.6.0, Culture=neutral, PublicKeyToken=8d151af33a4ad5cf, processorArchitecture=MSIL">
+      <HintPath>..\packages\ZstdSharp.Port.0.8.6\lib\net462\ZstdSharp.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Ascend.cs" />
+    <!-- ClientLogRelay\ entries removed for Thunderstore release.  Files
+         remain on disk and will be split into a standalone mod later;
+         add the Compile Include lines back to re-enable. -->
+    <Compile Include="Networking\AILODPatches.cs" />
+    <Compile Include="Networking\AutoTune\AutoTuneCache.cs" />
+    <Compile Include="Networking\AutoTune\AutoTuneConfig.cs" />
+    <Compile Include="Networking\AutoTune\AutoTuneProbe.cs" />
+    <Compile Include="Networking\AutoTune\AutoTuneTier.cs" />
+    <Compile Include="Networking\AutoTune\ServerAutoTune.cs" />
+    <Compile Include="Networking\AutoTune\ZoneLoadPatches.cs" />
+    <Compile Include="Networking\BigZdoDiagnostic.cs" />
+    <Compile Include="Networking\BulkTransferGatePatches.cs" />
+    <Compile Include="Networking\ClientCleanupThrottle.cs" />
+    <Compile Include="Networking\CompressionGroup.cs" />
+    <Compile Include="Networking\DedicatedServerGroup.cs" />
+    <Compile Include="Networking\LoggerOptions.cs" />
+    <Compile Include="Networking\MonsterAiPatches.cs" />
+    <Compile Include="Networking\NetworkRatesGroup.cs" />
+    <Compile Include="Networking\PlayerPositionSyncPatches.cs" />
+    <Compile Include="Networking\RoutedRpcManager.cs" />
+    <Compile Include="Networking\RpcHandlers\AddNoiseHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\DamageTextHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\HealthChangedHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\SetTargetHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\SpawnedZoneHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\TalkerSayHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\TriggerAnimationHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\TriggerOnDeathHandler.cs" />
+    <Compile Include="Networking\RpcHandlers\WNTHealthChangedHandler.cs" />
+    <Compile Include="Networking\RpcMethodHandler.cs" />
+    <Compile Include="Networking\RpcRouterPatches.cs" />
+    <Compile Include="Networking\ServerAuthorityPatches.cs" />
+    <Compile Include="Networking\ServerClientUtils.cs" />
+    <Compile Include="Networking\SendZDOsHeartbeatDiagnostic.cs" />
+    <Compile Include="Networking\ServerOwnershipPatches.cs" />
+    <Compile Include="Networking\ServerOwnershipPatchesV3.cs" />
+    <Compile Include="Networking\ServerStabilityPatches.cs" />
+    <Compile Include="Networking\ServerStatusDiagnostics.cs" />
+    <Compile Include="Networking\ShipFixesGroup.cs" />
+    <Compile Include="Networking\WearNTearClassifier.cs" />
+    <Compile Include="Networking\WearNTearClientSupportPatches.cs" />
+    <Compile Include="Networking\WearNTearServerPatches.cs" />
+    <Compile Include="Networking\ZDODeltaPatches.cs" />
+    <Compile Include="Networking\ZDOMemoryManager.cs" />
+    <Compile Include="Networking\ZDOThrottlingPatches.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Utilities\FiresLogger.cs" />
+    <Compile Include="..\..\FiresUnifiedCore\FiresUnifiedCore\Logging\FiresLog.cs">
+      <Link>Common\FiresLog.cs</Link>
+    </Compile>
+    <Compile Include="Utilities\FiresLogColorPatch.cs" />
+    <Compile Include="Utilities\VAGhettoBanner.cs" />
+    <Compile Include="Utilities\VAGhettoLoadSummary.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="app.config" />
+    <None Include="ClientLogRelay\README.md" />
+    <None Include="packages.config" />
+    <None Include="Scripts\test_discord_polling.bat" />
+    <None Include="Scripts\valheim_server_wrapper.bat" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Utilities\" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- Post-build deploy to the active r2modman 'BlueHills' test profile. Gated on
+       Exists so a missing/renamed profile (other machines, CI) just skips and never
+       fails the build. Copies only the built DLL + PDB into the existing r2modman-
+       managed mod folder. NOTE: a loose duplicate (plugins\VAGhettoNetworking.dll)
+       currently shadows this folder — delete it so this managed copy goes live. -->
+  <PropertyGroup>
+    <BlueHillsPluginDir>C:\Users\travi\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\BlueHills\BepInEx\plugins\VerdantsAscent-FiresGhettoNetworking\</BlueHillsPluginDir>
+  </PropertyGroup>
+  <Target Name="DeployToBlueHills" AfterTargets="Build" Condition="Exists('$(BlueHillsPluginDir)')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BlueHillsPluginDir)" OverwriteReadOnlyFiles="true" />
+    <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(BlueHillsPluginDir)" OverwriteReadOnlyFiles="true" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+    <Message Importance="high" Text="Deployed $(TargetFileName) (+pdb) -> $(BlueHillsPluginDir)" />
+  </Target>
+</Project>
