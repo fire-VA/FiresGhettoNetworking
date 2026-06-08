@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.8";
+        public const string PluginVersion = "1.3.9";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -53,6 +53,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<float> ConfigPredictionMinVelocity;
         public static ConfigEntry<int>   ConfigPredictionMaxLookaheadZones;
         public static ConfigEntry<bool> ConfigEnableInvulnerableSupportSkip;
+        public static ConfigEntry<bool> ConfigEnableInstanceOrphanPrune;
         public static ConfigEntry<bool> ConfigEnableRpcRouter;
         public static ConfigEntry<bool> ConfigEnableRpcAoI;
         public static ConfigEntry<float> ConfigRpcAoIRadius;
@@ -1037,6 +1038,26 @@ namespace FiresGhettoNetworkMod
                 "see full support when querying. Massive steady-state CPU saving in megabases\n" +
                 "dominated by invulnerable pieces.");
 
+            ConfigEnableInstanceOrphanPrune = Config.Bind(
+                "12 - Advanced",
+                "Enable Instance Orphan Prune",
+                true,
+                "SERVER-ONLY defensive cleanup. Before vanilla ZNetScene.RemoveObjects walks\n" +
+                "m_instances on the dedicated server, scan for entries whose ZNetView is\n" +
+                "Unity-destroyed OR whose view.GetZDO() returns null, and remove just the dict\n" +
+                "entry (the GameObject is left alone). These are exactly the entries that would\n" +
+                "NRE vanilla RemoveObjects, so we're only purging things vanilla can't handle.\n" +
+                "Triggered by mods that block WearNTear.RPC_Remove on the server while ZDOMan\n" +
+                "still reaps the ZDO via a separate path — e.g. TargetPortalProtection's\n" +
+                "Player.m_localPlayer-based permission check on a headless dedi when ZDO\n" +
+                "ownership has been moved to the server (FGN's Server-Side Simulation).\n" +
+                "\n" +
+                "Every prune is logged at warning level (rate-limited to once per 5s) and the\n" +
+                "per-window count appears in the [ServerStatus] CDO segment. If you see this\n" +
+                "firing repeatedly on a healthy server, another mod is mismanaging ZNetScene\n" +
+                "state and should be investigated. Disable as a kill switch if it ever causes\n" +
+                "trouble (you'd then see the original NRE caught by the existing fallback).");
+
             // === CONFIG CHANGE LOGGING (fixed for generic types) ===
             var allConfigs = new ConfigEntryBase[]
             {
@@ -1080,6 +1101,7 @@ namespace FiresGhettoNetworkMod
         ConfigPredictionMinVelocity,
         ConfigPredictionMaxLookaheadZones,
         ConfigEnableInvulnerableSupportSkip,
+        ConfigEnableInstanceOrphanPrune,
         ConfigEnableBulkTransferBoost,
         ConfigEnableServerOwnership,
         ConfigEnableServerOwnershipSelective

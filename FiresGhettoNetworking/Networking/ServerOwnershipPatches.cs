@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
 
@@ -10,10 +12,67 @@ namespace FiresGhettoNetworkMod
     //   - server-as-always-covering shortcut in IsInPeerActiveArea
     // Keep this in SSS-exact shape. See memory/reference_bulk_transfer_guard.md for the
     // full failure-mode analysis if tempted to deviate.
+    //
+    // ONE narrow exception lives in ApplySssOwnershipRule: when
+    // TargetPortalProtection is loaded alongside FGN, TeleportWorld prefabs are
+    // skipped. TPP patches WearNTear.RPC_Remove with a Player.m_localPlayer-based
+    // permission check; on a dedi that field is always null so the check
+    // blanket-blocks portal removals on the server, and the resulting m_instances
+    // desync NRE's CreateDestroyObjects. Leaving portals peer-owned routes the
+    // destroy logic through a client where TPP works as designed. The orphan
+    // prune in ServerAuthorityPatches still handles the same corruption from
+    // other sources — this just stops V2 from creating it in the first place
+    // for the one known case.
     [HarmonyPatch]
     public static class ServerOwnershipPatches
     {
         private static bool _firstFireLogged;
+
+        private static readonly HashSet<int> _teleportWorldPrefabs = new HashSet<int>();
+        private static bool _portalExclusionActive;
+
+        [HarmonyPatch(typeof(ZNetScene), "Awake")]
+        [HarmonyPostfix]
+        [HarmonyPriority(Priority.Last)]
+        public static void ZNetScene_Awake_BuildPortalExclusionSet(ZNetScene __instance)
+        {
+            _teleportWorldPrefabs.Clear();
+            _portalExclusionActive = false;
+            if (__instance == null || __instance.m_prefabs == null) return;
+
+            if (!IsTargetPortalProtectionLoaded()) return;
+
+            foreach (var prefab in __instance.m_prefabs)
+            {
+                if (prefab == null) continue;
+                if (prefab.GetComponent<TeleportWorld>() != null)
+                    _teleportWorldPrefabs.Add(prefab.name.GetStableHashCode());
+            }
+
+            if (_teleportWorldPrefabs.Count > 0)
+            {
+                _portalExclusionActive = true;
+                LoggerOptions.LogMessage(
+                    $"[ServerOwnership] TargetPortalProtection detected. Excluding "
+                    + $"{_teleportWorldPrefabs.Count} TeleportWorld prefab(s) from V2 broad-ownership "
+                    + "claim so portal destroy flows route through a peer client where TPP's "
+                    + "Player.m_localPlayer-based permission check actually works.");
+            }
+        }
+
+        private static bool IsTargetPortalProtectionLoaded()
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    if (asm.GetType("TargetPortalProtection.TargetPortalProtection", false, false) != null)
+                        return true;
+                }
+                catch { /* assembly-load failures are not informative here */ }
+            }
+            return false;
+        }
 
         [HarmonyPatch(typeof(ZDOMan), "ReleaseNearbyZDOS")]
         [HarmonyPrefix]
@@ -22,7 +81,7 @@ namespace FiresGhettoNetworkMod
             if (ZNet.instance == null || !ZNet.instance.IsDedicated()) return true;
             if (ZoneSystem.instance == null) return true;
 
-            // Runtime config guard � belt-and-suspenders on top of the
+            // Runtime config guard — belt-and-suspenders on top of the
             // startup-time Harmony.PatchAll gate in Ascend.cs. Allows the
             // operator to flip the toggle off mid-session and immediately
             // fall back to vanilla peer ownership without restarting.
@@ -48,6 +107,7 @@ namespace FiresGhettoNetworkMod
             foreach (var zdo in __instance.m_tempNearObjects)
             {
                 if (zdo == null || !zdo.Persistent) continue;
+                if (_portalExclusionActive && _teleportWorldPrefabs.Contains(zdo.m_prefab)) continue;
                 ServerStatusDiagnostics.s_so_zdosProcessed++;
                 ApplySssOwnershipRule(__instance, zdo, uid, serverUid);
             }
