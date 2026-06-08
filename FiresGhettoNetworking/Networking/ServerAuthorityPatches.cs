@@ -131,6 +131,7 @@ namespace FiresGhettoNetworkMod
                 RecordCreateDestroyObjectsDiagnostics();
 
                 __instance.CreateObjects(_cdoNearFiltered, _cdoDistantFiltered);
+                PruneOrphanInstances(__instance);
                 __instance.RemoveObjects(_cdoNearFiltered, _cdoDistantFiltered);
                 return false;
             }
@@ -182,6 +183,63 @@ namespace FiresGhettoNetworkMod
                 ServerStatusDiagnostics.s_cdo_areaReadyTrue++;
             else
                 ServerStatusDiagnostics.s_cdo_areaReadyFalse++;
+        }
+
+        // Remove dictionary entries whose ZNetView is Unity-destroyed or whose
+        // view.GetZDO() returns null — exactly the entries that would NRE vanilla
+        // RemoveObjects. Only the dict entry is removed; the GameObject is left
+        // for Unity GC / mod pool ownership.
+        //
+        // Triggered, for example, when TargetPortalProtection blocks
+        // WearNTear.RPC_Remove on a dedi (its permission check reads
+        // Player.m_localPlayer which is null server-side) while ZDOMan.DestroyZDO
+        // still reaps the ZDO via the client-initiated path. The result is a
+        // view with a null ZDO sitting in m_instances; the next RemoveObjects
+        // walk would NRE on view.GetZDO().TempRemoveEarmark.
+        private static readonly List<ZDO> _orphanScratch = new List<ZDO>(64);
+        private const float OrphanLogIntervalSec = 5f;
+        private static float _orphanNextLogTime;
+
+        private static void PruneOrphanInstances(ZNetScene scene)
+        {
+            if (!(FiresGhettoNetworkMod.ConfigEnableInstanceOrphanPrune?.Value ?? true)) return;
+            if (scene == null || scene.m_instances == null) return;
+
+            _orphanScratch.Clear();
+            int nullViews = 0;
+            int nullZdos = 0;
+            foreach (var kvp in scene.m_instances)
+            {
+                var view = kvp.Value;
+                if (view == null)
+                {
+                    _orphanScratch.Add(kvp.Key);
+                    nullViews++;
+                    continue;
+                }
+                if (view.GetZDO() == null)
+                {
+                    _orphanScratch.Add(kvp.Key);
+                    nullZdos++;
+                }
+            }
+            if (_orphanScratch.Count == 0) return;
+
+            for (int i = 0; i < _orphanScratch.Count; i++)
+                scene.m_instances.Remove(_orphanScratch[i]);
+            ServerStatusDiagnostics.s_cdo_orphansPruned += _orphanScratch.Count;
+            _orphanScratch.Clear();
+
+            float now = Time.realtimeSinceStartup;
+            if (now >= _orphanNextLogTime)
+            {
+                LoggerOptions.LogWarning(
+                    $"[m_instances orphan prune] removed {nullViews + nullZdos} broken entry/ies "
+                    + $"(nullView={nullViews}, nullZdo={nullZdos}). If this fires repeatedly, "
+                    + "another mod is mismanaging ZNetScene state — most often a permission mod "
+                    + "blocking WearNTear.RPC_Remove on the dedi while ZDOMan still reaps the ZDO.");
+                _orphanNextLogTime = now + OrphanLogIntervalSec;
+            }
         }
 
         [HarmonyPatch(typeof(ZoneSystem), "IsActiveAreaLoaded")]

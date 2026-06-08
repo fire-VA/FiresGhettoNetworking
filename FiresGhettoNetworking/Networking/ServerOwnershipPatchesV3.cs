@@ -69,6 +69,7 @@ namespace FiresGhettoNetworkMod
         // ====================================================================
         [HarmonyPatch(typeof(ZNetScene), "Awake")]
         [HarmonyPostfix]
+        [HarmonyPriority(Priority.Last)]
         public static void ZNetScene_Awake_BuildSet(ZNetScene __instance)
         {
             s_simulatedPrefabs.Clear();

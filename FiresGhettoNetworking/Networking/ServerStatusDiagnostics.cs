@@ -35,6 +35,7 @@ namespace FiresGhettoNetworkMod
         public static long s_cdo_distinctDistantTotal;
         public static int s_cdo_areaReadyTrue;
         public static int s_cdo_areaReadyFalse;
+        public static int s_cdo_orphansPruned;
 
         public static int s_iaal_calls;
         public static int s_iaal_resultTrue;
@@ -152,6 +153,7 @@ namespace FiresGhettoNetworkMod
             s_cdo_distinctDistantTotal = 0;
             s_cdo_areaReadyTrue = 0;
             s_cdo_areaReadyFalse = 0;
+            s_cdo_orphansPruned = 0;
 
             s_iaal_calls = 0;
             s_iaal_resultTrue = 0;
@@ -180,10 +182,12 @@ namespace FiresGhettoNetworkMod
         private static string FormatCreateDestroyObjectsSegment()
         {
             if (s_cdo_passes + s_cdo_bail_noPeers + s_cdo_bail_nre == 0) return "noCalls";
+            string orphanSeg = s_cdo_orphansPruned > 0 ? $", orphansPruned={s_cdo_orphansPruned}" : "";
             return $"{s_cdo_passes} passes (bail noPeers={s_cdo_bail_noPeers}, nre={s_cdo_bail_nre}), "
                  + $"near={FormatBigCount(s_cdo_nearTotal)} (distinct {FormatBigCount(s_cdo_distinctNearTotal)}), "
                  + $"distant={FormatBigCount(s_cdo_distantTotal)} (distinct {FormatBigCount(s_cdo_distinctDistantTotal)}), "
-                 + $"gate true={s_cdo_areaReadyTrue} false={s_cdo_areaReadyFalse}";
+                 + $"gate true={s_cdo_areaReadyTrue} false={s_cdo_areaReadyFalse}"
+                 + orphanSeg;
         }
 
         private static string FormatIsActiveAreaLoadedSegment()
