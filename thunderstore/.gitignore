@@ -1,0 +1,15 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+
+# Never ship game assemblies or shared deps
+libs/
+packages/
+*.dll.before-*.bak
+
+# OS noise
+Thumbs.db
+desktop.ini
