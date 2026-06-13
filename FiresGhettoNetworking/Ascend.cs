@@ -144,6 +144,12 @@ namespace FiresGhettoNetworkMod
             // SendZDOs call.
             Harmony.PatchAll(typeof(SendZDOsHeartbeatDiagnostic));
 
+            // Server disconnect logger — always on (server-gated internally).
+            // Logs each peer drop with duration + a burst counter so a mass
+            // timeout (save-freeze/stall → everyone drops at once) is instantly
+            // distinguishable from a single client's link failure. Low-volume.
+            Harmony.PatchAll(typeof(ServerDisconnectDiagnostics));
+
             // Bulk-transfer gate boost — at ZNet.Start, reflectively patches
             // the 20 KB GetSendQueueSize gate inside every loaded
             // ServerSync.ConfigSync and ServerCharacters.Shared copy so their
