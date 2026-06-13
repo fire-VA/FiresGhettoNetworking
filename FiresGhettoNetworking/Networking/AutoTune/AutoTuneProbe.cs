@@ -648,49 +648,47 @@ namespace FiresGhettoNetworkMod.AutoTune
         }
 
         /// <summary>
-        /// Two-axis tier combine. machineTier = min(cpu, fps). latencyTier is pure
-        /// latency-only. bandwidth is informational and can only nudge the result
-        /// down ONE step from min(machine, latency) when latency was already clean
-        /// — server-bottlenecked bandwidth measurements never drag a HIGH+HIGH client
-        /// into LOW.
+        /// Capability-ceiling tier combine. The machine tier (min of cpu + fps) is
+        /// the CEILING — a good connection can never push the client above what its
+        /// hardware can actually deliver. Only a genuinely BAD link pulls the tier
+        /// DOWN, and only by 'Link Downgrade Cap' steps (default 1), floored at Low.
+        /// A strong PC on a 170ms link lands MED, not LOW; okay/medium ping costs
+        /// nothing. Bandwidth is a confirming signal only: it can push the link tier
+        /// down one step, never touch the machine tier. Replaces the old
+        /// min(machine, latency) collapse that floored capable clients on a bad ping.
         /// </summary>
         private static Tier ComputeFinalTier(Tier machineTier, Tier latencyTier, float bwKbPerSec, bool bwProbeCompleted)
         {
-            // A High-machine client is trusted on machine signals alone. Bandwidth is a
-            // notoriously fuzzy measurement on this kind of request-response probe — RTT
-            // dominates small payloads, server back-pressure inflates per-sample times,
-            // and the Steam send-rate cap during probe is itself lower than the in-game
-            // tuned rate we'll apply post-probe. A 4080-class machine on any reasonable
-            // server doesn't deserve a Low-tier handoff because the BW probe happened to
-            // land at 199 KB/s instead of 201.
-            //
-            // So: machineTier == High → take baseline(machine, latency) and that's it.
-            // BW only gets to vote when the machine ISN'T already telling us the client
-            // has headroom (i.e. machine is Medium/Low). This change widens the original
-            // "machine AND latency both High" fast-path to "machine alone is High" — same
-            // intent, more practical coverage. 2026-05-11.
-            if (machineTier == Tier.High)
+            Tier linkTier = latencyTier;
+
+            // Bandwidth confirms a constrained link by pushing the link tier down one
+            // step (never up, never onto the machine tier). It takes BOTH mediocre ping
+            // AND poor throughput to flag a link as bad — a clean-ping link with a fuzzy
+            // bandwidth sample is not penalized.
+            if (bwProbeCompleted)
             {
-                return MinTier(machineTier, latencyTier);
+                Tier bwTier = ScoreBwTier(bwKbPerSec);
+                if ((int)bwTier < (int)linkTier)
+                    linkTier = StepTowardLow(linkTier, 1);
             }
 
-            Tier baseLine = MinTier(machineTier, latencyTier);
+            // Only a bad (Low) link triggers a downgrade. MED/HIGH link → machine tier stands.
+            if (linkTier != Tier.Low)
+                return machineTier;
 
-            // No BW data, or latency was already LOW — bandwidth doesn't get to vote
-            if (!bwProbeCompleted || latencyTier == Tier.Low)
-            {
-                return baseLine;
-            }
+            int cap = AutoTuneConfig.LinkDowngradeCap?.Value ?? 1;
+            return StepTowardLow(machineTier, cap);
+        }
 
-            Tier bwTier = ScoreBwTier(bwKbPerSec);
-            if ((int)bwTier >= (int)baseLine)
-            {
-                return baseLine;
-            }
-
-            // BW is worse than baseline — drop ONE step, never further
-            int oneStepDown = Math.Max(0, (int)baseLine - 1);
-            return (Tier)oneStepDown;
+        // Move a tier toward Low by 'steps', floored at Low. Tier is declared
+        // Low=0 < Medium < High, so stepping toward Low is a clamped decrement —
+        // but this routes through the enum values rather than assuming the int
+        // layout, so it stays correct if the enum order ever changes.
+        private static Tier StepTowardLow(Tier tier, int steps)
+        {
+            int v = (int)tier - System.Math.Max(0, steps);
+            int floor = (int)Tier.Low;
+            return (Tier)System.Math.Max(floor, v);
         }
 
         private static Tier ScoreBwTier(float kbPerSec)
