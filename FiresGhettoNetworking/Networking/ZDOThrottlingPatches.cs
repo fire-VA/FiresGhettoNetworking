@@ -88,14 +88,11 @@ namespace FiresGhettoNetworkMod
                     continue;
                 }
 
-                // Distant penalty — only penalize loose, non-load-bearing objects
-                // (ObjectType.Default). Solid (structures/build pieces) and Terrain
-                // (ground/heightmap) are EXEMPT so they're never pushed behind the
-                // dynamic objects that physically rest on them. Works together with
-                // CompareSendOrder below (which keeps supports ahead by Type): the
-                // exemption stops the distance penalty from undoing that ordering for
-                // far-out structures. Steady-state cost is negligible — static
-                // structure rarely re-sends once a peer has it.
+                // Distant penalty — only penalize loose objects (ObjectType.Default).
+                // Solid (structures/build pieces) and Terrain (ground/heightmap) are
+                // EXEMPT so a far-out structure isn't shoved behind the things resting
+                // on it. Steady-state cost is negligible — static structure rarely
+                // re-sends once a peer has it.
                 if (throttleEnabled && zdo.Type == ZDO.ObjectType.Default)
                 {
                     Vector3 zdoPos = zdo.GetPosition();
@@ -109,50 +106,17 @@ namespace FiresGhettoNetworkMod
                 }
             }
 
-            // Single sort pass — only when values were changed. The comparator is
-            // Type-aware (see CompareSendOrder): it must NOT collapse to pure sort
-            // value, or supports (Solid/Terrain) lose their ordering ahead of the
-            // dynamic objects that physically rest on them.
+            // Single sort pass — only when values were changed.
+            // NOTE: 1.3.6 tried a Type-aware comparator here (supports-first) to stop
+            // tames/tombstones falling through structures. It REGRESSED — dropped items
+            // started passing through floors — because the prefab ObjectType values it
+            // assumed were never verified. Reverted to the plain sort-value order in 1.3.7.
+            // Re-attempt only after confirming the real ObjectType of items / build pieces
+            // / tombstones / creatures from the prefab assets.
             if (modified)
             {
-                objects.Sort((x, y) => CompareSendOrder(x, y, peer));
+                objects.Sort((x, y) => x.m_tempSortValue.CompareTo(y.m_tempSortValue));
             }
-        }
-
-        // Send-order comparator that keeps physics objects from outracing their support.
-        //
-        //   1. A Prioritized ZDO the peer has ALREADY received jumps to the front —
-        //      these are ongoing movement/combat updates for players & creatures already
-        //      in the peer's world and need to stay responsive. On the peer's FIRST receipt
-        //      it does NOT jump, so it falls into the Type ordering below.
-        //   2. Type descending: Terrain(3) > Solid(2) > Prioritized(1) > Default(0). The
-        //      structure/ground a creature or tombstone rests on is sent first, so its
-        //      collider exists client-side before the dynamic object spawns and runs
-        //      physics — no more tames walking out of half-loaded pens or graves dropping
-        //      through bridges/rocks. Covers both since Solid outranks Prioritized AND
-        //      Default.
-        //   3. Within a class, our adjusted value (player boost / distant penalty) decides.
-        //
-        // This replaces the old pure-sort-value collapse, which discarded vanilla's
-        // support-first Type order; it also gates vanilla's owned-Prioritized front-jump
-        // on "peer has seen it" so a first-load creature no longer beats its own pen.
-        private static int CompareSendOrder(ZDO x, ZDO y, ZDOMan.ZDOPeer peer)
-        {
-            bool xFront = IsSeenPrioritized(x, peer);
-            bool yFront = IsSeenPrioritized(y, peer);
-            if (xFront != yFront) return xFront ? -1 : 1;
-
-            if (x.Type != y.Type) return ((int)y.Type).CompareTo((int)x.Type);
-
-            return x.m_tempSortValue.CompareTo(y.m_tempSortValue);
-        }
-
-        private static bool IsSeenPrioritized(ZDO zdo, ZDOMan.ZDOPeer peer)
-        {
-            return zdo != null
-                && zdo.Type == ZDO.ObjectType.Prioritized
-                && peer != null
-                && peer.m_zdos.ContainsKey(zdo.m_uid);
         }
 
         private static readonly int PlayerPrefabHash = "Player".GetStableHashCode();

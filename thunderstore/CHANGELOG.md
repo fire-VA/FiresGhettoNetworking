@@ -50,3 +50,5 @@
   - player smoothing/prediction are left to the clients preferences again, auto-tune doesn't force them on
 * v1.3.6 tombstone/tames fix 
   - graves and tames should stop dropping through structures on zone reload 
+* v1.3.7 hotfix
+  - reverted the 1.3.6 change, it was making dropped items fall through floors. back to safe behavior while i sort it out properly
