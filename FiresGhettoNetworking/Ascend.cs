@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.3";
+        public const string PluginVersion = "1.3.4";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -69,6 +69,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<string> ConfigDediFellOutRescueLayers;
         public static ConfigEntry<float> ConfigDiagnosticIntervalSec;
         public static ConfigEntry<bool> ConfigEnableBulkTransferBoost;
+        public static ConfigEntry<int> ConfigBulkTransferBudgetPercent;
 
         private static bool _dummyRpcRegistered = false;
 
@@ -579,11 +580,15 @@ namespace FiresGhettoNetworkMod
 
             ConfigUpdateRate = Config.Bind(
                 "04 - Networking",
-                "Update Rate",
+                "ZDO Send Rate",
                 UpdateRateOptions._100,
-                "Server ZDO update frequency. Higher = smoother player movement, more bandwidth.\n" +
-                "100% (20Hz) matches vanilla and is the safe default; 150% (30Hz) is recommended\n" +
-                "for high-pop servers with bandwidth headroom.");
+                "How often the server SENDS ZDO updates to clients. This is a NETWORK send-cadence\n" +
+                "setting ONLY — it does NOT change the world/game tick, day length, smelter/cook timers,\n" +
+                "cooldowns, or any simulation speed. Higher = other players/creatures look smoother to\n" +
+                "you, at the cost of more bandwidth.\n" +
+                "100% (20 sends/sec) matches vanilla and is the safe default. 150% (30 sends/sec) can look\n" +
+                "smoother on high-pop servers with bandwidth headroom; lower it if bandwidth is tight.\n" +
+                "SERVER-ONLY.");
 
             ConfigSendRateMin = Config.Bind(
                 "05 - Networking - Steamworks",
@@ -809,6 +814,22 @@ namespace FiresGhettoNetworkMod
                     + "Disable as a kill switch if you suspect the scan is causing freezes or false-positive patching.\n"
                     + "Both sides — applies on client and dedicated server.",
                     null));
+
+            ConfigBulkTransferBudgetPercent = Config.Bind(
+                "04 - Networking",
+                "Bulk Transfer Budget Percent",
+                40,
+                new ConfigDescription(
+                    "Caps how much of the Steam per-connection send buffer the raised ServerSync gates may "
+                    + "collectively claim, so many ServerSync mods (Azu/EpicLoot/Marketplace/EW/etc.) can't "
+                    + "stack their raised gates and overflow the buffer (the cause of the heavy-area peer "
+                    + "disconnects). The per-mod gate is computed as min(Queue Size, (buffer * this% / "
+                    + "ServerSync-mod-count)), floored at the vanilla 20 KB so it never throttles tighter than "
+                    + "stock. The buffer is 512 KB by default, or the larger value set when FiresSteamworksPatcher "
+                    + "is installed. 40% leaves headroom for ZDO + RPC traffic. Lower if you still see heavy-area "
+                    + "disconnects; raise if config syncs feel slow on join. Only matters when Bulk Transfer Queue "
+                    + "Boost is ON.",
+                    new AcceptableValueRange<int>(10, 80)));
 
             ConfigEnableServerAuthority = Config.Bind(
                 "10 - Server Authority",
@@ -1103,6 +1124,7 @@ namespace FiresGhettoNetworkMod
         ConfigEnableInvulnerableSupportSkip,
         ConfigEnableInstanceOrphanPrune,
         ConfigEnableBulkTransferBoost,
+        ConfigBulkTransferBudgetPercent,
         ConfigEnableServerOwnership,
         ConfigEnableServerOwnershipSelective
             };
@@ -1169,13 +1191,13 @@ namespace FiresGhettoNetworkMod
 
     public enum UpdateRateOptions
     {
-        [Description("150% - 30 updates/sec [recommended for high-pop]")]
+        [Description("150% - 30 network sends/sec [smoother, more bandwidth]")]
         _150,
-        [Description("100% - 20 updates/sec [default, vanilla]")]
+        [Description("100% - 20 network sends/sec [default, vanilla]")]
         _100,
-        [Description("75% - 15 updates/sec")]
+        [Description("75% - 15 network sends/sec")]
         _75,
-        [Description("50% - 10 updates/sec")]
+        [Description("50% - 10 network sends/sec")]
         _50
     }
 

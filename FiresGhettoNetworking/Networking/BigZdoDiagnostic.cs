@@ -11,10 +11,32 @@ namespace FiresGhettoNetworkMod
         private const int VanillaWarningThreshold = 100;
         private const int WireFormatByteCountCeiling = 255;
 
+        // True only while ZDOMan.SaveAsync is iterating the full ZDO set to disk.
+        // During a full-world save every ZDO.Save fires this prefix; on a large
+        // world that is millions of calls in one burst. The diagnostic allocates
+        // seven Lists per call (one GetSave* each), which roughly doubles the
+        // save's allocation cost and can push the save past the ~30s Steam
+        // peer-timeout — peers then drop, mass-reconnect, and trigger a
+        // ServerSync re-sync storm. The diagnostic provides no actionable value
+        // mid-save anyway (you cannot act on a per-ZDO warning during a bulk
+        // write), so it is skipped entirely while a bulk save is in progress.
+        // The Serialize-path diagnostic (live network send) still catches the
+        // same oversized buckets during normal play.
+        private static bool s_bulkSaveInProgress;
+
+        [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.SaveAsync))]
+        [HarmonyPrefix]
+        public static void ZDOMan_SaveAsync_Prefix() => s_bulkSaveInProgress = true;
+
+        [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.SaveAsync))]
+        [HarmonyFinalizer]
+        public static void ZDOMan_SaveAsync_Finalizer() => s_bulkSaveInProgress = false;
+
         [HarmonyPatch(typeof(ZDO), nameof(ZDO.Save))]
         [HarmonyPrefix]
         public static void ZDO_Save_Prefix(ZDO __instance)
         {
+            if (s_bulkSaveInProgress) return;
             if (__instance == null || !LargeZdoDiagnosticIsEnabled()) return;
             TryReportOversizedBuckets(__instance, "Save", canTruncateOnWire: false, SnapshotSaveBuckets);
         }
