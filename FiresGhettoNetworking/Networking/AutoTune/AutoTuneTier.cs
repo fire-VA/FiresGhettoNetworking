@@ -23,9 +23,6 @@ namespace FiresGhettoNetworkMod.AutoTune
         // rejected at 512 KB ("Reliable message size too large").
         public int   SteamRecvMaxMessageBytes;
         public int   ZoneLoadBatchSize;
-        public bool  EnablePrediction;
-        public float SmoothingMaxInterval;
-        public float SmoothingMinInterval;
 
         // Time-sliced instantiation (Workstream A). Replaces the dumb cap-bump
         // transpiler with a per-frame ms budget — instantiate as many ZDOs as
@@ -72,9 +69,6 @@ namespace FiresGhettoNetworkMod.AutoTune
                         SteamRecvBufferBytes     = 8 * 1024 * 1024,
                         SteamRecvMaxMessageBytes = 4 * 1024 * 1024,
                         ZoneLoadBatchSize        = 4,
-                        EnablePrediction      = true,
-                        SmoothingMaxInterval  = 0.15f,
-                        SmoothingMinInterval  = 0.0f,
                         // 5 ms steady-state budget on a high-tier client. Capable
                         // boxes can afford a wider slice each frame and still hold
                         // 60 fps. Hard cap at 200 instances/frame keeps a runaway
@@ -104,9 +98,6 @@ namespace FiresGhettoNetworkMod.AutoTune
                         SteamRecvBufferBytes     = 4 * 1024 * 1024,
                         SteamRecvMaxMessageBytes = 4 * 1024 * 1024,
                         ZoneLoadBatchSize        = 2,
-                        EnablePrediction      = false,
-                        SmoothingMaxInterval  = 0.20f,
-                        SmoothingMinInterval  = 0.0f,
                         InstantiationBudgetMs   = 3,
                         MaxInstancesPerFrame    = 100,
                         SafetyFallbackEnabled   = true,
@@ -138,9 +129,6 @@ namespace FiresGhettoNetworkMod.AutoTune
                         SteamRecvBufferBytes     = 2 * 1024 * 1024,
                         SteamRecvMaxMessageBytes = 4 * 1024 * 1024,
                         ZoneLoadBatchSize        = 1,
-                        EnablePrediction      = false,
-                        SmoothingMaxInterval  = 0.30f,
-                        SmoothingMinInterval  = 0.0f,
                         // Tight 2 ms budget on a low-tier client; cap 50 keeps us
                         // friendly to 30-fps targets. Safety threshold lifted to
                         // 8000 — weak boxes are exactly where a teleport into a
@@ -336,31 +324,24 @@ namespace FiresGhettoNetworkMod.AutoTune
             return FiresGhettoNetworkMod.ConfigEnableTimeSliceInstantiation?.Value ?? true;
         }
 
+        // Visual-rendering preferences (how OTHER players look on your screen) are
+        // pure client taste — they never affect PvE outcomes, and prediction in
+        // particular was never dialed in (it overshoots/rubber-bands). AutoTune does
+        // NOT touch them: they read straight from the bound config, default OFF, and
+        // are the player's choice to enable. (Interpolation has always been a direct
+        // read; prediction + smoothing now match it.)
         public static bool EnablePlayerPrediction()
         {
-            if (UseClientAutoTune())
-            {
-                // Tier may say HIGH→prediction on, but only honor it if measured ping
-                // is high enough that prediction actually helps. Below ~80ms, prediction
-                // overshoots and feels worse than plain interpolation.
-                bool tierAllows = TierPresets.For(AutoTuneState.ClientTier).EnablePrediction;
-                bool latencyJustifies = AutoTuneState.ClientPingMedianMs >= 80;
-                return tierAllows && latencyJustifies;
-            }
             return PlayerPositionSyncPatches.ConfigEnablePlayerPrediction?.Value ?? false;
         }
 
         public static float SmoothingMaxInterval()
         {
-            if (UseClientAutoTune())
-                return TierPresets.For(AutoTuneState.ClientTier).SmoothingMaxInterval;
             return PlayerPositionSyncPatches.ConfigSmoothingMaxInterval?.Value ?? 0.20f;
         }
 
         public static float SmoothingMinInterval()
         {
-            if (UseClientAutoTune())
-                return TierPresets.For(AutoTuneState.ClientTier).SmoothingMinInterval;
             return PlayerPositionSyncPatches.ConfigSmoothingMinInterval?.Value ?? 0.0f;
         }
 

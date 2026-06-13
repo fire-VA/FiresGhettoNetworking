@@ -12,6 +12,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static ConfigEntry<bool> EnableServerAutoTune;
         public static ConfigEntry<bool> LogServerSuggestions;
         public static ConfigEntry<bool> RetuneOnEveryLogin;
+        public static ConfigEntry<int>  LinkDowngradeCap;
 
         // Probe timing knobs (rarely user-tuned, but exposed for emergencies)
         public static ConfigEntry<float> ProbeStartDelaySeconds;
@@ -60,6 +61,18 @@ namespace FiresGhettoNetworkMod.AutoTune
                 false,
                 "When on, ignore the cached tier on disk and re-probe every time you join. Costs ~50KB of probe\n" +
                 "traffic per join but reflects current ISP/route conditions. CLIENT-SIDE only.");
+
+            LinkDowngradeCap = config.Bind(
+                "06 - Auto-Tune",
+                "Link Downgrade Cap",
+                1,
+                new ConfigDescription(
+                    "Your machine's measured tier is the CEILING — a great connection can never push you above\n" +
+                    "what your hardware can actually handle. Only a genuinely BAD connection pulls your tier DOWN,\n" +
+                    "and this caps how far. 1 (default) = a bad link drops you one tier (e.g. a strong PC on a\n" +
+                    "170ms link lands MED, not LOW). 0 = connection never lowers your tier (machine only). 2 = a\n" +
+                    "bad link can drop you two tiers. Okay/medium ping costs nothing either way. CLIENT-SIDE only.",
+                    new AcceptableValueRange<int>(0, 2)));
 
             ProbeStartDelaySeconds = config.Bind(
                 "07 - Auto-Tune - Probe",
