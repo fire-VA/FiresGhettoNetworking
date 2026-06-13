@@ -147,6 +147,14 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogMessage($"Steam recv-max-message applied: {bytes / 1024} KB");
         }
 
+        // True when the running Steamworks build exposes the per-connection send-buffer
+        // config member — i.e. FiresSteamworksPatcher is installed and the buffer can be
+        // raised above Steam's 512 KB default. Order-independent (probes the enum directly)
+        // so it's safe to call from any ZNet.Start postfix regardless of patch order.
+        // Used by BulkTransferGatePatches to size its gate budget against the real ceiling.
+        public static bool IsSendBufferRaiseApplied()
+            => HasSteamConfigMember("k_ESteamNetworkingConfig_SendBufferSize");
+
         private static bool HasSteamConfigMember(string memberName)
         {
             try

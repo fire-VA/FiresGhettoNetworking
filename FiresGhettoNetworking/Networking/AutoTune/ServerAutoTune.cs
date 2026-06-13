@@ -86,8 +86,30 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
         }
 
+        // A rented/containerised host (zap-hosting, Pterodactyl, etc.) usually
+        // exposes the PHYSICAL machine's /proc to the container, so SystemInfo
+        // reports the host's full core count and RAM — not the container's
+        // actual allocation. A 64-core / ~1 TB report is a dedicated game-server
+        // allocation essentially never; it's the host bleeding through. Trusting
+        // it makes the server self-apply HIGH and overcommit queue/buffers past
+        // what the container can deliver. When the numbers are implausibly large
+        // for a real game-server slice, treat the detection as unreliable and cap
+        // the auto-applied tier at Medium.
+        private const int ImplausibleCoreCount = 32;
+        private const int ImplausibleRamMb = 128 * 1024;
+
         private static Tier ScoreServerTier(int cores, int ramMb)
         {
+            if (cores > ImplausibleCoreCount || ramMb > ImplausibleRamMb)
+            {
+                LoggerOptions.LogWarning(
+                    $"[AutoTune] Detected {cores} cores / {ramMb}MB RAM — implausibly large for a dedicated "
+                    + "game-server allocation, almost certainly a container reporting the HOST's specs. "
+                    + "Capping auto-tune tier at Medium to avoid overcommitting queue/buffers beyond what "
+                    + "the container can actually deliver. Set 'Enable Server Auto-Tune' = false and tune "
+                    + "manually if you know your real allocation.");
+                return Tier.Medium;
+            }
             if (cores >= 8 && ramMb >= 16 * 1024) return Tier.High;
             if (cores >= 4 && ramMb >= 8  * 1024) return Tier.Medium;
             return Tier.Low;

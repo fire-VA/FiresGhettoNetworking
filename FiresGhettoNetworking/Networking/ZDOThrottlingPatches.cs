@@ -26,7 +26,7 @@ namespace FiresGhettoNetworkMod
 
         [HarmonyPatch(typeof(ZDOMan), "ServerSortSendZDOS")]
         [HarmonyPostfix]
-        public static void ServerSortSendZDOS_Postfix(List<ZDO> objects, Vector3 refPos)
+        public static void ServerSortSendZDOS_Postfix(List<ZDO> objects, Vector3 refPos, ZDOMan.ZDOPeer peer)
         {
             // SERVER-ONLY: Only run on dedicated servers
             if (ZNet.instance == null || !ZNet.instance.IsDedicated())
@@ -65,20 +65,40 @@ namespace FiresGhettoNetworkMod
 
             foreach (ZDO zdo in objects)
             {
-                // Player boost — players are never throttled
+                // Player boost — players are never throttled.
+                // GATED on "peer has already received this ZDO once": the boost
+                // exists to keep ONGOING player position updates ahead of the
+                // queue for smooth combat/PvP. On a peer's FIRST send of a player
+                // ZDO we leave it at vanilla priority so it streams in alongside
+                // the terrain/structures it stands on, rather than arriving before
+                // its context. (peer.m_zdos holds every ZDO already sent to this
+                // peer — see ZDOMan.SendZDOs.)
                 if (playerBoostEnabled && IsPlayerZDO(zdo))
                 {
-                    // Floor at 0 still required: m_tempSortValue doubles as the
-                    // SaveClone flag when negative (SaveClone = m_tempSortValue < 0).
-                    // Going negative would incorrectly mark this ZDO as a save clone
-                    // and prevent ZDOExtraData.Release from running on ZDO.Reset().
-                    zdo.m_tempSortValue = Mathf.Max(0f, zdo.m_tempSortValue / playerBoostDivisor);
-                    modified = true;
+                    bool peerHasSeenZdo = peer != null && peer.m_zdos.ContainsKey(zdo.m_uid);
+                    if (peerHasSeenZdo)
+                    {
+                        // Floor at 0 still required: m_tempSortValue doubles as the
+                        // SaveClone flag when negative (SaveClone = m_tempSortValue < 0).
+                        // Going negative would incorrectly mark this ZDO as a save clone
+                        // and prevent ZDOExtraData.Release from running on ZDO.Reset().
+                        zdo.m_tempSortValue = Mathf.Max(0f, zdo.m_tempSortValue / playerBoostDivisor);
+                        modified = true;
+                    }
                     continue;
                 }
 
-                // Distant penalty — skip Prioritized objects
-                if (throttleEnabled && zdo.Type != ZDO.ObjectType.Prioritized)
+                // Distant penalty — only penalize loose, non-load-bearing objects
+                // (ObjectType.Default). Solid (structures/build pieces) and Terrain
+                // (ground/heightmap) are EXEMPT so they never get pushed behind the
+                // dynamic objects that physically rest on them. Vanilla already
+                // sorts Prioritized (creatures) to the front; if the fence/rock a
+                // creature or tombstone lands on were penalized to the back of the
+                // queue, the creature streams in and pathfinds out (or the tombstone
+                // falls through) before its support exists. Exempting Solid/Terrain
+                // restores vanilla's tight creature→support ordering; steady-state
+                // cost is negligible because static structure rarely re-sends.
+                if (throttleEnabled && zdo.Type == ZDO.ObjectType.Default)
                 {
                     Vector3 zdoPos = zdo.GetPosition();
                     float dx = zdoPos.x - refPos.x;

@@ -73,6 +73,13 @@ namespace FiresGhettoNetworkMod
         // (host quit → join again from main menu).
         private static bool s_applied;
 
+        // Number of ServerSync.ConfigSync copies across loaded assemblies, and the
+        // per-mod gate after dividing the Steam send-buffer budget across them.
+        // Both are computed once in ApplyAll BEFORE any harmony.Patch call, so the
+        // transpiler (BumpQueueGate) can read the final budgeted value.
+        private static int s_serverSyncCopyCount = 1;
+        private static int s_budgetedGate;
+
         [HarmonyPatch(typeof(ZNet), "Start")]
         [HarmonyPostfix]
         static void ApplyOnZNetStart()
@@ -97,16 +104,34 @@ namespace FiresGhettoNetworkMod
         private static void ApplyAll(Harmony harmony)
         {
             int target = GetTargetQueueSize();
+
+            // Budget the per-mod gate against the Steam send-buffer ceiling so that
+            // N stacked ServerSync gates can't collectively overflow it (the cause
+            // of the heavy-area peer disconnects). Counted before any Patch() so the
+            // transpiler reads the final budgeted value.
+            s_serverSyncCopyCount = CountServerSyncCopies();
+            s_budgetedGate = GetBudgetedGate();
+            LoggerOptions.LogMessage(
+                $"Bulk-transfer gate budget: {s_serverSyncCopyCount} ServerSync.ConfigSync copy/ies, "
+                + $"Steam buffer ceiling {GetEffectiveSendBufferCeilingBytes() / 1024}KB, "
+                + $"{FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? 40}% budget → per-mod gate "
+                + $"{s_budgetedGate} bytes (Queue Size target {target}).");
+            if (s_budgetedGate <= 20000)
+                LoggerOptions.LogWarning(
+                    "Bulk-transfer budget floored the per-mod gate at the vanilla 20 KB — too many "
+                    + "ServerSync mods for the current Steam send buffer. Install FiresSteamworksPatcher "
+                    + "to raise the buffer, or lower 'Queue Size', to give each mod more headroom.");
+
             int totalTypesFound = 0;
             int totalSitesPatched = 0;
 
             foreach (var t in Targets)
             {
-                if (target <= t.VanillaConstant)
+                if (s_budgetedGate <= t.VanillaConstant)
                 {
                     LoggerOptions.LogInfo(
                         $"Bulk-transfer gate scan for {t.TypeName} skipped — "
-                        + $"our queue cap ({target} bytes) is at/below the vanilla {t.VanillaConstant} default.");
+                        + $"budgeted gate ({s_budgetedGate} bytes) is at/below the vanilla {t.VanillaConstant} default.");
                     continue;
                 }
 
@@ -147,7 +172,7 @@ namespace FiresGhettoNetworkMod
                                 // (ConfigEnableBulkTransferBoost = false) lets us bisect cleanly.
                                 LoggerOptions.LogMessage(
                                     $"Bulk-transfer gate patched: {asm.GetName().Name} → {inspectedType.FullName}.{m.Name} "
-                                    + $"({t.VanillaConstant} → {target} bytes).");
+                                    + $"({t.VanillaConstant} → {s_budgetedGate} bytes).");
                             }
                             catch (Exception ex)
                             {
@@ -166,7 +191,7 @@ namespace FiresGhettoNetworkMod
 
             LoggerOptions.LogMessage(
                 $"Bulk-transfer gate scan complete: {totalTypesFound} third-party copies found across loaded assemblies, "
-                + $"{totalSitesPatched} queue-gate sites patched (target {target} bytes).");
+                + $"{totalSitesPatched} queue-gate sites patched (per-mod gate {s_budgetedGate} bytes).");
         }
 
         // Depth-first walk through nested types. The frameworks we target use
@@ -224,7 +249,7 @@ namespace FiresGhettoNetworkMod
         public static IEnumerable<CodeInstruction> BumpQueueGate(IEnumerable<CodeInstruction> instructions)
         {
             int vanilla = s_currentVanillaConstant;
-            int target = GetTargetQueueSize();
+            int target = s_budgetedGate;
             var code = new List<CodeInstruction>(instructions);
 
             // Index every GetSendQueueSize call site up front for O(1) lookup
@@ -261,6 +286,48 @@ namespace FiresGhettoNetworkMod
         // Match the value NetworkingRatesGroup's ZDOMan.SendZDOs transpiler
         // uses. Keeping the two in lockstep means our cap and third-party
         // gates stay aligned regardless of which queue-size tier is active.
+        // Count ServerSync.ConfigSync copies across every loaded assembly. Each
+        // ServerSync-bundling mod ILRepacks its own copy, so this is the number of
+        // independent gates that could stack against the Steam send buffer.
+        private static int CountServerSyncCopies()
+        {
+            int count = 0;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { if (asm.GetType("ServerSync.ConfigSync", false) != null) count++; }
+                catch { /* asm.GetType can throw on some dynamic assemblies — ignore */ }
+            }
+            return Math.Max(1, count);
+        }
+
+        // Steam's per-connection send buffer: 512 KB by default, or the larger
+        // value FiresSteamworksPatcher unlocks (read through EffectiveConfig so the
+        // AutoTune tier is respected). This is the pool the stacked ServerSync gates
+        // must share.
+        private static int GetEffectiveSendBufferCeilingBytes()
+        {
+            const int steamDefaultBuffer = 512 * 1024;
+            try
+            {
+                if (NetworkingRatesGroup.IsSendBufferRaiseApplied())
+                    return Math.Max(steamDefaultBuffer, EffectiveConfig.SteamSendBufferBytes());
+            }
+            catch { /* fall back to the Steam default if anything probes wrong */ }
+            return steamDefaultBuffer;
+        }
+
+        // Per-mod gate = min(Queue Size target, (buffer * budget% / copy-count)),
+        // floored at the vanilla 20 KB so we never throttle tighter than stock
+        // (which would re-introduce the stall the gate-raise exists to prevent).
+        private static int GetBudgetedGate()
+        {
+            int target = GetTargetQueueSize();
+            int pct = FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? 40;
+            long budget = (long)GetEffectiveSendBufferCeilingBytes() * pct / 100L;
+            int perMod = (int)(budget / Math.Max(1, s_serverSyncCopyCount));
+            return Math.Max(20000, Math.Min(target, perMod));
+        }
+
         private static int GetTargetQueueSize()
         {
             return EffectiveConfig.QueueSize() switch
