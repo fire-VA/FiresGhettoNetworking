@@ -32,13 +32,6 @@
 * v1.3.2 realized the error of my ways
   - compat with serversync send limits
   - added experimental server ownership toggles... basically ports the rest of server simulations. off by default
-* v1.3.4 crash + heavy-server hardening
-  - fixed a server crash on large worlds: Large ZDO Diagnostics was allocating per-ZDO on every save, bloating big saves past the peer-timeout and triggering a config-resync storm. it now skips entirely during a full world save
-  - server auto-tune no longer trusts container hosts that report the physical machine's specs (64 cores / 1TB etc). implausible specs cap the tier at Medium instead of cranking everything to High
-  - tames/tombstones no longer load before the fences/rocks they sit on. the distant throttle now only delays loose objects, never the ground or structures things rest on
-  - player position boost only applies to players you've already seen, so a player's first appearance loads alongside their surroundings instead of ahead of them
-  - renamed "Update Rate" to "ZDO Send Rate" and clarified it's network send frequency only. it does NOT change world/game time, cook timers, or cooldowns
-  - bulk transfer gate now budgets against the Steam send buffer so many ServerSync mods can't stack their raised gates and overflow it (the heavy-area disconnects)
 * v1.3.3 multi-player area fixes + permission-mod compat
   - players flying / hits from across the map fixed. BulkTransferGuard was the cause, replaced with BulkTransferGate (raises ServerSync send queue gate at the source instead of suppressing ZDOMan.SendZDOs)
   - delta compression self-heals now — full vanilla keyframe every 5s per peer/zdo so a dropped packet doesn't desync fields forever
@@ -48,3 +41,10 @@
   - CreateDestroyObjects NRE prune. fires when permission mods like TargetPortalProtection block portal destroy on the dedi and leave m_instances out of sync
   - broad server ownership auto-skips portals when TargetPortalProtection is installed
   - misc log + diagnostic tidy
+* v1.3.4 crash + heavy-server hardening
+  - fixed a server crash on large worlds: Large ZDO Diagnostics was allocating per-ZDO on every save, bloating big saves past the peer-timeout and triggering a config-resync storm. it now skips entirely during a full world save
+  - server auto-tune no longer trusts container hosts that report the physical machine's specs (64 cores / 1TB etc). implausible specs cap the tier at Medium instead of cranking everything to High
+  - tames/tombstones no longer load before the fences/rocks they sit on. the distant throttle now only delays loose objects, never the ground or structures things rest on
+  - player position boost only applies to players you've already seen, so a player's first appearance loads alongside their surroundings instead of ahead of them
+  - renamed "Update Rate" to "ZDO Send Rate" and clarified it's network send frequency only. it does NOT change world/game time, cook timers, or cooldowns
+  - bulk transfer gate now budgets against the Steam send buffer so many ServerSync mods can't stack their raised gates and overflow it (the heavy-area disconnects)
