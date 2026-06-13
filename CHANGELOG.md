@@ -42,12 +42,11 @@
   - broad server ownership auto-skips portals when TargetPortalProtection is installed
   - misc log + diagnostic tidy
 * v1.3.4 stability pass for big/busy servers
-  - tames and tombstones stop falling through objects when an area loads in
   - smoother on rented/shared hosts, now TRYING to read the actual server box specs not the hosts specs
   - "Update Rate" renamed to "ZDO Send Rate"
   - better disconnect logging to track down any hiccups
 * v1.3.5 auto-tune adjustment
   - a strong PC on a high-ping connection no longer gets dropped to low settings. your hardware sets the ceiling, a bad connection only nudges it down a step
   - player smoothing/prediction are left to the clients preferences again, auto-tune doesn't force them on
-* v1.3.6 the real tombstone/tame fix
-  - graves and tames stop dropping through bridges, floors and rocks when you head back to where you died. structures now load in before the things sitting on top of them
+* v1.3.6 tombstone/tames fix 
+  - graves and tames should stop dropping through structures on zone reload 
