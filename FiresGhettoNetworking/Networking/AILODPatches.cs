@@ -14,6 +14,15 @@ namespace FiresGhettoNetworkMod
         {
             if (!IsAILODActiveOnDedicatedServer()) return true;
 
+            // ADAPTIVE: throttling distant AI only helps a server that is actually under
+            // load. While no peer's send queue is backing up, run every mob at full rate
+            // (vanilla) and skip the per-mob distance scan entirely — far mobs stay
+            // responsive and we burn zero extra CPU on a healthy server.
+            if ((FiresGhettoNetworkMod.ConfigEnableAdaptiveThrottling == null
+                 || FiresGhettoNetworkMod.ConfigEnableAdaptiveThrottling.Value)
+                && !SendCongestion.AnyPeerCongested())
+                return true;
+
             ServerStatusDiagnostics.s_ailod_examined++;
 
             if (__instance.IsPlayer() || __instance.IsTamed())

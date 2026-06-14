@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.7";
+        public const string PluginVersion = "1.3.6";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -41,6 +41,9 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<float> ConfigAILODNearDistance;
         public static ConfigEntry<float> ConfigAILODFarDistance;
         public static ConfigEntry<float> ConfigAILODThrottleFactor;
+        public static ConfigEntry<bool> ConfigEnableAdaptiveThrottling;
+        public static ConfigEntry<int> ConfigSendCongestionThresholdPct;
+        public static ConfigEntry<bool> ConfigEnableSendHeartbeatLog;
         public static ConfigEntry<int> ConfigZoneLoadBatchSize;
         public static ConfigEntry<int> ConfigZPackageReceiveBufferSize;
         public static ConfigEntry<bool>  ConfigEnableTimeSliceInstantiation;
@@ -143,6 +146,15 @@ namespace FiresGhettoNetworkMod
             // send-side queue saturation. Cost is two int increments per
             // SendZDOs call.
             Harmony.PatchAll(typeof(SendZDOsHeartbeatDiagnostic));
+
+            // TEST-BUILD diagnostic — logs item/tombstone spawn collider-beneath
+            // state to confirm the fall-through load-race. Remove before real ship.
+            Harmony.PatchAll(typeof(FallThroughProbe));
+
+            // TEST-BUILD diagnostic — one-shot audit of every build-piece prefab's
+            // ObjectType; logs any piece that is NOT Solid (the load-order culprit
+            // for items/tombstones falling through custom structures). Remove before ship.
+            Harmony.PatchAll(typeof(PieceTypeAudit));
 
             // Server disconnect logger — always on (server-gated internally).
             // Logs each peer drop with duration + a burst counter so a mass
@@ -992,6 +1004,36 @@ namespace FiresGhettoNetworkMod
                 "AI LOD Throttle Factor",
                 0.5f,
                 new ConfigDescription("Update multiplier for throttled AI (0.5 = half speed, 0.25 = quarter). Lower = more savings.", new AcceptableValueRange<float>(0.25f, 0.75f)));
+
+            // Adaptive gate — the optimizations above only run when a peer's send queue
+            // is actually backing up. Healthy server = vanilla behaviour (smoother).
+            ConfigEnableAdaptiveThrottling = Config.Bind(
+                "10 - Server Authority",
+                "Adaptive Throttling",
+                true,
+                "Only engage FGN's send-side optimizations (distant-ZDO throttling, player\n" +
+                "boost, AI LOD) when a peer's send queue is actually backing up. On a server\n" +
+                "with bandwidth to spare, FGN leaves vanilla update order untouched — leaner\n" +
+                "and lower-latency. Turn OFF to force the optimizations on at all times.\n" +
+                "SERVER-ONLY.");
+
+            ConfigSendCongestionThresholdPct = Config.Bind(
+                "10 - Server Authority",
+                "Congestion Threshold",
+                50,
+                new ConfigDescription(
+                    "How full a peer's send queue must get (percent of cap) before Adaptive\n" +
+                    "Throttling engages the optimizations. Lower = engages sooner.\n" +
+                    "SERVER-ONLY.",
+                    new AcceptableValueRange<int>(10, 100)));
+
+            ConfigEnableSendHeartbeatLog = Config.Bind(
+                "12 - Advanced",
+                "Log Send Queue Heartbeat",
+                false,
+                "Diagnostic: log each peer's send-queue health every 10s on a dedicated\n" +
+                "server. Useful when investigating lag, but writes ~1 line per player per\n" +
+                "10s to the log. Leave OFF for normal play. SERVER-ONLY.");
 
             ZDOMemoryManager.ConfigMaxZDOs = Config.Bind(
                 "12 - Advanced",
