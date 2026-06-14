@@ -131,8 +131,25 @@ namespace FiresGhettoNetworkMod
                 RecordCreateDestroyObjectsDiagnostics();
 
                 __instance.CreateObjects(_cdoNearFiltered, _cdoDistantFiltered);
-                PruneOrphanInstances(__instance);
-                __instance.RemoveObjects(_cdoNearFiltered, _cdoDistantFiltered);
+
+                // REACTIVE orphan prune. The previous code walked the ENTIRE
+                // m_instances dictionary every frame (30 Hz) to pre-empt a rare
+                // null-view/ZDO NRE in RemoveObjects — an O(instances) scan every tick
+                // to catch an orphan that only appears when another mod mismanages
+                // ZNetScene state (e.g. a permission mod blocking WearNTear.RPC_Remove
+                // on the dedi). Instead, let RemoveObjects run and only scan-and-prune
+                // when it actually hits one, then retry. On a healthy server (the normal
+                // case) this is zero per-frame prune cost; the full scan happens only the
+                // moment an orphan really exists.
+                try
+                {
+                    __instance.RemoveObjects(_cdoNearFiltered, _cdoDistantFiltered);
+                }
+                catch (System.NullReferenceException) when (OrphanPruneEnabled())
+                {
+                    PruneOrphanInstances(__instance);
+                    __instance.RemoveObjects(_cdoNearFiltered, _cdoDistantFiltered);
+                }
                 return false;
             }
             catch (System.NullReferenceException ex)
@@ -200,9 +217,12 @@ namespace FiresGhettoNetworkMod
         private const float OrphanLogIntervalSec = 5f;
         private static float _orphanNextLogTime;
 
+        private static bool OrphanPruneEnabled()
+            => FiresGhettoNetworkMod.ConfigEnableInstanceOrphanPrune?.Value ?? true;
+
         private static void PruneOrphanInstances(ZNetScene scene)
         {
-            if (!(FiresGhettoNetworkMod.ConfigEnableInstanceOrphanPrune?.Value ?? true)) return;
+            if (!OrphanPruneEnabled()) return;
             if (scene == null || scene.m_instances == null) return;
 
             _orphanScratch.Clear();
