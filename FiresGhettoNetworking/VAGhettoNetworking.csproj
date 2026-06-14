@@ -226,6 +226,7 @@
     <Compile Include="Networking\LoggerOptions.cs" />
     <Compile Include="Networking\MonsterAiPatches.cs" />
     <Compile Include="Networking\NetworkRatesGroup.cs" />
+    <Compile Include="Networking\NetworkStats.cs" />
     <Compile Include="Networking\PlayerPositionSyncPatches.cs" />
     <Compile Include="Networking\RoutedRpcManager.cs" />
     <Compile Include="Networking\RpcHandlers\AddNoiseHandler.cs" />

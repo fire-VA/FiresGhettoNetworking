@@ -40,6 +40,13 @@ namespace FiresGhettoNetworkMod
             return Mathf.Clamp(pct, 10, 100) / 100f;
         }
 
+        /// <summary>
+        /// Absolute send-queue byte level at which a peer counts as congested — the
+        /// same cap × threshold the throttling gate uses. Exposed so external readers
+        /// (e.g. NetworkStats) classify congestion identically to the gate itself.
+        /// </summary>
+        public static float CongestionThresholdBytes() => EffectiveCapBytes() * ThresholdFraction();
+
         public static int GetQueueSize(ZDOMan.ZDOPeer peer)
         {
             if (peer == null || peer.m_peer == null || peer.m_peer.m_socket == null) return -1;
