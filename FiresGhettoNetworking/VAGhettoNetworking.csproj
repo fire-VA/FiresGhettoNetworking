@@ -241,9 +241,12 @@
     <Compile Include="Networking\RpcRouterPatches.cs" />
     <Compile Include="Networking\ServerAuthorityPatches.cs" />
     <Compile Include="Networking\ServerClientUtils.cs" />
+    <Compile Include="Networking\SendCongestion.cs" />
     <Compile Include="Networking\SendZDOsHeartbeatDiagnostic.cs" />
     <Compile Include="Networking\ServerOwnershipPatches.cs" />
     <Compile Include="Networking\ServerOwnershipPatchesV3.cs" />
+    <Compile Include="Networking\FallThroughProbe.cs" />
+    <Compile Include="Networking\PieceTypeAudit.cs" />
     <Compile Include="Networking\ServerDisconnectDiagnostics.cs" />
     <Compile Include="Networking\ServerStabilityPatches.cs" />
     <Compile Include="Networking\ServerStatusDiagnostics.cs" />

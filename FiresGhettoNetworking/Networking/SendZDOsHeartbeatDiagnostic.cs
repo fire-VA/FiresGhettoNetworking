@@ -34,22 +34,9 @@ namespace FiresGhettoNetworkMod
 
         private static readonly Dictionary<long, PeerStats> s_stats = new Dictionary<long, PeerStats>();
 
-        // The vanilla cap constant in SendZDOs is 102400, raised by both
-        // FiresSteamworksPatcher (preloader) and our NetworkingRatesGroup
-        // transpiler at Harmony time. We can't read it back from the IL
-        // post-transpile, so we infer the effective cap from
-        // EffectiveConfig.QueueSize() — same source the transpiler used.
-        private static int EffectiveCapBytes()
-        {
-            return AutoTune.EffectiveConfig.QueueSize() switch
-            {
-                QueueSizeOptions._80KB    => 80 * 1024,
-                QueueSizeOptions._64KB    => 64 * 1024,
-                QueueSizeOptions._48KB    => 48 * 1024,
-                QueueSizeOptions._32KB    => 32 * 1024,
-                _                         => 102400, // _vanilla — match preloader-raised value
-            };
-        }
+        // Effective send-queue cap — single source of truth in SendCongestion so the
+        // heartbeat and the adaptive throttling gate can never drift apart.
+        private static int EffectiveCapBytes() => SendCongestion.EffectiveCapBytes();
 
         // Vanilla SendZDOs uses 2048 as the "minimum budget before bailing"
         // (line 571 of vanilla ZDOMan.cs). Our transpiler doesn't rewrite
@@ -61,6 +48,10 @@ namespace FiresGhettoNetworkMod
         [HarmonyPriority(Priority.Last)]
         public static void SendZDOs_Heartbeat_Prefix(ZDOMan.ZDOPeer peer, bool flush)
         {
+            // Default OFF. This writes ~1 line per peer per 10s; on a busy server that
+            // is tens of thousands of synchronous log lines, so it is opt-in only.
+            if (FiresGhettoNetworkMod.ConfigEnableSendHeartbeatLog == null
+                || !FiresGhettoNetworkMod.ConfigEnableSendHeartbeatLog.Value) return;
             if (peer == null || peer.m_peer == null || peer.m_peer.m_socket == null) return;
             if (ZNet.instance == null || !ZNet.instance.IsDedicated()) return;
 

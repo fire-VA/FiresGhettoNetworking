@@ -61,6 +61,18 @@ namespace FiresGhettoNetworkMod
             if (!throttleEnabled && !playerBoostEnabled)
                 return;
 
+            // ADAPTIVE: only reorder when this peer's send queue is actually backing
+            // up. With bandwidth to spare every queued ZDO ships the same tick anyway,
+            // so the penalty/boost/re-sort below would only cost CPU and can ADD latency
+            // by deferring updates that would have gone out immediately. Leave the
+            // vanilla order (already applied by the method we postfix) untouched.
+            if (FiresGhettoNetworkMod.ConfigEnableAdaptiveThrottling == null
+                || FiresGhettoNetworkMod.ConfigEnableAdaptiveThrottling.Value)
+            {
+                if (!SendCongestion.IsPeerCongested(peer))
+                    return;
+            }
+
             bool modified = false;
 
             foreach (ZDO zdo in objects)
@@ -106,13 +118,13 @@ namespace FiresGhettoNetworkMod
                 }
             }
 
-            // Single sort pass — only when values were changed.
-            // NOTE: 1.3.6 tried a Type-aware comparator here (supports-first) to stop
-            // tames/tombstones falling through structures. It REGRESSED — dropped items
-            // started passing through floors — because the prefab ObjectType values it
-            // assumed were never verified. Reverted to the plain sort-value order in 1.3.7.
-            // Re-attempt only after confirming the real ObjectType of items / build pieces
-            // / tombstones / creatures from the prefab assets.
+            // Re-sort by the (now adjusted) vanilla sort value. We deliberately do NOT
+            // reorder by ObjectType: the client re-sorts everything it receives
+            // Type-descending on its own (ZNetScene.ZDOCompare), so a server-side Type
+            // sort cannot change client instantiation order for correctly-typed objects
+            // — it only shuffles which ZDOs land in a given budgeted tick. That was the
+            // 1.3.6 regression; the real fall-through cause is mis-typed custom pieces,
+            // fixed at the prefab, not here.
             if (modified)
             {
                 objects.Sort((x, y) => x.m_tempSortValue.CompareTo(y.m_tempSortValue));
