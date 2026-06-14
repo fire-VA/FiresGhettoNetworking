@@ -316,23 +316,38 @@ namespace FiresGhettoNetworkMod
             return true;
         }
 
+        // Decompress on the framing MAGIC, never on the per-socket receivingCompressed flag.
+        //
+        // Why: under load Steam's send buffer can be full when SendCompressionStarted flushes —
+        // ZSteamSocket.SendQueuedPackages gets k_EResultLimitExceeded and BREAKS, leaving packets
+        // queued. The "compression started" control packet is then still in the queue when
+        // sendingCompressed flips true, so it ships COMPRESSED. A receivingCompressed-gated reader
+        // never sees that signal, so it keeps reading every subsequent compressed packet as raw
+        // bytes -> permanent desync -> disconnect (the "many players sending at once" corruption,
+        // hit by joiners during a busy event). Keying off the magic makes every packet
+        // self-describing: a compressed control packet decompresses fine and the start boundary
+        // can never corrupt the stream. Wire format is unchanged, so this interoperates with peers
+        // still on the old behaviour.
         [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Recv))]
         [HarmonyPostfix]
         static void Steam_RecvCompressed(ref ZPackage __result, ZSteamSocket __instance)
         {
             if (__result == null || decompressor == null) return;
 
-            var status = CompressionStatus.GetStatus(__instance);
-            if (status == null || !status.receivingCompressed) return;
+            byte[] bytes = __result.GetArray();
+            if (!HasCompressionHeader(bytes)) return;   // no magic -> sent uncompressed, leave as-is
 
             try
             {
-                __result = new ZPackage(Decompress(__result.GetArray()));
+                __result = new ZPackage(Decompress(bytes));
             }
             catch
             {
-                LoggerOptions.LogWarning("Failed to decompress incoming Steamworks package - falling back to uncompressed");
-                status.receivingCompressed = false;
+                // Magic present but the payload didn't decompress — a rare collision where real
+                // packet bytes began with the magic, or a one-off. Pass the ORIGINAL packet through
+                // unchanged rather than disabling decompression (which would silently desync this
+                // peer for the rest of the session). __result still holds the original packet.
+                LoggerOptions.LogWarning("Compression: framed packet failed to decompress — passing through unchanged.");
             }
         }
 

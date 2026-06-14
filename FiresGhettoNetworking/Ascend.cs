@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.6";
+        public const string PluginVersion = "1.3.7";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -45,6 +45,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<int> ConfigSendCongestionThresholdPct;
         public static ConfigEntry<bool> ConfigEnableSendHeartbeatLog;
         public static ConfigEntry<bool> ConfigEnableFallThroughGuard;
+        public static ConfigEntry<bool> ConfigEnableFallThroughDiagnostics;
         public static ConfigEntry<int> ConfigZoneLoadBatchSize;
         public static ConfigEntry<int> ConfigZPackageReceiveBufferSize;
         public static ConfigEntry<bool>  ConfigEnableTimeSliceInstantiation;
@@ -156,14 +157,18 @@ namespace FiresGhettoNetworkMod
             // ObjectType changes (that 1.3.6 approach was reverted). Gated by config, default on.
             Harmony.PatchAll(typeof(FallThroughGuard));
 
-            // TEST-BUILD diagnostic — logs item/tombstone spawn collider-beneath
-            // state to confirm the fall-through load-race. Remove before real ship.
-            Harmony.PatchAll(typeof(FallThroughProbe));
-
-            // TEST-BUILD diagnostic — one-shot audit of every build-piece prefab's
-            // ObjectType; logs any piece that is NOT Solid (the load-order culprit
-            // for items/tombstones falling through custom structures). Remove before ship.
-            Harmony.PatchAll(typeof(PieceTypeAudit));
+            // Fall-through DIAGNOSTICS — verbose, opt-in (default off). Two probes that
+            // investigate items/tombstones sinking through structures:
+            //   FallThroughProbe — per item/tombstone spawn, raycasts for support and logs
+            //                      at-risk spawns and confirmed drops (real per-spawn cost).
+            //   PieceTypeAudit   — one-shot audit naming build pieces left non-Solid (the
+            //                      load-order culprit). Gated at registration: when off, the
+            //                      hot Awake paths are never patched, so they cost nothing.
+            if (ConfigEnableFallThroughDiagnostics.Value)
+            {
+                Harmony.PatchAll(typeof(FallThroughProbe));
+                Harmony.PatchAll(typeof(PieceTypeAudit));
+            }
 
             // Server disconnect logger — always on (server-gated internally).
             // Logs each peer drop with duration + a burst counter so a mass
@@ -1148,6 +1153,19 @@ namespace FiresGhettoNetworkMod
                 "so it lands on the floor instead of vanishing under the world. Runs on whichever\n" +
                 "side owns the item (the player's client, or the server under Server-Side Simulation).");
 
+            ConfigEnableFallThroughDiagnostics = Config.Bind(
+                "01 - General",
+                "Enable Fall-Through Diagnostics",
+                false,
+                "Verbose, opt-in diagnostics for investigating items and tombstones sinking through\n" +
+                "structures. Off by default. When on, two probes run: a per-spawn probe that raycasts\n" +
+                "under each dropped item/tombstone and logs the ones at risk (and any that actually\n" +
+                "fall), and a one-shot startup audit that names build pieces left non-Solid (the load\n" +
+                "order that lets an item spawn before its support). The per-spawn probe adds real cost\n" +
+                "and log volume on a busy server, so leave this OFF for normal play and the live read —\n" +
+                "turn it on only to investigate a fall-through report. The fix itself is the separate\n" +
+                "Enable Fall-Through Guard toggle, which stays on independently of this.");
+
             // === CONFIG CHANGE LOGGING (fixed for generic types) ===
             var allConfigs = new ConfigEntryBase[]
             {
@@ -1193,6 +1211,7 @@ namespace FiresGhettoNetworkMod
         ConfigEnableInvulnerableSupportSkip,
         ConfigEnableInstanceOrphanPrune,
         ConfigEnableFallThroughGuard,
+        ConfigEnableFallThroughDiagnostics,
         ConfigEnableBulkTransferBoost,
         ConfigBulkTransferBudgetPercent,
         ConfigEnableServerOwnership,
