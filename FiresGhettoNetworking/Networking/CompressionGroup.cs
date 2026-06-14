@@ -16,6 +16,11 @@ namespace FiresGhettoNetworkMod
         private static int ZSTD_LEVEL = 1;
         private static object compressor;
         private static object decompressor;
+        // Resolved once at InitCompressor instead of per-packet. Type.GetMethod walks
+        // the type's method table on every call; doing that for every Wrap/Unwrap on
+        // the send/recv hot path was pure overhead. Cache the MethodInfo and reuse.
+        private static MethodInfo _wrapMethod;
+        private static MethodInfo _unwrapMethod;
         public static ConfigEntry<bool> ConfigCompressionEnabled;
 
         private static readonly byte[] CompressionMagic = { (byte)'F', (byte)'G', (byte)'Z', (byte)'7' };
@@ -60,6 +65,18 @@ namespace FiresGhettoNetworkMod
                 compType.GetMethod("LoadDictionary")?.Invoke(compressor, new object[] { dict });
                 decompressor = Activator.CreateInstance(decompType);
                 decompType.GetMethod("LoadDictionary")?.Invoke(decompressor, new object[] { dict });
+
+                // Cache the per-packet method handles now so Compress/Decompress never
+                // do a GetMethod lookup on the hot path again.
+                _wrapMethod   = compType.GetMethod("Wrap", new[] { typeof(byte[]) })   ?? compType.GetMethod("Wrap");
+                _unwrapMethod = decompType.GetMethod("Unwrap", new[] { typeof(byte[]) }) ?? decompType.GetMethod("Unwrap");
+                if (_wrapMethod == null || _unwrapMethod == null)
+                {
+                    LoggerOptions.LogWarning("ZstdSharp Wrap/Unwrap not found - compression disabled.");
+                    compressor = null;
+                    decompressor = null;
+                    return;
+                }
 
                 LoggerOptions.LogInfo("ZSTD compression dictionary loaded successfully.");
             }
@@ -235,12 +252,10 @@ namespace FiresGhettoNetworkMod
         // ====================== ACTUAL COMPRESSION ======================
         internal static byte[] Compress(byte[] data)
         {
-            if (compressor == null) return data;
+            if (compressor == null || _wrapMethod == null) return data;
             if (HasCompressionHeader(data)) return data;
 
-            var compType = compressor.GetType();
-            var wrapMethod = compType.GetMethod("Wrap", new Type[] { typeof(byte[]) }) ?? compType.GetMethod("Wrap");
-            var result = wrapMethod.Invoke(compressor, new object[] { data });
+            var result = _wrapMethod.Invoke(compressor, new object[] { data });
             if (result is byte[] arr) return AddCompressionHeaderIfUseful(data, arr);
             var toArray = result?.GetType().GetMethod("ToArray", Type.EmptyTypes);
             if (toArray != null) return AddCompressionHeaderIfUseful(data, (byte[])toArray.Invoke(result, null));
@@ -250,11 +265,9 @@ namespace FiresGhettoNetworkMod
         internal static byte[] Decompress(byte[] data)
         {
             if (!HasCompressionHeader(data)) return data;
-            if (decompressor == null) throw new Exception("Decompressor not initialized");
-            var decompType = decompressor.GetType();
-            var unwrapMethod = decompType.GetMethod("Unwrap", new Type[] { typeof(byte[]) }) ?? decompType.GetMethod("Unwrap");
+            if (decompressor == null || _unwrapMethod == null) throw new Exception("Decompressor not initialized");
             byte[] payload = StripCompressionHeader(data);
-            var result = unwrapMethod.Invoke(decompressor, new object[] { payload });
+            var result = _unwrapMethod.Invoke(decompressor, new object[] { payload });
             if (result is byte[] arr) return arr;
             var toArray = result?.GetType().GetMethod("ToArray", Type.EmptyTypes);
             if (toArray != null) return (byte[])toArray.Invoke(result, null);

@@ -54,6 +54,64 @@ namespace FiresGhettoNetworkMod
         private static bool _contextActive;
         private static bool _pendingKeyframe;
 
+        // ── Foreign-serializer guard ────────────────────────────────────────
+        // Another mod can also Harmony-prefix ZDO.Serialize, skip vanilla, and write
+        // its own bytes into the package (e.g. VikingLands.Core's ZDOCache, which does
+        // `return !usedCache`). If that mod AND our delta prefix both run, they each
+        // write into the same ZPackage and return false → the packet is double-written
+        // and the receiver's ZDO.Deserialize reads corrupt data → desync / disconnect.
+        //
+        // We cannot detect this at our own registration time — BepInEx plugin Awake
+        // order is not deterministic, so the other mod may not have patched yet. Instead
+        // we scan Harmony's global patch registry ONCE at ZNet.Start (every plugin has
+        // applied its patches by then); if any FOREIGN bool-returning prefix sits on
+        // ZDO.Serialize, we yield — our delta prefix becomes a no-op and the other mod
+        // owns serialization. They do the same job: running one is correct, both corrupt.
+        private static bool s_yieldToForeignSerializer;
+        private static bool s_foreignScanDone;
+
+        [HarmonyPatch(typeof(ZNet), "Start")]
+        [HarmonyPostfix]
+        public static void ZNet_Start_DetectForeignSerializer()
+        {
+            if (s_foreignScanDone) return;
+            s_foreignScanDone = true;
+
+            try
+            {
+                var serialize = AccessTools.Method(typeof(ZDO), nameof(ZDO.Serialize));
+                if (serialize == null) return;
+
+                var info = Harmony.GetPatchInfo(serialize);
+                if (info?.Prefixes == null) return;
+
+                foreach (var prefix in info.Prefixes)
+                {
+                    // Our own prefixes (this delta + the read-only BigZdoDiagnostic) share our owner id.
+                    if (prefix.owner == FiresGhettoNetworkMod.PluginGUID) continue;
+                    // Only a bool-returning prefix CAN skip vanilla and write its own bytes;
+                    // a void prefix is a read-only observer and never conflicts.
+                    if (prefix.PatchMethod == null || prefix.PatchMethod.ReturnType != typeof(bool)) continue;
+
+                    s_yieldToForeignSerializer = true;
+                    LoggerOptions.LogWarning(
+                        $"[ZDODelta] '{prefix.owner}' already replaces ZDO.Serialize "
+                        + $"({prefix.PatchMethod.DeclaringType?.FullName}.{prefix.PatchMethod.Name}). "
+                        + "FGN ZDO delta compression DISABLED to avoid double-writing the package and "
+                        + "corrupting the wire — the other mod's serialization optimization stays in effect.");
+                    return;
+                }
+
+                LoggerOptions.LogInfo("[ZDODelta] No foreign ZDO.Serialize replacer detected — delta compression active.");
+            }
+            catch (System.Exception ex)
+            {
+                // Fail SAFE: if the scan throws (Harmony API drift), yield rather than risk corruption.
+                s_yieldToForeignSerializer = true;
+                LoggerOptions.LogWarning($"[ZDODelta] Foreign-serializer scan failed ({ex.Message}); delta disabled as a precaution.");
+            }
+        }
+
         [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
         [HarmonyPrefix]
         public static void SendZDOs_Prefix(ZDOMan.ZDOPeer peer, bool flush)
@@ -84,6 +142,9 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool ZDO_Serialize_Prefix(ZDO __instance, ZPackage pkg)
         {
+            // Another mod owns ZDO serialization (see ZNet_Start_DetectForeignSerializer) —
+            // yield so we never double-write the package.
+            if (s_yieldToForeignSerializer) return true;
             if (!_contextActive) return true;
 
             Dictionary<ZDOID, ZDOSnapshot> peerMap;
@@ -115,6 +176,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         public static void ZDO_Serialize_Postfix(ZDO __instance)
         {
+            if (s_yieldToForeignSerializer) return;
             if (!_contextActive) return;
 
             Dictionary<ZDOID, ZDOSnapshot> peerMap;

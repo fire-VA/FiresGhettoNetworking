@@ -44,6 +44,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<bool> ConfigEnableAdaptiveThrottling;
         public static ConfigEntry<int> ConfigSendCongestionThresholdPct;
         public static ConfigEntry<bool> ConfigEnableSendHeartbeatLog;
+        public static ConfigEntry<bool> ConfigEnableFallThroughGuard;
         public static ConfigEntry<int> ConfigZoneLoadBatchSize;
         public static ConfigEntry<int> ConfigZPackageReceiveBufferSize;
         public static ConfigEntry<bool>  ConfigEnableTimeSliceInstantiation;
@@ -146,6 +147,14 @@ namespace FiresGhettoNetworkMod
             // send-side queue saturation. Cost is two int increments per
             // SendZDOs call.
             Harmony.PatchAll(typeof(SendZDOsHeartbeatDiagnostic));
+
+            // Fall-through guard — PRODUCTION fix, both sides. On the peer that owns a freshly
+            // spawned ItemDrop/TombStone, freeze it the moment it appears if nothing is beneath
+            // it yet, then release once support streams in (or after a short timeout). Stops
+            // drops/tombstones sinking through floors during the zone-load physics race. This is
+            // the correct fix for the fall-through — pure local physics, no send-order or
+            // ObjectType changes (that 1.3.6 approach was reverted). Gated by config, default on.
+            Harmony.PatchAll(typeof(FallThroughGuard));
 
             // TEST-BUILD diagnostic — logs item/tombstone spawn collider-beneath
             // state to confirm the fall-through load-race. Remove before real ship.
@@ -1127,6 +1136,18 @@ namespace FiresGhettoNetworkMod
                 "state and should be investigated. Disable as a kill switch if it ever causes\n" +
                 "trouble (you'd then see the original NRE caught by the existing fallback).");
 
+            ConfigEnableFallThroughGuard = Config.Bind(
+                "01 - General",
+                "Enable Fall-Through Guard",
+                true,
+                "Stops dropped items and tombstones from sinking through floors, decks, and other\n" +
+                "structures right after they appear. On a busy server an item can spawn a frame\n" +
+                "before the floor under it finishes loading, so gravity pulls it through before the\n" +
+                "collider exists. With this on, an item that spawns with nothing beneath it is held\n" +
+                "in place until its support loads in (or a few seconds pass), then drops normally —\n" +
+                "so it lands on the floor instead of vanishing under the world. Runs on whichever\n" +
+                "side owns the item (the player's client, or the server under Server-Side Simulation).");
+
             // === CONFIG CHANGE LOGGING (fixed for generic types) ===
             var allConfigs = new ConfigEntryBase[]
             {
@@ -1171,6 +1192,7 @@ namespace FiresGhettoNetworkMod
         ConfigPredictionMaxLookaheadZones,
         ConfigEnableInvulnerableSupportSkip,
         ConfigEnableInstanceOrphanPrune,
+        ConfigEnableFallThroughGuard,
         ConfigEnableBulkTransferBoost,
         ConfigBulkTransferBudgetPercent,
         ConfigEnableServerOwnership,
