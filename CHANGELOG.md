@@ -1,12 +1,38 @@
-* v1.0.2 update for not playing well with wackies db
-* v1.1.0 compatibility updates
-* v1.1.1 fixed single player running logic as dedicated server and spamming errors finally
-* v1.1.5 fixes to server authority ai patches. improved performance, stopped causing issues with interactions and monsters... 
-* v1.1.6 better server checking for renamed assemblys 
-* v1.1.7 various tweaks and a bug fix for accidentally hiding the player-player poistion sync in configs 
-* v1.1.8 better client position handling for players with higher ping differences (only works when installed on server and client)
-* v1.1.9 adjustments to player positioning patches as well as default config settings, added a new beta feature for login snapshots as well
-* v1.2.0 removed log snapshots beta, will have to become its own mod someday soon
+* v1.3.7 disconnect + fall-through fixes
+  - fixed a compression bug that could corrupt packets when lots of players were sending at once — the cause of the "Disconnected" drops during busy events. the receiver now keys off each packet's own marker, so a compressed packet can't get misread as raw mid-stream and desync the connection
+  - proper fall-through fix, replaces the reverted 1.3.6 approach: a grave or item that spawns before the floor under it finishes loading is held in place until its support arrives (or a few seconds pass), then drops normally — lands on the floor instead of sinking through. pure local physics, no send-order changes
+  - the verbose per-spawn fall-through diagnostics are now behind a default-off "Enable Fall-Through Diagnostics" toggle, so normal play has no extra cost or log spam
+  - dedicated servers: the monitoring panel's per-peer Ping and Tx/Rx read correctly now (they were stuck at 0 / n/a — read through the wrong Steam interface on a dedicated host)
+* v1.3.6 tombstone/tames fix 
+  - graves and tames should stop dropping through structures on zone reload 
+* v1.3.5 auto-tune adjustment
+  - a strong PC on a high-ping connection no longer gets dropped to low settings. your hardware sets the ceiling, a bad connection only nudges it down a step
+  - player smoothing/prediction are left to the clients preferences again, auto-tune doesn't force them on
+* v1.3.4 stability pass for big/busy servers
+  - smoother on rented/shared hosts, now TRYING to read the actual server box specs not the hosts specs
+  - "Update Rate" renamed to "ZDO Send Rate"
+  - better disconnect logging to track down any hiccups
+* v1.3.3 multi-player area fixes + permission-mod compat
+  - players flying / hits from across the map fixed. BulkTransferGuard was the cause, replaced with BulkTransferGate (raises ServerSync send queue gate at the source instead of suppressing ZDOMan.SendZDOs)
+  - delta compression self-heals now — full vanilla keyframe every 5s per peer/zdo so a dropped packet doesn't desync fields forever
+  - RPC router stopped wasting cycles forwarding server-targeted RPCs to itself
+  - IsActiveAreaLoaded gate uses vanilla active-area only, megabases stop choking on it
+  - ported SSS defensive trio (humanoid null guard, WNT collider re-init, ship request-handoff)
+  - CreateDestroyObjects NRE prune. fires when permission mods like TargetPortalProtection block portal destroy on the dedi and leave m_instances out of sync
+  - broad server ownership auto-skips portals when TargetPortalProtection is installed
+  - misc log + diagnostic tidy
+* v1.3.2 realized the error of my ways
+  - compat with serversync send limits
+  - added experimental server ownership toggles... basically ports the rest of server simulations. off by default
+* v1.3.1 fixes for compression conflicts with SC
+* v1.3.0 server + bandwidth performance pass:
+  - ZDO delta compression — server only re-sends ZDO fields that changed (wire-compatible with vanilla)
+  - Server-side WearNTear skip — UpdateWear short-circuits for stable / invulnerable pieces
+  - Client-side support skip — invulnerable pieces stop running UpdateSupport, max-support pinned at Awake
+  - Shared invulnerability classifier — Immune + Ignore both treated as zero-damage
+  - AoI-filtered SpawnedZone rebroadcast — server-side rebroadcast bound by AoI radius instead of all-peers
+  - Public-test build gating — ready for live valheim updates
+  - Internal reorg — 
 * v1.2.1 per-client Auto-Tune system added:
   - Network/hardware probe runs on first login (latency, jitter, frame time, bandwidth, hardware fingerprint), picks a LOW/MED/HIGH tier, applies tier-appropriate settings automatically
   - Two-axis tier scoring (machine vs link) — strong client on a clean-latency link no longer dragged down by server-bottlenecked bandwidth measurements
@@ -20,35 +46,12 @@
   - Default `Enable Server Auto-Tune` flipped ON (was OFF in 1.2.0)
   - Default `Enable Client-Side Interpolation` flipped OFF (was ON before — the rest of the networking improvements deliver smooth positions on their own; turn back ON if you still see snap/teleport)
   - README rewritten with proper documentation of features, auto-tune, server-authority patches, and the four client-side knobs that are the only settings users should ever touch
-* v1.3.0 server + bandwidth performance pass:
-  - ZDO delta compression — server only re-sends ZDO fields that changed (wire-compatible with vanilla)
-  - Server-side WearNTear skip — UpdateWear short-circuits for stable / invulnerable pieces
-  - Client-side support skip — invulnerable pieces stop running UpdateSupport, max-support pinned at Awake
-  - Shared invulnerability classifier — Immune + Ignore both treated as zero-damage
-  - AoI-filtered SpawnedZone rebroadcast — server-side rebroadcast bound by AoI radius instead of all-peers
-  - Public-test build gating — ready for live valheim updates
-  - Internal reorg — 
-* v1.3.1 fixes for compression conflicts with SC
-* v1.3.2 realized the error of my ways
-  - compat with serversync send limits
-  - added experimental server ownership toggles... basically ports the rest of server simulations. off by default
-* v1.3.3 multi-player area fixes + permission-mod compat
-  - players flying / hits from across the map fixed. BulkTransferGuard was the cause, replaced with BulkTransferGate (raises ServerSync send queue gate at the source instead of suppressing ZDOMan.SendZDOs)
-  - delta compression self-heals now — full vanilla keyframe every 5s per peer/zdo so a dropped packet doesn't desync fields forever
-  - RPC router stopped wasting cycles forwarding server-targeted RPCs to itself
-  - IsActiveAreaLoaded gate uses vanilla active-area only, megabases stop choking on it
-  - ported SSS defensive trio (humanoid null guard, WNT collider re-init, ship request-handoff)
-  - CreateDestroyObjects NRE prune. fires when permission mods like TargetPortalProtection block portal destroy on the dedi and leave m_instances out of sync
-  - broad server ownership auto-skips portals when TargetPortalProtection is installed
-  - misc log + diagnostic tidy
-* v1.3.4 stability pass for big/busy servers
-  - smoother on rented/shared hosts, now TRYING to read the actual server box specs not the hosts specs
-  - "Update Rate" renamed to "ZDO Send Rate"
-  - better disconnect logging to track down any hiccups
-* v1.3.5 auto-tune adjustment
-  - a strong PC on a high-ping connection no longer gets dropped to low settings. your hardware sets the ceiling, a bad connection only nudges it down a step
-  - player smoothing/prediction are left to the clients preferences again, auto-tune doesn't force them on
-* v1.3.6 tombstone/tames fix 
-  - graves and tames should stop dropping through structures on zone reload 
-* v1.3.7 hotfix
-  - reverted the 1.3.6 change, it was making dropped items fall through floors. back to safe behavior while i sort it out properly
+* v1.2.0 removed log snapshots beta, will have to become its own mod someday soon
+* v1.1.9 adjustments to player positioning patches as well as default config settings, added a new beta feature for login snapshots as well
+* v1.1.8 better client position handling for players with higher ping differences (only works when installed on server and client)
+* v1.1.7 various tweaks and a bug fix for accidentally hiding the player-player poistion sync in configs 
+* v1.1.6 better server checking for renamed assemblys 
+* v1.1.5 fixes to server authority ai patches. improved performance, stopped causing issues with interactions and monsters... 
+* v1.1.1 fixed single player running logic as dedicated server and spamming errors finally
+* v1.1.0 compatibility updates
+* v1.0.2 update for not playing well with wackies db

@@ -1,4 +1,7 @@
 using System.Collections.Generic;
+using System.Reflection;
+using HarmonyLib;
+using Steamworks;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -44,6 +47,11 @@ namespace FiresGhettoNetworkMod
         private const float SnapshotTtlSeconds = 0.5f;
         private static Snapshot s_snapshot;
         private static float s_snapshotTime = -999f;
+
+        // Cached reflection of ZSteamSocket.m_con (the Steam connection handle) for the dedicated-
+        // server ping path, plus a one-shot flag for the source-confirmation log.
+        private static FieldInfo s_steamConField;
+        private static bool s_loggedPeerStatusSource;
 
         /// <summary>True only when a server (dedicated or host) network is live.</summary>
         public static bool IsServerActive()
@@ -120,12 +128,28 @@ namespace FiresGhettoNetworkMod
 
                 try
                 {
-                    float localQuality;
-                    float remoteQuality;
                     int ping;
                     float outBps;
                     float inBps;
-                    socket.GetConnectionQuality(out localQuality, out remoteQuality, out ping, out outBps, out inBps);
+
+                    // On a hosted server the peer connection is owned by the Steam game-server
+                    // interface; vanilla GetConnectionQuality queries the client interface and
+                    // reads 0 there. Prefer the game-server status, fall back to vanilla for the
+                    // listen-host / non-Steam peers where vanilla works.
+                    bool viaGameServer = TryGameServerPeerStatus(socket, out ping, out outBps, out inBps);
+                    if (!viaGameServer)
+                    {
+                        float localQuality;
+                        float remoteQuality;
+                        socket.GetConnectionQuality(out localQuality, out remoteQuality, out ping, out outBps, out inBps);
+                    }
+
+                    if (!s_loggedPeerStatusSource)
+                    {
+                        s_loggedPeerStatusSource = true;
+                        LogPeerStatusSource(socket, viaGameServer);
+                    }
+
                     if (ping > 0)
                     {
                         pingSum += ping;
@@ -139,6 +163,7 @@ namespace FiresGhettoNetworkMod
             }
 
             snap.PeerCount = peerCount;
+            if (peerCount == 0) s_loggedPeerStatusSource = false;
             snap.TotalQueueBytes = totalQueue;
             snap.CongestedPeers = congested;
             snap.AvgPingMs = pingSamples > 0 ? Mathf.RoundToInt((float)pingSum / pingSamples) : 0;
@@ -153,6 +178,63 @@ namespace FiresGhettoNetworkMod
             }
 
             return snap;
+        }
+
+        // Vanilla ISocket.GetConnectionQuality reads the connection's real-time status through the
+        // CLIENT Steam networking interface. A hosted server's peer connections are owned by the
+        // GAME-SERVER interface, so on a dedicated server that query returns non-OK and ping, Tx,
+        // and Rx all read 0 (the panel shows "n/a"). Read straight off the connection handle through
+        // the game-server interface; the result code says when it applies — true on a hosted server,
+        // false for a client or a non-Steam (PlayFab) peer, where the caller falls back to vanilla.
+        private static bool TryGameServerPeerStatus(ISocket socket, out int ping, out float outBytesSec, out float inBytesSec)
+        {
+            ping = 0;
+            outBytesSec = 0f;
+            inBytesSec = 0f;
+
+            if (!(socket is ZSteamSocket steamSocket))
+            {
+                return false;
+            }
+
+            if (s_steamConField == null)
+            {
+                s_steamConField = AccessTools.Field(typeof(ZSteamSocket), "m_con");
+            }
+            if (s_steamConField == null)
+            {
+                return false;
+            }
+
+            var connection = (HSteamNetConnection)s_steamConField.GetValue(steamSocket);
+            if (connection == HSteamNetConnection.Invalid)
+            {
+                return false;
+            }
+
+            SteamNetConnectionRealTimeStatus_t status = default;
+            SteamNetConnectionRealTimeLaneStatus_t lanes = default;
+            if (SteamGameServerNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes) != EResult.k_EResultOK)
+            {
+                return false;
+            }
+
+            ping = status.m_nPing;
+            outBytesSec = status.m_flOutBytesPerSec;
+            inBytesSec = status.m_flInBytesPerSec;
+            return true;
+        }
+
+        // One-shot at the first peer (re-armed when the server empties) so a test run confirms which
+        // path produced the figures without spamming the log.
+        private static void LogPeerStatusSource(ISocket socket, bool viaGameServer)
+        {
+            string socketType = socket != null ? socket.GetType().Name : "null";
+            LoggerOptions.LogMessage(
+                "[NetworkStats] per-peer ping/throughput source = " +
+                (viaGameServer ? "game-server interface (dedicated path)" : "vanilla GetConnectionQuality") +
+                " for " + socketType +
+                ". Vanilla reads 0 on a dedicated server; the game-server path restores ping + Tx/Rx.");
         }
     }
 }
