@@ -5,10 +5,10 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Admin console test for the ZSTD compression round-trip (the magic-driven receive fix in
+    /// Admin console test for the Deflate compression round-trip (the magic-driven receive fix in
     /// CompressionGroup). 'fgn_comptest [count] [sizeKB]':
     ///   1. Local sanity — Compress -> Decompress a payload in-process and confirm it's byte-identical
-    ///      (and that it actually compressed, i.e. the FGZ7 magic was added).
+    ///      (and that it actually compressed, i.e. the FGD1 magic was added).
     ///   2. Wire burst — ask the server to fire N large, compressible packets at you (server -> client,
     ///      the direction that desynced joiners). Each carries a nonce, sequence, deterministic payload
     ///      and FNV checksum; the client verifies every one decompressed to exactly the right bytes.
@@ -49,7 +49,7 @@ namespace FiresGhettoNetworkMod
             if (s_commandRegistered) return;
             s_commandRegistered = true;
             new Terminal.ConsoleCommand("fgn_comptest",
-                "[count] [sizeKB] — FGN diagnostic: round-trip-test ZSTD compression. Does a local "
+                "[count] [sizeKB] — FGN diagnostic: round-trip-test Deflate compression. Does a local "
                 + "Compress/Decompress check, then has the server burst N compressible packets "
                 + "(default 20 x 32KB) at you and verifies every one decompressed intact.",
                 new Terminal.ConsoleEvent(OnCommand));
@@ -181,7 +181,7 @@ namespace FiresGhettoNetworkMod
             return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
         }
 
-        // Compressible (256-byte repeat) and sequence-varying, so ZSTD shrinks it (magic gets added)
+        // Compressible (256-byte repeat) and sequence-varying, so Deflate shrinks it (magic gets added)
         // yet each packet differs.
         private static byte[] MakePayload(int size, int seq)
         {

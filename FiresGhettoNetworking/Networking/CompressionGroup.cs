@@ -218,7 +218,7 @@ namespace FiresGhettoNetworkMod
         {
             using (var output = new MemoryStream())
             {
-                using (var stream = new DeflateStream(output, CompressionLevel.Fastest, leaveOpen: true))
+                using (var stream = new DeflateStream(output, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
                     stream.Write(data, 0, data.Length);
                 return output.ToArray();
             }
