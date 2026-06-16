@@ -8,41 +8,42 @@ using HarmonyLib;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Reflectively raises the internal 20 KB send-queue gate inside every
-    /// loaded copy of any third-party "bulk transfer" framework so its gate
-    /// matches our raised ZDOMan queue cap. Without this raise, those
-    /// frameworks' fragment loops stall forever (queue stays above their gate
-    /// because of our cap) and hit their 30-second self-disconnect.
+    /// Hardens every loaded copy of any third-party "bulk transfer" framework
+    /// (ServerSync and the ServerCharacters fork) against being starved by our
+    /// raised ZDOMan queue cap. On each framework's waitForQueue-style gate loop
+    /// we make TWO rewrites:
     ///
-    /// REPLACES the old BulkTransferGuard. BTG suppressed ZDOMan.SendZDOs to
-    /// the destination peer during bulk fragment bursts, which had the side
-    /// effect of starving *player position* ZDOs at the same time — the cause
-    /// of the "players flying / teleporting / hits from across the map"
-    /// complaint set. Raising the gate at the source avoids that entire
-    /// failure mode: bulk fragments flow at our cap speed, ZDO sync is never
-    /// suppressed, player position stays smooth.
+    ///   1. Disarm the 30-second self-disconnect — ALWAYS. ServerSync computes
+    ///      `timeout = Time.time + 30f` and calls ZNet.Disconnect(peer) once it
+    ///      elapses while the peer's send queue sits above the gate. A slow or
+    ///      high-ping peer behind our raised ZDO queue trips this even though its
+    ///      link is perfectly alive. We push that 30 out of reach so the send just
+    ///      waits for the queue to drain instead of dropping the player. This is
+    ///      the primary fix and runs regardless of the gate budget below.
+    ///
+    ///   2. Raise the internal 20 KB send-queue gate toward our cap — BUDGETED.
+    ///      Secondary: helps the fragment loop keep pace, but is floored to a no-op
+    ///      when many ServerSync copies share a small Steam send buffer (which is
+    ///      exactly why the disconnect-disarm above is the real fix, not this).
     ///
     /// CURRENT TARGETS:
-    ///   - ServerSync.ConfigSync          (Azumatt / Marketplace / EW / etc.)
-    ///   - ServerCharacters.Shared        (Smoothbrain ServerCharacters)
+    ///   - ServerSync.ConfigSync          (Azumatt / Marketplace / EW / WackyDB / etc.)
+    ///   - ServerCharacters.Shared        (Smoothbrain ServerCharacters fork)
     ///
-    /// EXTENSIBILITY: add a new (typeName, callName, constant) tuple to
-    /// <see cref="Targets"/> if another framework adopts the same pattern.
-    /// Pre-filter is robust to false positives — only methods whose IL
-    /// contains BOTH the constant load AND a call to the named method
-    /// (within ±8 instructions of each other) get transpiled.
+    /// The scan keys on a method calling BOTH GetSendQueueSize and ZNet.Disconnect
+    /// (the wait-or-drop loop), not on the gate constant — so the disarm lands even if
+    /// a fork changed its gate value, while skipping plain GetSendQueueSize forwarders.
+    /// Cecil-verified targets: ServerCharacters.Shared.&lt;sendCompressedDataToPeer&gt;waitForQueue
+    /// (the player-profile path) and ServerSync.ConfigSync.&lt;distributeConfigToPeers&gt;waitForQueue.
+    /// Every patched site is logged so the disarm can be confirmed in-game per copy.
     ///
-    /// RUNS AT: ZNet.Start postfix. Plugin assemblies are loaded by then and
-    /// the first bulk transfer (server→client config push on join, or SC
-    /// profile push) happens after ZNet.Start, so the patches land in time.
+    /// RUNS AT: ZNet.Start postfix. Plugin assemblies are loaded by then and the
+    /// first bulk transfer (server→client config push on join, or SC profile push)
+    /// happens after ZNet.Start, so the patches land in time.
     /// </summary>
     [HarmonyPatch]
     public static class BulkTransferGatePatches
     {
-        // Each entry describes a third-party type whose nested types contain a
-        // local function shaped like `while (socket.GetSendQueueSize() > N)`.
-        // The scan walks the type + every nested type and looks for methods
-        // mentioning both the gate constant AND a call to the gate method.
         private readonly struct Target
         {
             public readonly string TypeName;        // fully-qualified type to scan
@@ -63,20 +64,32 @@ namespace FiresGhettoNetworkMod
             new Target("ServerCharacters.Shared",   "GetSendQueueSize", 20000),
         };
 
-        // Per-transpile target context. Set on the patch site (one harmony.Patch
-        // call per match) so the shared transpiler knows which constant to look
-        // for. Used to avoid passing arguments through Harmony's transpiler
-        // delegate (which takes no extra context).
+        // ServerSync's waitForQueue drops a peer if its send queue stays above the gate
+        // for 30s. A live-but-slow/high-ping peer trips this even though its link is fine,
+        // so we rewrite that 30f to an effectively-never value (1 day). Finite on purpose:
+        // a peer that can receive small RPCs but somehow never the bulk sync still clears
+        // eventually rather than lingering forever. ZNet/Steam handle genuinely dead peers.
+        public static float DisconnectTimeoutSeconds = 86400f;
+        private static readonly FieldInfo TimeoutField =
+            AccessTools.Field(typeof(BulkTransferGatePatches), nameof(DisconnectTimeoutSeconds));
+
+        // Jotunn's CustomRPC uses the same 30s waitForQueue but reads its timeout and gate from
+        // static fields (CustomRPC.Timeout / MaximumSendQueueSize) instead of baked constants, so
+        // we set the Timeout field directly rather than transpiling its IL. ApplyJotunnTimeout
+        // mirrors DisconnectTimeoutSeconds onto it so the fgn_overload 'arm' control re-arms it too.
+        private static FieldInfo s_jotunnTimeoutField;
+        private static bool s_jotunnResolved;
+
+        // Per-transpile context (Harmony's transpiler delegate takes no extra args).
         private static int s_currentVanillaConstant;
 
-        // Idempotency — ZNet.Start can fire more than once per process
-        // (host quit → join again from main menu).
+        // Set by the transpiler for the method just patched, so the scan log can confirm
+        // the disarm actually landed — especially for the ServerCharacters copy.
+        private static int s_lastTimeoutSitesDisarmed;
+
+        // Idempotency — ZNet.Start can fire more than once per process.
         private static bool s_applied;
 
-        // Number of ServerSync.ConfigSync copies across loaded assemblies, and the
-        // per-mod gate after dividing the Steam send-buffer budget across them.
-        // Both are computed once in ApplyAll BEFORE any harmony.Patch call, so the
-        // transpiler (BumpQueueGate) can read the final budgeted value.
         private static int s_serverSyncCopyCount = 1;
         private static int s_budgetedGate;
 
@@ -105,10 +118,6 @@ namespace FiresGhettoNetworkMod
         {
             int target = GetTargetQueueSize();
 
-            // Budget the per-mod gate against the Steam send-buffer ceiling so that
-            // N stacked ServerSync gates can't collectively overflow it (the cause
-            // of the heavy-area peer disconnects). Counted before any Patch() so the
-            // transpiler reads the final budgeted value.
             s_serverSyncCopyCount = CountServerSyncCopies();
             s_budgetedGate = GetBudgetedGate();
             LoggerOptions.LogMessage(
@@ -117,23 +126,18 @@ namespace FiresGhettoNetworkMod
                 + $"{FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? 40}% budget → per-mod gate "
                 + $"{s_budgetedGate} bytes (Queue Size target {target}).");
             if (s_budgetedGate <= 20000)
-                LoggerOptions.LogWarning(
-                    "Bulk-transfer budget floored the per-mod gate at the vanilla 20 KB — too many "
-                    + "ServerSync mods for the current Steam send buffer. Install FiresSteamworksPatcher "
-                    + "to raise the buffer, or lower 'Queue Size', to give each mod more headroom.");
+                LoggerOptions.LogMessage(
+                    "Bulk-transfer budget floored the per-mod gate at the vanilla 20 KB (many ServerSync "
+                    + "mods on the current Steam send buffer), so the gate is NOT raised — but the 30s "
+                    + "self-disconnect is disarmed regardless, so slow/high-ping peers are never dropped. "
+                    + "Install FiresSteamworksPatcher or lower 'Queue Size' only if you also want the gate raise.");
 
             int totalTypesFound = 0;
             int totalSitesPatched = 0;
 
             foreach (var t in Targets)
             {
-                if (s_budgetedGate <= t.VanillaConstant)
-                {
-                    LoggerOptions.LogInfo(
-                        $"Bulk-transfer gate scan for {t.TypeName} skipped — "
-                        + $"budgeted gate ({s_budgetedGate} bytes) is at/below the vanilla {t.VanillaConstant} default.");
-                    continue;
-                }
+                bool willRaiseGate = s_budgetedGate > t.VanillaConstant;
 
                 int typesFound = 0;
                 int sitesPatched = 0;
@@ -155,24 +159,27 @@ namespace FiresGhettoNetworkMod
                                      | BindingFlags.DeclaredOnly))
                         {
                             if (m.IsAbstract || m.ContainsGenericParameters) continue;
-                            if (!MentionsBoth(m, t.GateMethodName, t.VanillaConstant)) continue;
+                            // The wait-or-drop loop calls BOTH GetSendQueueSize and ZNet.Disconnect.
+                            // Requiring both pinpoints the gate loop (Cecil-verified: ServerCharacters.
+                            // Shared.<sendCompressedDataToPeer>waitForQueue and ServerSync.ConfigSync.
+                            // <distributeConfigToPeers>waitForQueue) and skips the BufferingSocket
+                            // GetSendQueueSize forwarder, which sits on the hot per-iteration path.
+                            if (!IsGateLoop(m, t.GateMethodName)) continue;
 
                             try
                             {
                                 s_currentVanillaConstant = t.VanillaConstant;
+                                s_lastTimeoutSitesDisarmed = 0;
                                 harmony.Patch(
                                     original: m,
                                     transpiler: new HarmonyMethod(
                                         typeof(BulkTransferGatePatches),
-                                        nameof(BumpQueueGate)));
+                                        nameof(RaiseGateAndDisarmTimeout)));
                                 sitesPatched++;
-                                // Message-level so operators can verify exactly which methods we
-                                // touched without flipping log level. If a non-waitForQueue method
-                                // appears here it's a false positive and the kill switch
-                                // (ConfigEnableBulkTransferBoost = false) lets us bisect cleanly.
                                 LoggerOptions.LogMessage(
-                                    $"Bulk-transfer gate patched: {asm.GetName().Name} → {inspectedType.FullName}.{m.Name} "
-                                    + $"({t.VanillaConstant} → {s_budgetedGate} bytes).");
+                                    $"Bulk-transfer patched: {asm.GetName().Name} → {inspectedType.FullName}.{m.Name} "
+                                    + $"(gate {t.VanillaConstant} → {(willRaiseGate ? s_budgetedGate : t.VanillaConstant)} bytes, "
+                                    + $"30s self-disconnect disarmed at {s_lastTimeoutSitesDisarmed} site(s)).");
                             }
                             catch (Exception ex)
                             {
@@ -186,23 +193,42 @@ namespace FiresGhettoNetworkMod
                 totalTypesFound += typesFound;
                 totalSitesPatched += sitesPatched;
                 LoggerOptions.LogMessage(
-                    $"Bulk-transfer gate scan for {t.TypeName}: {typesFound} copies found, {sitesPatched} gate sites patched.");
+                    $"Bulk-transfer scan for {t.TypeName}: {typesFound} copies found, {sitesPatched} gate sites patched.");
             }
 
             LoggerOptions.LogMessage(
-                $"Bulk-transfer gate scan complete: {totalTypesFound} third-party copies found across loaded assemblies, "
-                + $"{totalSitesPatched} queue-gate sites patched (per-mod gate {s_budgetedGate} bytes).");
+                $"Bulk-transfer scan complete: {totalTypesFound} third-party copies found across loaded assemblies, "
+                + $"{totalSitesPatched} gate sites patched (per-mod gate {s_budgetedGate} bytes, 30s self-disconnect disarmed).");
+
+            ApplyJotunnTimeout();
+            LoggerOptions.LogMessage(s_jotunnTimeoutField != null
+                ? $"Jotunn CustomRPC self-disconnect disarmed (Timeout -> {DisconnectTimeoutSeconds}s)."
+                : "Jotunn CustomRPC not present — no Jotunn timeout to disarm.");
+        }
+
+        // Disarm Jotunn.Entities.CustomRPC's 30s self-disconnect by setting its static Timeout
+        // field to DisconnectTimeoutSeconds. Called at scan time and re-called by the overload
+        // test so the field tracks the current arm/disarm value (no IL transpile needed — Jotunn
+        // reads the field live in its waitForQueue).
+        public static void ApplyJotunnTimeout()
+        {
+            try
+            {
+                if (!s_jotunnResolved)
+                {
+                    s_jotunnResolved = true;
+                    Type t = AccessTools.TypeByName("Jotunn.Entities.CustomRPC");
+                    if (t != null) s_jotunnTimeoutField = AccessTools.Field(t, "Timeout");
+                }
+                s_jotunnTimeoutField?.SetValue(null, DisconnectTimeoutSeconds);
+            }
+            catch (Exception ex) { LoggerOptions.LogWarning($"Jotunn CustomRPC.Timeout disarm failed: {ex.Message}"); }
         }
 
         // Depth-first walk through nested types. The frameworks we target use
-        // `IEnumerable<bool> waitForQueue()` as a local function inside a
-        // coroutine method, which the C# compiler turns into:
-        //   <RootType>                            — the outer type
-        //     <>c__DisplayClassN_0                — closure capturing locals
-        //     <<Outer>g__waitForQueue|N_M>d__K    — iterator state machine
-        // The gate constant lives in the state machine's MoveNext, two levels
-        // deep. Iterating recursively makes the discovery robust against any
-        // compiler version's nesting choices.
+        // `IEnumerable<bool> waitForQueue()` as a local function inside a coroutine,
+        // which the compiler nests two levels deep in a state machine. Iterating
+        // recursively makes discovery robust against any compiler version's nesting.
         private static IEnumerable<Type> WalkAllNestedTypes(Type root)
         {
             yield return root;
@@ -214,46 +240,43 @@ namespace FiresGhettoNetworkMod
                     yield return sub;
         }
 
-        // IL pre-filter: returns true only if the method body contains BOTH
-        // (a) a load of the given int constant and (b) a call to a method
-        // named `callName`. Pairing both signals is highly specific to the
-        // queue-gate site and avoids transpiling unrelated nested methods.
-        private static bool MentionsBoth(MethodBase m, string callName, int needsConstant)
+        // IL pre-filter: true only if the method body calls BOTH the gate method
+        // (GetSendQueueSize) and ZNet.Disconnect — the signature of a waitForQueue
+        // wait-or-drop loop. This pinpoints the gate loop and excludes plain
+        // GetSendQueueSize forwarders (e.g. BufferingSocket) that sit on the hot path.
+        private static bool IsGateLoop(MethodBase m, string gateMethodName)
         {
             List<CodeInstruction> instructions;
             try { instructions = PatchProcessor.GetCurrentInstructions(m); }
             catch { return false; }
 
-            bool hasConst = false, hasCall = false;
+            bool hasGate = false, hasDisconnect = false;
             foreach (var ins in instructions)
             {
-                if (!hasConst
-                    && (ins.opcode == OpCodes.Ldc_I4 || ins.opcode == OpCodes.Ldc_I4_S)
-                    && ins.operand is int v && v == needsConstant)
-                    hasConst = true;
-
-                if (!hasCall
-                    && (ins.opcode == OpCodes.Call || ins.opcode == OpCodes.Callvirt)
-                    && ins.operand is MethodInfo mi && mi.Name == callName)
-                    hasCall = true;
-
-                if (hasConst && hasCall) return true;
+                if (!(ins.opcode == OpCodes.Call || ins.opcode == OpCodes.Callvirt)) continue;
+                if (!(ins.operand is MethodInfo mi)) continue;
+                if (mi.Name == gateMethodName) hasGate = true;
+                else if (mi.Name == "Disconnect") hasDisconnect = true;
+                if (hasGate && hasDisconnect) return true;
             }
             return false;
         }
 
-        // Transpiler — rewrite each occurrence of <s_currentVanillaConstant>
-        // that sits within ±8 instructions of a GetSendQueueSize call. The
-        // proximity check ensures we don't accidentally touch an unrelated
-        // constant elsewhere in the same method.
-        public static IEnumerable<CodeInstruction> BumpQueueGate(IEnumerable<CodeInstruction> instructions)
+        // Transpiler — two rewrites on a confirmed waitForQueue method:
+        //   1. Raise the <s_currentVanillaConstant> gate (only when the budget allows a
+        //      higher value; a no-op when floored) within ±8 instructions of a
+        //      GetSendQueueSize call, so an unrelated constant elsewhere is left alone.
+        //   2. ALWAYS disarm the 30-second self-disconnect by rewriting the `30` in
+        //      `timeout = Time.time + 30f` (float or double form) to DisconnectTimeoutSeconds.
+        //      The method is pre-filtered to a queue-gate loop, so a 30 in it is the timeout.
+        public static IEnumerable<CodeInstruction> RaiseGateAndDisarmTimeout(IEnumerable<CodeInstruction> instructions)
         {
             int vanilla = s_currentVanillaConstant;
             int target = s_budgetedGate;
+            int disarmed = 0;
             var code = new List<CodeInstruction>(instructions);
 
-            // Index every GetSendQueueSize call site up front for O(1) lookup
-            // per candidate constant.
+            // Index every GetSendQueueSize call site for O(1) proximity lookup.
             var callIdx = new List<int>();
             for (int i = 0; i < code.Count; i++)
             {
@@ -261,31 +284,50 @@ namespace FiresGhettoNetworkMod
                     && code[i].operand is MethodInfo mi && mi.Name == "GetSendQueueSize")
                     callIdx.Add(i);
             }
-            if (callIdx.Count == 0) return code;
+            if (callIdx.Count == 0)
+            {
+                s_lastTimeoutSitesDisarmed = 0;
+                return code;
+            }
 
             for (int i = 0; i < code.Count; i++)
             {
-                if (!(code[i].opcode == OpCodes.Ldc_I4 || code[i].opcode == OpCodes.Ldc_I4_S))
-                    continue;
-                if (!(code[i].operand is int v) || v != vanilla)
-                    continue;
-
-                bool near = false;
-                foreach (var ci in callIdx)
+                // 1. Gate raise — only when the budget actually clears the vanilla floor.
+                if (target > vanilla
+                    && (code[i].opcode == OpCodes.Ldc_I4 || code[i].opcode == OpCodes.Ldc_I4_S)
+                    && code[i].operand is int v && v == vanilla
+                    && NearAnyCall(callIdx, i))
                 {
-                    if (Math.Abs(ci - i) <= 8) { near = true; break; }
+                    code[i] = new CodeInstruction(OpCodes.Ldc_I4, target);
+                    continue;
                 }
-                if (!near) continue;
 
-                code[i] = new CodeInstruction(OpCodes.Ldc_I4, target);
+                // 2. Disarm the 30s timeout (float or double form).
+                if (code[i].opcode == OpCodes.Ldc_R4 && code[i].operand is float f && f == 30f)
+                {
+                    // Load the live timeout field instead of a baked constant, so the
+                    // fgn_overload 'arm' control can restore 30s at runtime to prove the path.
+                    code[i] = new CodeInstruction(OpCodes.Ldsfld, TimeoutField);
+                    disarmed++;
+                }
+                else if (code[i].opcode == OpCodes.Ldc_R8 && code[i].operand is double d && d == 30.0)
+                {
+                    code[i] = new CodeInstruction(OpCodes.Ldc_R8, 86400.0);
+                    disarmed++;
+                }
             }
 
+            s_lastTimeoutSitesDisarmed = disarmed;
             return code;
         }
 
-        // Match the value NetworkingRatesGroup's ZDOMan.SendZDOs transpiler
-        // uses. Keeping the two in lockstep means our cap and third-party
-        // gates stay aligned regardless of which queue-size tier is active.
+        private static bool NearAnyCall(List<int> callIdx, int i)
+        {
+            foreach (var ci in callIdx)
+                if (Math.Abs(ci - i) <= 8) return true;
+            return false;
+        }
+
         // Count ServerSync.ConfigSync copies across every loaded assembly. Each
         // ServerSync-bundling mod ILRepacks its own copy, so this is the number of
         // independent gates that could stack against the Steam send buffer.
@@ -300,10 +342,9 @@ namespace FiresGhettoNetworkMod
             return Math.Max(1, count);
         }
 
-        // Steam's per-connection send buffer: 512 KB by default, or the larger
-        // value FiresSteamworksPatcher unlocks (read through EffectiveConfig so the
-        // AutoTune tier is respected). This is the pool the stacked ServerSync gates
-        // must share.
+        // Steam's per-connection send buffer: 512 KB by default, or the larger value
+        // FiresSteamworksPatcher unlocks (read through EffectiveConfig so the AutoTune
+        // tier is respected). This is the pool the stacked ServerSync gates share.
         private static int GetEffectiveSendBufferCeilingBytes()
         {
             const int steamDefaultBuffer = 512 * 1024;
@@ -316,9 +357,8 @@ namespace FiresGhettoNetworkMod
             return steamDefaultBuffer;
         }
 
-        // Per-mod gate = min(Queue Size target, (buffer * budget% / copy-count)),
-        // floored at the vanilla 20 KB so we never throttle tighter than stock
-        // (which would re-introduce the stall the gate-raise exists to prevent).
+        // Per-mod gate = min(Queue Size target, (buffer * budget% / copy-count)), floored
+        // at the vanilla 20 KB so we never throttle tighter than stock.
         private static int GetBudgetedGate()
         {
             int target = GetTargetQueueSize();
@@ -336,7 +376,7 @@ namespace FiresGhettoNetworkMod
                 QueueSizeOptions._64KB => 64 * 1024,
                 QueueSizeOptions._48KB => 48 * 1024,
                 QueueSizeOptions._32KB => 32 * 1024,
-                _ => 20000 // _vanilla — return a value matching/under common third-party gates so the scan skips
+                _ => 20000 // _vanilla — match/under common third-party gates so the gate raise no-ops
             };
         }
     }

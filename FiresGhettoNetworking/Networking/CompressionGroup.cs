@@ -1,29 +1,29 @@
-﻿using BepInEx.Configuration;
+using BepInEx.Configuration;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
+using System.IO.Compression;
 using System.Linq;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
+    // Per-packet network compression using the runtime's built-in Deflate (System.IO.Compression).
+    // No external library, no dictionary, no extra DLLs to ship — Deflate is part of the Mono
+    // runtime Valheim already uses. Small packets that don't shrink are sent raw (see
+    // AddCompressionHeaderIfUseful), so compression only ever adds bytes when it genuinely helps;
+    // the real win is bulk transfers (joins / initial sync).
     [HarmonyPatch]
     public static class CompressionGroup
     {
-        private static string ZSTD_DICT_RESOURCE_NAME = "FiresGhettoNetworkMod.dict.small";
-        private static int ZSTD_LEVEL = 1;
-        private static object compressor;
-        private static object decompressor;
-        // Resolved once at InitCompressor instead of per-packet. Type.GetMethod walks
-        // the type's method table on every call; doing that for every Wrap/Unwrap on
-        // the send/recv hot path was pure overhead. Cache the MethodInfo and reuse.
-        private static MethodInfo _wrapMethod;
-        private static MethodInfo _unwrapMethod;
         public static ConfigEntry<bool> ConfigCompressionEnabled;
 
-        private static readonly byte[] CompressionMagic = { (byte)'F', (byte)'G', (byte)'Z', (byte)'7' };
+        // Self-describing frame: every compressed packet carries this magic prefix so the receiver
+        // decompresses on the marker alone — never a per-socket "started" flag. That is what makes
+        // the compression-start boundary safe under buffer pressure (see Steam_RecvCompressed).
+        // "FGD1" = Fires Ghetto Deflate v1.
+        private static readonly byte[] CompressionMagic = { (byte)'F', (byte)'G', (byte)'D', (byte)'1' };
 
         private const string RPC_COMPRESSION_VERSION = "FiresGhetto.CompressionVersion";
         private const string RPC_COMPRESSION_ENABLED = "FiresGhetto.CompressionEnabled";
@@ -34,56 +34,6 @@ namespace FiresGhettoNetworkMod
             ConfigCompressionEnabled = FiresGhettoNetworkMod.ConfigEnableCompression;
             ConfigCompressionEnabled.SettingChanged += (_, __) => SetCompressionEnabledFromConfig();
             CompressionStatus.ourStatus.compressionEnabled = ConfigCompressionEnabled?.Value ?? false;
-        }
-
-        public static void InitCompressor()
-        {
-            try
-            {
-                var compType = Type.GetType("ZstdSharp.Compressor, ZstdSharp");
-                var decompType = Type.GetType("ZstdSharp.Decompressor, ZstdSharp");
-                if (compType == null || decompType == null)
-                {
-                    LoggerOptions.LogWarning("ZstdSharp assembly not found - compression disabled.");
-                    return;
-                }
-
-                byte[] dict;
-                var assembly = Assembly.GetExecutingAssembly();
-                using (Stream stream = assembly.GetManifestResourceStream(ZSTD_DICT_RESOURCE_NAME))
-                {
-                    if (stream == null)
-                    {
-                        LoggerOptions.LogError("Compression dictionary resource not found. Compression disabled.");
-                        return;
-                    }
-                    dict = new byte[stream.Length];
-                    stream.Read(dict, 0, dict.Length);
-                }
-
-                compressor = Activator.CreateInstance(compType, ZSTD_LEVEL);
-                compType.GetMethod("LoadDictionary")?.Invoke(compressor, new object[] { dict });
-                decompressor = Activator.CreateInstance(decompType);
-                decompType.GetMethod("LoadDictionary")?.Invoke(decompressor, new object[] { dict });
-
-                // Cache the per-packet method handles now so Compress/Decompress never
-                // do a GetMethod lookup on the hot path again.
-                _wrapMethod   = compType.GetMethod("Wrap", new[] { typeof(byte[]) })   ?? compType.GetMethod("Wrap");
-                _unwrapMethod = decompType.GetMethod("Unwrap", new[] { typeof(byte[]) }) ?? decompType.GetMethod("Unwrap");
-                if (_wrapMethod == null || _unwrapMethod == null)
-                {
-                    LoggerOptions.LogWarning("ZstdSharp Wrap/Unwrap not found - compression disabled.");
-                    compressor = null;
-                    decompressor = null;
-                    return;
-                }
-
-                LoggerOptions.LogInfo("ZSTD compression dictionary loaded successfully.");
-            }
-            catch (Exception e)
-            {
-                LoggerOptions.LogError($"Failed to initialize compressor: {e}");
-            }
         }
 
         private static void SetCompressionEnabledFromConfig()
@@ -97,7 +47,9 @@ namespace FiresGhettoNetworkMod
         // ====================== COMPRESSION STATUS ======================
         internal static class CompressionStatus
         {
-            private const int COMPRESSION_VERSION = 7;
+            // Bumped from 7: the wire format is now Deflate (was ZSTD), so a v8 peer must never try to
+            // interop a compressed stream with an older build.
+            private const int COMPRESSION_VERSION = 8;
             public static readonly SocketStatus ourStatus = new SocketStatus { version = COMPRESSION_VERSION, compressionEnabled = false };
             private static readonly Dictionary<ISocket, SocketStatus> peerStatus = new Dictionary<ISocket, SocketStatus>();
 
@@ -143,7 +95,6 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         static void OnNewConnection(ZNetPeer peer)
         {
-            if (compressor == null) return;
             CompressionStatus.AddPeer(peer.m_socket);
             RegisterRPCs(peer);
             SendCompressionVersion(peer);
@@ -249,29 +200,39 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogMessage($"Receiving {(started ? "compressed" : "uncompressed")} data from {GetPeerName(peer)}");
         }
 
-        // ====================== ACTUAL COMPRESSION ======================
+        // ====================== ACTUAL COMPRESSION (built-in Deflate) ======================
         internal static byte[] Compress(byte[] data)
         {
-            if (compressor == null || _wrapMethod == null) return data;
+            if (data == null || data.Length == 0) return data;
             if (HasCompressionHeader(data)) return data;
-
-            var result = _wrapMethod.Invoke(compressor, new object[] { data });
-            if (result is byte[] arr) return AddCompressionHeaderIfUseful(data, arr);
-            var toArray = result?.GetType().GetMethod("ToArray", Type.EmptyTypes);
-            if (toArray != null) return AddCompressionHeaderIfUseful(data, (byte[])toArray.Invoke(result, null));
-            return data;
+            return AddCompressionHeaderIfUseful(data, Deflate(data));
         }
 
         internal static byte[] Decompress(byte[] data)
         {
             if (!HasCompressionHeader(data)) return data;
-            if (decompressor == null || _unwrapMethod == null) throw new Exception("Decompressor not initialized");
-            byte[] payload = StripCompressionHeader(data);
-            var result = _unwrapMethod.Invoke(decompressor, new object[] { payload });
-            if (result is byte[] arr) return arr;
-            var toArray = result?.GetType().GetMethod("ToArray", Type.EmptyTypes);
-            if (toArray != null) return (byte[])toArray.Invoke(result, null);
-            throw new Exception("Failed to decompress data");
+            return Inflate(StripCompressionHeader(data));
+        }
+
+        private static byte[] Deflate(byte[] data)
+        {
+            using (var output = new MemoryStream())
+            {
+                using (var stream = new DeflateStream(output, CompressionLevel.Fastest, leaveOpen: true))
+                    stream.Write(data, 0, data.Length);
+                return output.ToArray();
+            }
+        }
+
+        private static byte[] Inflate(byte[] data)
+        {
+            using (var input = new MemoryStream(data))
+            using (var stream = new DeflateStream(input, CompressionMode.Decompress))
+            using (var output = new MemoryStream())
+            {
+                stream.CopyTo(output);
+                return output.ToArray();
+            }
         }
 
         private static bool HasCompressionHeader(byte[] data)
@@ -304,12 +265,12 @@ namespace FiresGhettoNetworkMod
             return payload;
         }
 
-        // Steamworks compression hooks (exact BN)
+        // Steamworks compression hooks
         [HarmonyPatch(typeof(ZSteamSocket), "SendQueuedPackages")]
         [HarmonyPrefix]
         static bool Steam_SendCompressed(ref Queue<byte[]> ___m_sendQueue, ZSteamSocket __instance)
         {
-            if (compressor == null || !CompressionStatus.GetSendCompressionStarted(__instance))
+            if (!CompressionStatus.GetSendCompressionStarted(__instance))
                 return true;
 
             ___m_sendQueue = new Queue<byte[]>(___m_sendQueue.Select(p => Compress(p)));
@@ -323,16 +284,14 @@ namespace FiresGhettoNetworkMod
         // queued. The "compression started" control packet is then still in the queue when
         // sendingCompressed flips true, so it ships COMPRESSED. A receivingCompressed-gated reader
         // never sees that signal, so it keeps reading every subsequent compressed packet as raw
-        // bytes -> permanent desync -> disconnect (the "many players sending at once" corruption,
-        // hit by joiners during a busy event). Keying off the magic makes every packet
+        // bytes -> permanent desync -> disconnect. Keying off the magic makes every packet
         // self-describing: a compressed control packet decompresses fine and the start boundary
-        // can never corrupt the stream. Wire format is unchanged, so this interoperates with peers
-        // still on the old behaviour.
+        // can never corrupt the stream.
         [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Recv))]
         [HarmonyPostfix]
         static void Steam_RecvCompressed(ref ZPackage __result, ZSteamSocket __instance)
         {
-            if (__result == null || decompressor == null) return;
+            if (__result == null) return;
 
             byte[] bytes = __result.GetArray();
             if (!HasCompressionHeader(bytes)) return;   // no magic -> sent uncompressed, leave as-is
@@ -343,10 +302,10 @@ namespace FiresGhettoNetworkMod
             }
             catch
             {
-                // Magic present but the payload didn't decompress — a rare collision where real
-                // packet bytes began with the magic, or a one-off. Pass the ORIGINAL packet through
-                // unchanged rather than disabling decompression (which would silently desync this
-                // peer for the rest of the session). __result still holds the original packet.
+                // Magic present but the payload didn't inflate — a rare collision where real packet
+                // bytes began with the magic, or a one-off. Pass the ORIGINAL packet through unchanged
+                // rather than disabling decompression (which would silently desync this peer for the
+                // rest of the session). __result still holds the original packet.
                 LoggerOptions.LogWarning("Compression: framed packet failed to decompress — passing through unchanged.");
             }
         }
