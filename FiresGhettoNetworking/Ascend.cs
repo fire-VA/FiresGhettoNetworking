@@ -193,6 +193,14 @@ namespace FiresGhettoNetworkMod
             Harmony.PatchAll(typeof(BigZdoDiagnostic));
 #endif
 
+            // Admin console test for the ServerSync/ServerCharacters disconnect disarm:
+            // registers the 'fgn_overload' command + its routed RPCs. The queue force only
+            // acts while a test is running, so idle cost is one branch. See DisarmOverloadTest.
+            Harmony.PatchAll(typeof(DisarmOverloadTest));
+
+            // Admin console test for the ZSTD compression round-trip ('fgn_comptest'). Registers
+            // the command + RPCs; does nothing unless an admin runs it. See CompressionRoundTripTest.
+            Harmony.PatchAll(typeof(CompressionRoundTripTest));
 
             WackyDatabaseCompatibilityPatch.Init(Harmony);
 
@@ -240,8 +248,10 @@ namespace FiresGhettoNetworkMod
             // ====================================================================
             if (isDedicated && ConfigEnableServerAuthority.Value)
             {
-                // Ship fixes and server-side ship simulation
-                Harmony.PatchAll(typeof(ShipFixesGroup));
+                // Ship fixes — only patched when enabled, so a dedicated server
+                // running with ship fixes off pays zero per-tick ship overhead.
+                if (ConfigEnableShipFixes.Value)
+                    Harmony.PatchAll(typeof(ShipFixesGroup));
 
                 // ZDO memory management (useful on long-running dedicated servers)
                 Harmony.PatchAll(typeof(ZDOMemoryManager));
