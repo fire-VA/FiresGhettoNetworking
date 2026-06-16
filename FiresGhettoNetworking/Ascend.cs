@@ -108,6 +108,8 @@ namespace FiresGhettoNetworkMod
 
             LoggerOptions.Init(Logger);
 
+            AutoTune.TierPresets.ValidateVanillaFloors();
+
             ServerClientUtils.Detect(Logger);
 
             bool isDedicated = ServerClientUtils.IsDedicatedServerDetected;

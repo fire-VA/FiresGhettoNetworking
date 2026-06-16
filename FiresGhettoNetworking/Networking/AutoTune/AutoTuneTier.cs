@@ -9,6 +9,63 @@ namespace FiresGhettoNetworkMod.AutoTune
         High
     }
 
+    public static class VanillaFloor
+    {
+        public const int SendRateMinBytes    = 153600;
+        public const int SendRateMaxBytes    = 153600;
+        public const int SendBufferBytes     = 524288;
+        public const int RecvBufferBytes     = 524288;
+        public const UpdateRateOptions UpdateRate = UpdateRateOptions._100;
+
+        public static int ClampSendRateMin(int value, string source)
+            => ClampInt(value, SendRateMinBytes, source, nameof(SendRateMinBytes));
+
+        public static int ClampSendRateMax(int value, string source)
+            => ClampInt(value, SendRateMaxBytes, source, nameof(SendRateMaxBytes));
+
+        public static int ClampSendBuffer(int value, string source)
+            => ClampInt(value, SendBufferBytes, source, nameof(SendBufferBytes));
+
+        public static int ClampRecvBuffer(int value, string source)
+            => ClampInt(value, RecvBufferBytes, source, nameof(RecvBufferBytes));
+
+        public static UpdateRateOptions ClampUpdateRate(UpdateRateOptions value, string source)
+        {
+            if (UpdateRateHz(value) < UpdateRateHz(UpdateRate))
+            {
+                LoggerOptions.LogWarning(
+                    $"[VanillaFloor] {source} requested UpdateRate {value} ({UpdateRateHz(value)}Hz) " +
+                    $"below vanilla {UpdateRate} ({UpdateRateHz(UpdateRate)}Hz) — clamped up. " +
+                    "AutoTune must never tick below stock.");
+                return UpdateRate;
+            }
+            return value;
+        }
+
+        private static int ClampInt(int value, int floor, string source, string knob)
+        {
+            if (value < floor)
+            {
+                LoggerOptions.LogWarning(
+                    $"[VanillaFloor] {source} requested {knob}={value} below vanilla floor {floor} " +
+                    "— clamped up. AutoTune must never drop a connection below stock.");
+                return floor;
+            }
+            return value;
+        }
+
+        private static int UpdateRateHz(UpdateRateOptions opt)
+        {
+            switch (opt)
+            {
+                case UpdateRateOptions._50:  return 10;
+                case UpdateRateOptions._75:  return 15;
+                case UpdateRateOptions._150: return 30;
+                default:                     return 20;
+            }
+        }
+    }
+
     public struct TierPreset
     {
         // ---- Client-side knobs ----
@@ -51,6 +108,42 @@ namespace FiresGhettoNetworkMod.AutoTune
 
     public static class TierPresets
     {
+        public static void ValidateVanillaFloors()
+        {
+            int violations = 0;
+            foreach (Tier tier in new[] { Tier.Low, Tier.Medium, Tier.High })
+            {
+                TierPreset p = For(tier);
+                violations += CheckFloor($"{tier}.SendRateMin", p.SteamSendRateMinBytes, VanillaFloor.SendRateMinBytes);
+                violations += CheckFloor($"{tier}.SendRateMax", p.SteamSendRateMaxBytes, VanillaFloor.SendRateMaxBytes);
+                violations += CheckFloor($"{tier}.SendBuffer",  p.SteamSendBufferBytes,  VanillaFloor.SendBufferBytes);
+                violations += CheckFloor($"{tier}.RecvBuffer",  p.SteamRecvBufferBytes,  VanillaFloor.RecvBufferBytes);
+                violations += CheckUpdateRate($"{tier}.UpdateRate", p.UpdateRate);
+            }
+
+            if (violations > 0)
+                LoggerOptions.LogError(
+                    $"[VanillaFloor] STARTUP SELF-CHECK FAILED: {violations} tier preset value(s) sit below vanilla. " +
+                    "These are clamped at runtime so players are protected, but the presets above should be corrected. " +
+                    "AutoTune must never drop a connection below stock.");
+            else
+                LoggerOptions.LogMessage("[VanillaFloor] Startup self-check passed: no tier preset drops below vanilla.");
+        }
+
+        private static int CheckFloor(string name, int value, int floor)
+        {
+            if (value >= floor) return 0;
+            LoggerOptions.LogError($"[VanillaFloor] {name}={value} is BELOW vanilla floor {floor}.");
+            return 1;
+        }
+
+        private static int CheckUpdateRate(string name, UpdateRateOptions value)
+        {
+            if (value != UpdateRateOptions._50 && value != UpdateRateOptions._75) return 0;
+            LoggerOptions.LogError($"[VanillaFloor] {name}={value} ticks below vanilla {VanillaFloor.UpdateRate}.");
+            return 1;
+        }
+
         public static TierPreset For(Tier tier)
         {
             switch (tier)
@@ -126,11 +219,15 @@ namespace FiresGhettoNetworkMod.AutoTune
                 default:
                     return new TierPreset
                     {
-                        // Baseline Min for all tiers; bumped Max from 256→384 so even
-                        // weak boxes aren't artificially throttled below MED's floor.
+                        // Low tier means "don't apply the enhanced ceilings," never
+                        // "drop below stock." Max held at 1 MB so a burst (e.g. a
+                        // ServerCharacters compressed-inventory push) is never walled
+                        // below what vanilla would have negotiated; the 384 KB cap here
+                        // was starving time-boxed transfers and causing 30s-timeout
+                        // disconnects. Min stays at vanilla's floor.
                         SteamSendRateMinBytes = 150 * 1024,
-                        SteamSendRateMaxBytes = 384 * 1024,
-                        SteamSendBufferBytes     = 512 * 1024, // 512KB — still bigger than vanilla, gentle on weak boxes
+                        SteamSendRateMaxBytes = 1024 * 1024,
+                        SteamSendBufferBytes     = 1024 * 1024,
                         // Even at Low we hold the recv ceiling at 2 MB; less than that
                         // narrows from Steam's own 512 KB default and lets ClientLogRelay-
                         // sized chunks fail. The per-connection cost (2 MB × peer count)
@@ -151,7 +248,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         SafetyFallbackEnabled   = true,
                         SafetyFallbackThreshold = 8000,
 
-                        UpdateRate            = UpdateRateOptions._75,
+                        UpdateRate            = UpdateRateOptions._100,
                         QueueSize             = QueueSizeOptions._vanilla,
                         ZDOThrottleDistance   = 350f,
                         AILODNearDistance     = 80f,
@@ -218,18 +315,18 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static int SteamSendRateMin()
         {
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMinBytes;
+                return VanillaFloor.ClampSendRateMin(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMinBytes, "ServerTier");
             if (UseClientAutoTune())
-                return TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMinBytes;
+                return VanillaFloor.ClampSendRateMin(TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMinBytes, "ClientTier");
             return SendRateMinFromEnum(FiresGhettoNetworkMod.ConfigSendRateMin.Value);
         }
 
         public static int SteamSendRateMax()
         {
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMaxBytes;
+                return VanillaFloor.ClampSendRateMax(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMaxBytes, "ServerTier");
             if (UseClientAutoTune())
-                return TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMaxBytes;
+                return VanillaFloor.ClampSendRateMax(TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMaxBytes, "ClientTier");
             return SendRateMaxFromEnum(FiresGhettoNetworkMod.ConfigSendRateMax.Value);
         }
 
@@ -250,9 +347,9 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static int SteamRecvBufferBytes()
         {
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return TierPresets.For(AutoTuneState.ServerTier).SteamRecvBufferBytes;
+                return VanillaFloor.ClampRecvBuffer(TierPresets.For(AutoTuneState.ServerTier).SteamRecvBufferBytes, "ServerTier");
             if (UseClientAutoTune())
-                return TierPresets.For(AutoTuneState.ClientTier).SteamRecvBufferBytes;
+                return VanillaFloor.ClampRecvBuffer(TierPresets.For(AutoTuneState.ClientTier).SteamRecvBufferBytes, "ClientTier");
             // Fallback bumped to 2 MB (was 256 KB). Even without auto-tune, no
             // sensible Valheim deployment wants a recv buffer below Steam's own
             // 512 KB default — and 2 MB cleanly absorbs ClientLogRelay-sized chunks.
@@ -281,9 +378,9 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static int SteamSendBufferBytes()
         {
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return TierPresets.For(AutoTuneState.ServerTier).SteamSendBufferBytes;
+                return VanillaFloor.ClampSendBuffer(TierPresets.For(AutoTuneState.ServerTier).SteamSendBufferBytes, "ServerTier");
             if (UseClientAutoTune())
-                return TierPresets.For(AutoTuneState.ClientTier).SteamSendBufferBytes;
+                return VanillaFloor.ClampSendBuffer(TierPresets.For(AutoTuneState.ClientTier).SteamSendBufferBytes, "ClientTier");
             // Fallback: generous default that won't break anything
             return 1 * 1024 * 1024;
         }
@@ -369,7 +466,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static UpdateRateOptions UpdateRate()
         {
             if (UseServerAutoTune())
-                return TierPresets.For(AutoTuneState.ServerTier).UpdateRate;
+                return VanillaFloor.ClampUpdateRate(TierPresets.For(AutoTuneState.ServerTier).UpdateRate, "ServerTier");
             return FiresGhettoNetworkMod.ConfigUpdateRate.Value;
         }
 
