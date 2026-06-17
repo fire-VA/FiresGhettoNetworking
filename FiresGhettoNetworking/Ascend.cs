@@ -114,6 +114,11 @@ namespace FiresGhettoNetworkMod
 
             LoggerOptions.Init(Logger);
 
+            // Audit every AutoTune tier preset against the vanilla floor now that the logger exists
+            // (it runs AFTER Init for exactly that reason); LogError on any sub-vanilla value so a
+            // regression is caught at load, not as a field complaint.
+            TierPresets.ValidateVanillaFloors();
+
             ServerClientUtils.Detect(Logger);
 
             bool isDedicated = ServerClientUtils.IsDedicatedServerDetected;
@@ -134,6 +139,7 @@ namespace FiresGhettoNetworkMod
             SafeInvokeInit("FiresGhettoNetworkMod.CompressionGroup", "InitConfig", new object[] { Config });
             SafeInvokeInit("FiresGhettoNetworkMod.NetworkingRatesGroup", "Init", new object[] { Config });
             SafeInvokeInit("FiresGhettoNetworkMod.DedicatedServerGroup", "Init", new object[] { Config });
+            SendQueueHeadroomMonitor.InitConfig(Config);
 
             // Core networking patches that are safe and useful on both client and server
             Harmony.PatchAll(typeof(CompressionGroup));
@@ -201,6 +207,16 @@ namespace FiresGhettoNetworkMod
             // Admin console test for the ZSTD compression round-trip ('fgn_comptest'). Registers
             // the command + RPCs; does nothing unless an admin runs it. See CompressionRoundTripTest.
             Harmony.PatchAll(typeof(CompressionRoundTripTest));
+
+            // Heavy stress tests: fgn_flood (volume blast) + fgn_socketramp (escalate-to-failure,
+            // records the cliff to FiresGhetto_StressResults.txt). Idle until an admin runs them.
+            Harmony.PatchAll(typeof(SocketStressTests));
+
+            // Passive, opt-in send-queue headroom telemetry (fgn_headroom). Off by default = zero cost.
+            Harmony.PatchAll(typeof(SendQueueHeadroomMonitor));
+
+            // Instantiation / zone-load stress (fgn_zdoflood). Idle until an admin runs it.
+            Harmony.PatchAll(typeof(ZdoFloodTest));
 
             WackyDatabaseCompatibilityPatch.Init(Harmony);
 
@@ -1316,6 +1332,12 @@ namespace FiresGhettoNetworkMod
 
     public enum SendRateMaxOptions
     {
+        [Description("8192 KB/s | 64 Mbit/s")]
+        _8192KB,
+        [Description("4096 KB/s | 32 Mbit/s")]
+        _4096KB,
+        [Description("2048 KB/s | 16 Mbit/s")]
+        _2048KB,
         [Description("1024 KB/s | 8 Mbit/s")]
         _1024KB,
         [Description("768 KB/s | 6 Mbit/s")]

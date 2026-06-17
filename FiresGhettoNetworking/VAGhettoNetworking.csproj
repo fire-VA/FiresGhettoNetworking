@@ -222,6 +222,9 @@
     <Compile Include="Networking\CompressionRoundTripTest.cs" />
     <Compile Include="Networking\DedicatedServerGroup.cs" />
     <Compile Include="Networking\DisarmOverloadTest.cs" />
+    <Compile Include="Networking\SocketStressTests.cs" />
+    <Compile Include="Networking\SendQueueHeadroomMonitor.cs" />
+    <Compile Include="Networking\ZdoFloodTest.cs" />
     <Compile Include="Networking\LoggerOptions.cs" />
     <Compile Include="Networking\MonsterAiPatches.cs" />
     <Compile Include="Networking\NetworkRatesGroup.cs" />
