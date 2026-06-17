@@ -1,8 +1,9 @@
-* v1.3.7 disconnect + fall-through fixes
-  - fixed a compression bug that could corrupt packets when lots of players were sending at once — the cause of the "Disconnected" drops during busy events. the receiver now keys off each packet's own marker, so a compressed packet can't get misread as raw mid-stream and desync the connection
-  - proper fall-through fix, replaces the reverted 1.3.6 approach: a grave or item that spawns before the floor under it finishes loading is held in place until its support arrives (or a few seconds pass), then drops normally — lands on the floor instead of sinking through. pure local physics, no send-order changes
-  - the verbose per-spawn fall-through diagnostics are now behind a default-off "Enable Fall-Through Diagnostics" toggle, so normal play has no extra cost or log spam
-  - dedicated servers: the monitoring panel's per-peer Ping and Tx/Rx read correctly now (they were stuck at 0 / n/a — read through the wrong Steam interface on a dedicated host)
+* v1.3.7 disconnect + fall-through + steamworks-limit fixes
+  - Clients no longer choke on default Steam bandwidth limits during big transfers.
+  - The bandwidth lift now applies through other mods' socket wrappers instead of getting lost.
+  - Fixed a compression bug that caused "Disconnected" drops on busy servers.
+  - Items and graves stay put until the floor under them finishes loading instead of falling through.
+  - Fall-through diagnostic logging is now off by default behind a toggle.
 * v1.3.6 tombstone/tames fix 
   - graves and tames should stop dropping through structures on zone reload 
 * v1.3.5 auto-tune adjustment

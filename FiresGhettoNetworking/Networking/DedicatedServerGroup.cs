@@ -32,21 +32,84 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         static void ApplyForceCrossplay()
         {
+            // Message-level (NOT Info, which the dedi suppresses) so we can finally see whether this even
+            // runs, plus the backend before/after + the dedi-detection — to diagnose why "force steamworks"
+            // wasn't sticking (the live connection came up PlayFab despite the config).
+            LoggerOptions.LogMessage($"[Crossplay] ParseServerArguments postfix: dedi={isDedicatedDetected}, "
+                + $"config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}, backend-before={ZNet.m_onlineBackend}.");
             if (!isDedicatedDetected) return;
             switch (FiresGhettoNetworkMod.ConfigForceCrossplay.Value)
             {
                 case ForceCrossplayOptions.playfab:
                     ZNet.m_onlineBackend = OnlineBackendType.PlayFab;
-                    LoggerOptions.LogInfo("Forcing crossplay ENABLED (PlayFab backend).");
+                    LoggerOptions.LogMessage("[Crossplay] Forcing crossplay ENABLED (PlayFab backend).");
                     break;
                 case ForceCrossplayOptions.steamworks:
                     ZNet.m_onlineBackend = OnlineBackendType.Steamworks;
-                    LoggerOptions.LogInfo("Forcing crossplay DISABLED (Steamworks backend).");
+                    LoggerOptions.LogMessage("[Crossplay] Forcing crossplay DISABLED (Steamworks backend).");
                     break;
                 default:
-                    LoggerOptions.LogInfo("Crossplay mode: vanilla (respecting command line).");
+                    LoggerOptions.LogMessage("[Crossplay] mode: vanilla (respecting command line).");
                     break;
             }
+            LoggerOptions.LogMessage($"[Crossplay] backend-after={ZNet.m_onlineBackend}.");
+        }
+
+        // Diagnostic: log the FINAL backend when ZNet actually starts. If it differs from what
+        // ApplyForceCrossplay set, something reset it after ParseServerArguments (and we'll know to
+        // re-assert it on a later hook).
+        [HarmonyPatch(typeof(ZNet), "Start")]
+        [HarmonyPostfix]
+        static void LogBackendAtZNetStart()
+        {
+            LoggerOptions.LogMessage($"[Crossplay] ZNet.Start — online backend is now {ZNet.m_onlineBackend} (dedi={isDedicatedDetected}).");
+        }
+
+        // ====================== CLIENT-SIDE FORCE ======================
+        // ApplyForceCrossplay above only covers the dedi (ParseServerArguments). The CLIENT picks its
+        // backend when hosting (FejdStartup.GetOnlineBackend) and when joining (ZNet.SetServerHost), so
+        // honor "Force Crossplay" there too — otherwise a steamworks config still rides PlayFab client-side.
+        private static OnlineBackendType? ForcedBackend()
+        {
+            switch (FiresGhettoNetworkMod.ConfigForceCrossplay.Value)
+            {
+                case ForceCrossplayOptions.steamworks: return OnlineBackendType.Steamworks;
+                case ForceCrossplayOptions.playfab:    return OnlineBackendType.PlayFab;
+                default:                               return (OnlineBackendType?) null; // vanilla — leave Valheim's choice
+            }
+        }
+
+        // Hosting / start-game backend selection.
+        [HarmonyPatch(typeof(FejdStartup), "GetOnlineBackend")]
+        [HarmonyPostfix]
+        static void ForceClientBackendOnSelect(ref OnlineBackendType __result)
+        {
+            OnlineBackendType? forced = ForcedBackend();
+            if (!forced.HasValue || __result == forced.Value) return;
+            LoggerOptions.LogMessage($"[Crossplay] client GetOnlineBackend {__result} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
+            __result = forced.Value;
+        }
+
+        // Joining by IP / explicit backend — this overload carries a real address, so the backend can
+        // safely be forced.
+        [HarmonyPatch(typeof(ZNet), nameof(ZNet.SetServerHost), new System.Type[] { typeof(string), typeof(int), typeof(OnlineBackendType) })]
+        [HarmonyPostfix]
+        static void ForceClientBackendOnJoinByAddress()
+        {
+            OnlineBackendType? forced = ForcedBackend();
+            if (!forced.HasValue || ZNet.m_onlineBackend == forced.Value) return;
+            LoggerOptions.LogMessage($"[Crossplay] client SetServerHost(addr) {ZNet.m_onlineBackend} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
+            ZNet.m_onlineBackend = forced.Value;
+        }
+
+        // Joining by a PlayFab/crossplay player id — there's NO Steam address here, so it can't be
+        // forced to Steamworks. Make that loud instead of silently riding PlayFab against the config.
+        [HarmonyPatch(typeof(ZNet), nameof(ZNet.SetServerHost), new System.Type[] { typeof(string) })]
+        [HarmonyPostfix]
+        static void WarnCrossplayJoinUnderSteamworks()
+        {
+            if (FiresGhettoNetworkMod.ConfigForceCrossplay.Value == ForceCrossplayOptions.steamworks)
+                LoggerOptions.LogWarning("[Crossplay] Joining a crossplay/PlayFab server entry while Force Crossplay=steamworks — a PlayFab join has no Steam address to force, so this connection stays PlayFab. Join by IP (or a Steam server-list entry) for a Steam connection.");
         }
 
         // ====================== PLAYER LIMIT OVERRIDE ======================

@@ -46,6 +46,176 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogMessage($"Steam send rates applied: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
         }
 
+        // Temporarily lift global send-rate + send-buffer above the configured tier for fgn_socketramp.
+        // Global scope — affects every connection for the duration. Always pair with RestoreSendRates().
+        public static void OverrideForStressTest(int sendRateBytesPerSec, int sendBufferBytes)
+        {
+            SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", sendRateBytesPerSec);
+            SetSteamConfig("k_ESteamNetworkingConfig_SendBufferSize", sendBufferBytes);
+            LoggerOptions.LogMessage($"Stress test: send-rate Max -> {sendRateBytesPerSec / 1024} KB/s, "
+                + $"send buffer -> {sendBufferBytes / 1024} KB (TEMPORARY — restored when the test ends).");
+        }
+
+        public static void RestoreSendRates()
+        {
+            ApplySendRates();
+            ApplySendBufferSize();
+            LoggerOptions.LogMessage("Stress test: send rate + buffer restored to configured values.");
+        }
+
+        // ---- PER-CONNECTION (live) config ------------------------------------------------------------
+        // Steam reads the GLOBAL send-rate config only at connect time, so changing it mid-session does
+        // nothing to an already-open connection (confirmed: a 50 MB/s global override left the live pipe
+        // pinned at the connect-time 1 MB/s). These set the value at CONNECTION scope on a specific
+        // connection handle, which DOES take effect live — what fgn_socketramp needs to actually raise
+        // the test client's open pipe.
+
+        // Reflect ZSteamSocket.m_con (HSteamNetConnection) -> its uint handle. 0 = not a Steam socket
+        // (e.g. a PlayFab/crossplay connection, which has no Steam connection handle to target).
+        // ServerSync (bundled into ~every mod) wraps each peer's ISocket in a private "BufferingSocket"
+        // during the config-sync handshake and exposes the wrapped socket as its `Original` field. With
+        // many mods each bundling ServerSync the wrappers NEST (BufferingSocket -> BufferingSocket -> ...)
+        // and aren't always unwound, so peer.m_socket can stay wrapped for the whole session. Follow
+        // `Original` by name down to the real ZSteamSocket / ZPlayFabSocket.
+        // NOTE: BufferingSocket : ZPlayFabSocket, so NEVER test it with `is ZPlayFabSocket` — always by
+        // exact GetType().Name, or a wrapped Steam connection mis-reads as PlayFab.
+        private const int MaxSocketUnwrapDepth = 16;
+
+        public static ISocket UnwrapSocket(ISocket sock)
+        {
+            int guard = 0;
+            while (sock != null && guard++ < MaxSocketUnwrapDepth && sock.GetType().Name == "BufferingSocket")
+            {
+                var orig = sock.GetType().GetField("Original", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (orig == null) break;
+                var next = orig.GetValue(sock) as ISocket;
+                if (next == null || ReferenceEquals(next, sock)) break;
+                sock = next;
+            }
+            return sock;
+        }
+
+        // "Wrapper -> Inner" for logging, e.g. "BufferingSocket -> ZSteamSocket".
+        public static string UnwrappedSocketName(ZNetPeer peer)
+        {
+            var s = peer != null ? peer.m_socket : null;
+            if (s == null) return "null";
+            var inner = UnwrapSocket(s);
+            return ReferenceEquals(inner, s) ? s.GetType().Name : (s.GetType().Name + " -> " + inner.GetType().Name);
+        }
+
+        // True iff the peer's REAL (unwrapped) transport is a Steam socket.
+        public static bool IsSteamSocket(ZNetPeer peer)
+        {
+            var s = peer != null ? peer.m_socket : null;
+            return s != null && UnwrapSocket(s).GetType().Name == "ZSteamSocket";
+        }
+
+        public static uint GetConnectionHandle(ZNetPeer peer)
+        {
+            try
+            {
+                var s = peer != null ? peer.m_socket : null;
+                if (s == null) return 0u;
+                var sock = UnwrapSocket(s);
+                if (sock.GetType().Name != "ZSteamSocket") return 0u;
+                var conField = sock.GetType().GetField("m_con", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (conField == null) return 0u;
+                object con = conField.GetValue(sock);   // HSteamNetConnection (a struct wrapping one uint)
+                if (con == null) return 0u;
+                // Read the handle by FIELD TYPE, not name — the wrapped-uint field name can differ between builds.
+                foreach (var f in con.GetType().GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                    if (f.FieldType == typeof(uint)) return (uint)f.GetValue(con);
+                return 0u;
+            }
+            catch { return 0u; }
+        }
+
+        // Same reflective SetConfigValue as SetSteamConfig, but CONNECTION scope with the handle as the
+        // scope object. Returns whether Steam accepted it, so callers can log proof the set landed.
+        public static bool SetConnectionConfig(string enumMemberName, int value, uint connHandle)
+        {
+            IntPtr ptr = IntPtr.Zero;
+            try
+            {
+                var allTypes = AppDomain.CurrentDomain.GetAssemblies()
+                    .SelectMany(a => { try { return a.GetTypes(); } catch { return Array.Empty<Type>(); } });
+                var enumType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigValue");
+                var scopeType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigScope");
+                var dataType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigDataType");
+                if (enumType == null || scopeType == null || dataType == null) return false;
+
+                var enumVal = Enum.Parse(enumType, enumMemberName);
+                var scopeVal = Enum.Parse(scopeType, "k_ESteamNetworkingConfig_Connection");
+                var dataVal = Enum.Parse(dataType, "k_ESteamNetworkingConfig_Int32");
+
+                ptr = Marshal.AllocHGlobal(4);
+                Marshal.WriteInt32(ptr, value);
+
+                var utilsType = ZNet.instance && ZNet.instance.IsDedicated()
+                    ? allTypes.FirstOrDefault(t => t.FullName == "Steamworks.SteamGameServerNetworkingUtils")
+                    : allTypes.FirstOrDefault(t => t.FullName == "Steamworks.SteamNetworkingUtils");
+                if (utilsType == null) return false;
+
+                var setMethod = utilsType.GetMethod("SetConfigValue", BindingFlags.Public | BindingFlags.Static);
+                if (setMethod == null) return false;
+
+                object res = setMethod.Invoke(null, new object[] { enumVal, scopeVal, new IntPtr((long)connHandle), dataVal, ptr });
+                return !(res is bool b) || b;
+            }
+            catch (Exception e)
+            {
+                LoggerOptions.LogWarning($"SetConnectionConfig {enumMemberName} failed: {e.Message}");
+                return false;
+            }
+            finally
+            {
+                if (ptr != IntPtr.Zero) Marshal.FreeHGlobal(ptr);
+            }
+        }
+
+        public static void OverrideConnectionForStressTest(ZNetPeer peer, int rateMinBytes, int rateMaxBytes, int bufferBytes)
+        {
+            uint conn = GetConnectionHandle(peer);
+            if (conn == 0u)
+            {
+                string sockType = peer?.m_socket?.GetType().Name ?? "null";
+                LoggerOptions.LogWarning($"Stress test: no Steam connection handle to lift (socket={sockType}). "
+                    + (IsSteamSocket(peer) ? "It IS a Steam socket but the handle read returned 0 — reflection issue." : "Not a Steam socket (PlayFab/crossplay) — rate is PlayFab-governed."));
+                return;
+            }
+            bool rMax = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateMaxBytes, conn);
+            bool rMin = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateMinBytes, conn);
+            bool rBuf = SetConnectionConfig("k_ESteamNetworkingConfig_SendBufferSize", bufferBytes, conn);
+            LoggerOptions.LogMessage($"Stress test: live per-connection {conn} -> SendRateMax {rateMaxBytes / 1024} KB/s (ok={rMax}), "
+                + $"SendRateMin {rateMinBytes / 1024} KB/s (ok={rMin}), SendBuffer {bufferBytes / 1024 / 1024} MB (ok={rBuf}).");
+        }
+
+        // Lift the per-connection recv side. Needs FiresSteamworksPatcher (injects the missing enums)
+        // on the side calling this — otherwise the SetConnectionConfig calls silently no-op.
+        public static void OverrideConnectionRecvForStressTest(ZNetPeer peer, int recvBufferBytes, int recvMaxMessageBytes)
+        {
+            uint conn = GetConnectionHandle(peer);
+            if (conn == 0u) return;
+            bool rRb = SetConnectionConfig("k_ESteamNetworkingConfig_RecvBufferSize", recvBufferBytes, conn);
+            bool rRm = SetConnectionConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", recvMaxMessageBytes, conn);
+            LoggerOptions.LogMessage($"Stress test: LIVE per-connection {conn} -> RecvBufferSize {recvBufferBytes / 1024 / 1024} MB (set ok={rRb}), "
+                + $"RecvMaxMessageSize {recvMaxMessageBytes / 1024} KB (ok={rRm}). "
+                + (rRb && rRm ? "" : "Either failed = FiresSteamworksPatcher not installed on this side."));
+        }
+
+        public static void RestoreConnection(ZNetPeer peer)
+        {
+            uint conn = GetConnectionHandle(peer);
+            if (conn == 0u) return;
+            SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", EffectiveConfig.SteamSendRateMax(), conn);
+            SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", EffectiveConfig.SteamSendRateMin(), conn);
+            SetConnectionConfig("k_ESteamNetworkingConfig_SendBufferSize", EffectiveConfig.SteamSendBufferBytes(), conn);
+            SetConnectionConfig("k_ESteamNetworkingConfig_RecvBufferSize", EffectiveConfig.SteamRecvBufferBytes(), conn);
+            SetConnectionConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", EffectiveConfig.SteamRecvMaxMessageBytes(), conn);
+            LoggerOptions.LogMessage($"Stress test: per-connection {conn} rates restored to configured values.");
+        }
+
         // RecvBufferSize is only present in newer Steamworks SDKs. Valheim's bundled
         // com.rlabrecque.steamworks.net.dll predates it and only exposes SendBufferSize.
         // We probe the enum once and skip silently after — no warning spam.
