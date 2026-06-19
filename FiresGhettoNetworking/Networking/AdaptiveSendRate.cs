@@ -13,21 +13,20 @@ namespace FiresGhettoNetworkMod
     /// real per-connection signals: outbound send-queue depth + measured delivered throughput.
     ///
     /// Per peer, each tick:
-    ///   * delivering >= 80% of the current rate -> RAISE: fast (x2 slow-start) until the first congestion
-    ///     signal, then fine (x1.1 congestion-avoidance). NOT gated on queue depth — a saturating transfer
-    ///     keeps the queue full on purpose; delivered-vs-cap distinguishes "cap-limited" (raise) from
-    ///     "link-limited" (delivered drops below cap -> back off). Overshoot is safe: the transport gives a
-    ///     stalled peer ~30s before it drops, far longer than the few ticks the back-off needs to re-settle.
-    ///   * queue stuck >= high water for SustainTicks AND delivery not keeping up -> BACK OFF toward the real
-    ///     delivered rate (the link is the limit). A single spike never triggers.
-    ///   * otherwise hold.
+    ///   * delivering >= 65% of the cap -> RAISE: fast (x2 slow-start) until the first overshoot, then fine
+    ///     (x1.1 congestion-avoidance). Biased to push HIGH — over-pinning just runs the link at its real rate.
+    ///   * delivering < 40% of the cap for SustainTicks -> EASE DOWN to 1.1x the real delivered rate (never
+    ///     below it). The trigger is the DELIVERED rate, never the queue: a saturating transfer fills the queue
+    ///     on any link, so queue depth can't tell a healthy fast link from an overwhelmed slow one — only
+    ///     delivered can. Overshoot is safe (~30s transport grace; the ease-down is a few ticks).
+    ///   * otherwise hold (over-pinning is harmless — the link just runs at its real rate).
     ///
     /// The rate is PINNED (SendRateMin == SendRateMax) per connection so Steam has no window to drift inside;
-    /// this loop is the sole authority and each client converges to ITS OWN link capacity. The pin STARTS at
-    /// the Auto-Tune/manual send rate (the optimistic baseline) but its floor is the tier's SendRateMin, so a
-    /// peer whose real link is below the baseline can be eased DOWN to its true capacity rather than stranded
-    /// with a permanently full queue. Ceiling = the HYPERBOOST rate. SERVER-SIDE only; defers to HYPERBOOST
-    /// (already pinned to the API ceiling) and to the socket stress tests, and skips PlayFab/crossplay peers.
+    /// this loop is the sole authority. The pin STARTS at the Auto-Tune/manual send rate (the tier baseline)
+    /// and that baseline is ALSO the hard floor — the controller only ever ramps UP from it toward the ceiling
+    /// and NEVER eases below it, so a peer is never throttled under the configured baseline (idle or otherwise).
+    /// Ceiling = the HYPERBOOST rate. SERVER-SIDE only; defers to HYPERBOOST (already pinned to the API ceiling)
+    /// and to the socket stress tests, and skips PlayFab/crossplay peers.
     /// </summary>
     [HarmonyPatch]
     public static class AdaptiveSendRate
@@ -40,14 +39,15 @@ namespace FiresGhettoNetworkMod
         public static bool Suspend;
 
         private const float TickSeconds       = 1.5f;
-        private const float HighWaterFraction = 0.70f;   // queue >= 70% of the send buffer = pressure
-        private const int   SustainTicks      = 3;       // consecutive pressured ticks before backing off
-        private const float SlowStartFactor   = 2.00f;   // fast climb (double/tick) until the first congestion signal
-        private const float CongAvoidFactor   = 1.10f;   // fine steps after that, so the steady-state hunt stays small
-        private const float BackOffFactor     = 0.60f;   // max rate decrease per back-off
-        private const float BackOffHeadroom   = 1.10f;   // never settle below 1.1x what we're actually delivering
-        private const float UseFraction       = 0.80f;   // must deliver >= 80% of the current rate to count as "using" it
+        private const float HighWaterFraction = 0.70f;   // queue vs send-buffer ratio — logged only, NOT a trigger
+        private const int   SustainTicks      = 3;       // consecutive overshoot ticks before easing down (rules out post-raise lag)
+        private const float SlowStartFactor   = 2.00f;   // fast climb (double/tick) until the first real overshoot
+        private const float CongAvoidFactor   = 1.10f;   // fine steps after that, so the steady cap is stable
+        private const float RaiseFraction     = 0.65f;   // delivering >= 65% of the cap = link keeping up -> push higher
+        private const float BackoffFraction   = 0.40f;   // delivering < 40% of the cap (sustained) = genuine overshoot -> ease down
+        private const float BackOffHeadroom   = 1.10f;   // ease to 1.1x the REAL delivered rate — never below the baseline floor
         private const int   MinStepBytes      = 1024 * 1024;
+        private const int   IdleFloorBytes    = 2 * 1024 * 1024;   // delivered below this = idle/no real traffic -> hold (don't ease, keep slow-start armed)
 
         private sealed class PeerState
         {
@@ -120,7 +120,7 @@ namespace FiresGhettoNetworkMod
             s_state.Clear();
             var wait = new WaitForSeconds(TickSeconds);
             LoggerOptions.LogMessage($"[AdaptiveRate] controller ON (tick {TickSeconds:F1}s, high-water "
-                + $"{HighWaterFraction * 100f:F0}% over {SustainTicks} ticks, up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, down x{BackOffFactor:F2}).");
+                + $"raise>={RaiseFraction:F2} backoff<{BackoffFraction:F2} over {SustainTicks} ticks, up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, ease to 1.1x delivered).");
 
             while (ZNet.instance != null && ZNet.instance.IsServer() && ConfigEnabled != null && ConfigEnabled.Value)
             {
@@ -156,17 +156,16 @@ namespace FiresGhettoNetworkMod
 
             int buffer = EffectiveConfig.SteamSendBufferBytes();
             int highWater = (int)(buffer * HighWaterFraction);
-            int baseline = EffectiveConfig.SteamSendRateMax();   // optimistic high start (the configured baseline)
-            int minRate = EffectiveConfig.SteamSendRateMin();    // link-safe down-room floor (tier Min)
+            int baseline = EffectiveConfig.SteamSendRateMax();   // the tier baseline = both the START and the hard FLOOR
+            int minRate = baseline;                              // NEVER ease below the baseline — only ramp UP from it toward the ceiling
             int ceiling = EffectiveConfig.HyperBoostSendRateMaxBytes;
-            if (minRate > baseline) minRate = baseline;          // never invert if a manual config sets Min > Max
 
             if (!s_loggedConfig && ConfigLog != null && ConfigLog.Value)
             {
                 s_loggedConfig = true;
                 LoggerOptions.LogMessage($"[AdaptiveRate] effective: start={baseline / 1048576}MB floor={minRate / 1048576}MB "
                     + $"ceiling={ceiling / 1048576L}MB sendBuf={buffer / 1048576}MB highWater={highWater / 1048576}MB "
-                    + $"(slowStart=x{SlowStartFactor:F1} congAvoid=x{CongAvoidFactor:F2} use={UseFraction:F2})");
+                    + $"(slowStart=x{SlowStartFactor:F1} congAvoid=x{CongAvoidFactor:F2} raise={RaiseFraction:F2} backoff={BackoffFraction:F2})");
             }
 
             s_seen.Clear();
@@ -198,10 +197,14 @@ namespace FiresGhettoNetworkMod
                 string branch;
                 bool? pinned = null;
 
-                // delivered-vs-cap is the limiter (NOT queue depth — a saturating transfer keeps the queue full
-                // on purpose). Near the cap => cap-limited => raise. Below the cap with a full queue =>
-                // link-limited => back off. Over-pin is bounded to ~1.25x link and self-corrects.
-                if (delivered >= st.Target * UseFraction)
+                // The limiter is delivered-vs-cap, NOT the queue. The queue is a useless signal here: a
+                // saturating transfer fills it to its own high-water mark regardless of how fast the link is,
+                // so "queue full" fires on a healthy 90 MB/s link exactly as on a slow one — only the DELIVERED
+                // rate tells them apart. So: keep pushing while delivered keeps up with the cap; ease down ONLY
+                // when delivered sits far below the cap for several ticks (a real overshoot, not post-raise
+                // measurement lag). Erring high is cheap (the link just runs at its real rate, queue bounded,
+                // ~30s grace); easing down below the real rate would actually throttle it.
+                if (delivered >= st.Target * RaiseFraction)
                 {
                     st.PressureTicks = 0;
                     if (st.Target < ceiling)
@@ -215,16 +218,14 @@ namespace FiresGhettoNetworkMod
                     }
                     else branch = "RAISE-ceiling";
                 }
-                else if (queue >= highWater)
+                else if (delivered >= IdleFloorBytes && delivered < st.Target * BackoffFraction)
                 {
                     branch = $"PRESSURE {st.PressureTicks + 1}/{SustainTicks}";
                     if (++st.PressureTicks >= SustainTicks)
                     {
                         st.PressureTicks = 0;
                         st.SlowStart = false;   // found the ceiling — fine congestion-avoidance from here on
-                        int settleAboveLink = Mathf.Max(minRate, (int)(delivered * BackOffHeadroom));
-                        int gradualStep = Mathf.Max(minRate, (int)(st.Target * BackOffFactor));
-                        int next = Mathf.Max(settleAboveLink, gradualStep);
+                        int next = Mathf.Max(minRate, (int)(delivered * BackOffHeadroom));   // 1.1x the real rate, never below it
                         if (next < st.Target)
                         {
                             st.Target = next;
@@ -237,7 +238,7 @@ namespace FiresGhettoNetworkMod
                 else
                 {
                     st.PressureTicks = 0;
-                    branch = "HOLD";
+                    branch = "HOLD";   // delivered between the two thresholds — sit tight, no harm in over-pinning
                 }
 
                 if (ConfigLog != null && ConfigLog.Value)
