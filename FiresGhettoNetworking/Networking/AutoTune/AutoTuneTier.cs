@@ -130,7 +130,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         // Steam still ramps adaptively, this just removes the artificial ceiling.
                         SteamSendRateMinBytes = 1024 * 1024,
                         SteamSendRateMaxBytes = 32768 * 1024,    // 32 MB/s burst ceiling (was 8). Benchmark: link sustains ~92 MB/s; beats the 14-40 MB/s rivals on AutoTune alone. HyperBoost stays the unlocked max.
-                        SteamSendBufferBytes     = 16 * 1024 * 1024,
+                        SteamSendBufferBytes     = 32 * 1024 * 1024,  // 32MB: headroom for the adaptive controller ramping a peer toward ~90 MB/s without k_EResultLimitExceeded
                         // Recv buffer must exceed Steam's 512 KB default AND any large reliable chunk
                         // a peer might send (ClientLogRelay pushes ~400 KB; config syncs burst higher).
                         // Per-message cap is a wire-format ceiling, stays flat across tiers.
