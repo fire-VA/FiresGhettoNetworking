@@ -217,12 +217,25 @@ namespace FiresGhettoNetworkMod
                 if (!s_jotunnResolved)
                 {
                     s_jotunnResolved = true;
-                    Type t = AccessTools.TypeByName("Jotunn.Entities.CustomRPC");
-                    if (t != null) s_jotunnTimeoutField = AccessTools.Field(t, "Timeout");
+                    // Only probe for Jotunn's type when Jotunn is actually loaded — AccessTools.TypeByName
+                    // logs a HarmonyX warning on every miss, so a server with no Jotunn mods would log
+                    // "Could not find type named Jotunn.Entities.CustomRPC" at boot for nothing.
+                    if (IsAssemblyLoaded("Jotunn"))
+                    {
+                        Type t = AccessTools.TypeByName("Jotunn.Entities.CustomRPC");
+                        if (t != null) s_jotunnTimeoutField = AccessTools.Field(t, "Timeout");
+                    }
                 }
                 s_jotunnTimeoutField?.SetValue(null, DisconnectTimeoutSeconds);
             }
             catch (Exception ex) { LoggerOptions.LogWarning($"Jotunn CustomRPC.Timeout disarm failed: {ex.Message}"); }
+        }
+
+        private static bool IsAssemblyLoaded(string assemblyName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                if (string.Equals(asm.GetName().Name, assemblyName, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
 
         // Depth-first walk through nested types. The frameworks we target use

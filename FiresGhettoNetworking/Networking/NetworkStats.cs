@@ -71,6 +71,25 @@ namespace FiresGhettoNetworkMod
         public static int ZdosSentPerSec() => Current().ZdosSentSec;
         public static int ZdosRecvPerSec() => Current().ZdosRecvSec;
 
+        /// <summary>
+        /// Per-peer outbound throughput (bytes/sec) for one socket, server-side. Uses the game-server
+        /// real-time status on a dedicated server (where vanilla GetConnectionQuality reads 0) and falls
+        /// back to vanilla for listen-host / non-Steam peers. Returns 0 when unavailable.
+        /// </summary>
+        public static float PeerSendBytesPerSec(ISocket socket)
+        {
+            if (socket == null) return 0f;
+            try
+            {
+                int ping; float outBps; float inBps;
+                if (TryGameServerPeerStatus(socket, out ping, out outBps, out inBps)) return outBps;
+                float lq, rq;
+                socket.GetConnectionQuality(out lq, out rq, out ping, out outBps, out inBps);
+                return outBps;
+            }
+            catch { return 0f; }
+        }
+
         private static Snapshot Current()
         {
             float now = Time.realtimeSinceStartup;
@@ -192,7 +211,11 @@ namespace FiresGhettoNetworkMod
             outBytesSec = 0f;
             inBytesSec = 0f;
 
-            if (!(socket is ZSteamSocket steamSocket))
+            // Unwrap ServerSync's BufferingSocket wrapper(s) first — on a modded server peer.m_socket stays
+            // wrapped for the whole session, and a raw `is ZSteamSocket` test fails on the wrapper, which
+            // skips this game-server path and zeroes the throughput read (vanilla GetConnectionQuality then
+            // reads 0 on a dedi). Matches what GetConnectionHandle/IsSteamSocket already do.
+            if (!(NetworkingRatesGroup.UnwrapSocket(socket) is ZSteamSocket steamSocket))
             {
                 return false;
             }

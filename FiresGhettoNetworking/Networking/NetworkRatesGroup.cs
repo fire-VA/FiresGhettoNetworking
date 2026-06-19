@@ -21,6 +21,15 @@ namespace FiresGhettoNetworkMod
             FiresGhettoNetworkMod.ConfigSendRateMax.SettingChanged += (_, __) => ApplySendRates();
             FiresGhettoNetworkMod.ConfigQueueSize.SettingChanged += (_, __) => LoggerOptions.LogInfo("Queue size changed - restart recommended.");
 
+            if (FiresGhettoNetworkMod.ConfigHyperBoost != null)
+                FiresGhettoNetworkMod.ConfigHyperBoost.SettingChanged += (_, __) =>
+                {
+                    LoggerOptions.LogMessage(EffectiveConfig.HyperBoost()
+                        ? "HYPERBOOST ENABLED — lifting send/recv rates + buffers to max and pushing live to open connections."
+                        : "HYPERBOOST disabled — reverting to Auto-Tune / configured rates.");
+                    ApplyEffectiveRatesLiveToAllPeers();
+                };
+
             ApplyUpdateRate();
             ApplySendRates(); // Apply immediately on load
         }
@@ -50,6 +59,7 @@ namespace FiresGhettoNetworkMod
         // Global scope — affects every connection for the duration. Always pair with RestoreSendRates().
         public static void OverrideForStressTest(int sendRateBytesPerSec, int sendBufferBytes)
         {
+            AdaptiveSendRate.Suspend = true;
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", sendRateBytesPerSec);
             SetSteamConfig("k_ESteamNetworkingConfig_SendBufferSize", sendBufferBytes);
             LoggerOptions.LogMessage($"Stress test: send-rate Max -> {sendRateBytesPerSec / 1024} KB/s, "
@@ -58,6 +68,7 @@ namespace FiresGhettoNetworkMod
 
         public static void RestoreSendRates()
         {
+            AdaptiveSendRate.Suspend = false;
             ApplySendRates();
             ApplySendBufferSize();
             LoggerOptions.LogMessage("Stress test: send rate + buffer restored to configured values.");
@@ -176,6 +187,7 @@ namespace FiresGhettoNetworkMod
 
         public static void OverrideConnectionForStressTest(ZNetPeer peer, int rateMinBytes, int rateMaxBytes, int bufferBytes)
         {
+            AdaptiveSendRate.Suspend = true;
             uint conn = GetConnectionHandle(peer);
             if (conn == 0u)
             {
@@ -204,7 +216,10 @@ namespace FiresGhettoNetworkMod
                 + (rRb && rRm ? "" : "Either failed = FiresSteamworksPatcher not installed on this side."));
         }
 
-        public static void RestoreConnection(ZNetPeer peer)
+        // Push the CURRENT effective rates (tier/manual, or HYPERBOOST when on) onto one live connection.
+        // Steam reads the GLOBAL config only at connect time, so a mid-session change must be set at
+        // connection scope to land on an already-open pipe — this is the method that makes that happen.
+        public static void ApplyEffectiveToConnection(ZNetPeer peer)
         {
             uint conn = GetConnectionHandle(peer);
             if (conn == 0u) return;
@@ -213,7 +228,59 @@ namespace FiresGhettoNetworkMod
             SetConnectionConfig("k_ESteamNetworkingConfig_SendBufferSize", EffectiveConfig.SteamSendBufferBytes(), conn);
             SetConnectionConfig("k_ESteamNetworkingConfig_RecvBufferSize", EffectiveConfig.SteamRecvBufferBytes(), conn);
             SetConnectionConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", EffectiveConfig.SteamRecvMaxMessageBytes(), conn);
-            LoggerOptions.LogMessage($"Stress test: per-connection {conn} rates restored to configured values.");
+        }
+
+        // Pin a connection's send rate: SendRateMin == SendRateMax == rateBytes, so Steam has no adaptive
+        // window to drift inside (its sticky-down adapter is what otherwise leaves peers parked near Min).
+        // Order the two writes so Min never momentarily exceeds Max: raising -> Max first; lowering -> Min first.
+        public static void SetConnectionRatePinned(uint conn, int rateBytes, bool raising)
+        {
+            if (conn == 0u) return;
+            if (raising)
+            {
+                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
+                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
+            }
+            else
+            {
+                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
+                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
+            }
+        }
+
+        public static void RestoreConnection(ZNetPeer peer)
+        {
+            AdaptiveSendRate.Suspend = false;
+            ApplyEffectiveToConnection(peer);
+            LoggerOptions.LogMessage("Stress test: per-connection rates restored to configured values.");
+        }
+
+        // Re-assert the effective rates everywhere at once: GLOBAL (so connections opened afterwards inherit
+        // them) PLUS a live per-connection push to every open peer (so the change lands on the current pipe
+        // with no reconnect). This is how the HYPERBOOST toggle takes hold "right then and there".
+        public static void ApplyEffectiveRatesLiveToAllPeers()
+        {
+            if (ZNet.instance == null) return;
+            ApplySendRates();
+            ApplySendBufferSize();
+            ApplyRecvBufferSize();
+            ApplyRecvMaxMessageSize();
+
+            int n = 0;
+            try
+            {
+                var peers = ZNet.instance.GetPeers();
+                if (peers != null)
+                    foreach (var p in peers)
+                        if (p != null) { ApplyEffectiveToConnection(p); n++; }
+            }
+            catch (Exception e) { LoggerOptions.LogWarning($"Live per-connection rate apply failed: {e.Message}"); }
+
+            LoggerOptions.LogMessage($"Live rates applied to {n} open connection(s): "
+                + $"SendRateMax {EffectiveConfig.SteamSendRateMax() / 1024 / 1024} MB/s, "
+                + $"SendBuffer {EffectiveConfig.SteamSendBufferBytes() / 1024 / 1024} MB, "
+                + $"RecvBuffer {EffectiveConfig.SteamRecvBufferBytes() / 1024 / 1024} MB"
+                + (EffectiveConfig.HyperBoost() ? "   [HYPERBOOST ON]" : ""));
         }
 
         // RecvBufferSize is only present in newer Steamworks SDKs. Valheim's bundled
