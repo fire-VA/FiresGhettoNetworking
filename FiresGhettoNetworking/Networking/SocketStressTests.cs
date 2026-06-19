@@ -39,25 +39,32 @@ namespace FiresGhettoNetworkMod
         // Steam's per-message ceiling is 512 KB; 400 KB matches SafeRoutedRpc's chunk size + envelope headroom.
         private const int ChunkKB = 400;
         private const int ChunkBytes = ChunkKB * BytesPerKB;
-        private const int ChunksPerFrame = 4;
+        // Drain-driven send: each frame, top the peer's send queue up to QueueHighWaterBytes (feed as fast as
+        // the socket drains) instead of a fixed chunks-per-frame pace, capped at MaxBurstChunksPerFrame/frame
+        // so the initial fill can't monopolise one frame. This removes the self-imposed throttle that pinned
+        // the old loop to ~1.6 MB/frame regardless of the unlocked send rate.
+        private const int QueueHighWaterBytes = 128 * BytesPerMB;
+        private const int MaxBurstChunksPerFrame = 32;
 
         private const long HardMaxBytes = 4L * BytesPerTB;
         private const int MaxCount = 10000;
         private const float AckTimeoutSecs = 12f;
         private const float AckTimeoutCapSecs = 4 * 60 * 60;            // 4 hours
+        private const float SendStallSecs = 60f;                       // bail a level if the socket stops draining entirely
         private const float RatePriorDataFallbackBytesPerSec = 512 * BytesPerKB;
         private const int RawBlockSeed = 0x5713;
 
-        // The ramp temporarily lifts these to find the real socket cliff instead of bouncing off the
-        // configured tier. The cliff scales as ~24x the send buffer.
-        private const int RampRateOverrideBytes    = 2000 * BytesPerMB;
-        private const int RampRateMinOverrideBytes =  640 * BytesPerMB;
-        private const int RampBufferOverrideBytes  = 1280 * BytesPerMB;
+        // The ramp lifts a connection to the SAME ceiling the HYPERBOOST config applies (single source of
+        // truth in EffectiveConfig), so the ramp measures exactly what HyperBoost unlocks whether or not
+        // HyperBoost is toggled on. Restored to the configured tier when the test ends.
+        private const int RampRateOverrideBytes    = AutoTune.EffectiveConfig.HyperBoostSendRateMaxBytes;
+        private const int RampRateMinOverrideBytes = AutoTune.EffectiveConfig.HyperBoostSendRateMinBytes;
+        private const int RampBufferOverrideBytes  = AutoTune.EffectiveConfig.HyperBoostSendBufferBytes;
 
         // Receiver-side lifts requested via RPC from the server. Steam's per-connection config is one-sided —
         // the client must apply its own recv lift. Both enums need FiresSteamworksPatcher on the receiving side.
-        private const int RampRecvBufferOverrideBytes     = 512 * BytesPerMB;
-        private const int RampRecvMaxMessageOverrideBytes =  16 * BytesPerMB;
+        private const int RampRecvBufferOverrideBytes     = AutoTune.EffectiveConfig.HyperBoostRecvBufferBytes;
+        private const int RampRecvMaxMessageOverrideBytes = AutoTune.EffectiveConfig.HyperBoostRecvMaxMessageBytes;
         private const float ClientRecvPrepSettleSeconds   = 0.5f;
         private const float LevelGapSeconds = 1f;
 
@@ -89,6 +96,13 @@ namespace FiresGhettoNetworkMod
         private static float s_resSecs;
         private static float s_resTimeoutSecs;          // ack timeout actually used for the last level
         private static float s_lastRateBytesPerSec;     // observed end-to-end rate from the last OK level
+
+        // Instrumentation for the last SendLevel — answers "what's the limiter?": offered (into the socket)
+        // vs delivered (acked) rate, plus how hard we leaned on the socket queue and CPU per chunk.
+        private static float s_resSendWallSecs;          // wall time to offer every byte into the socket
+        private static long  s_resPeakQueueBytes;        // deepest send-queue level observed (socket saturation)
+        private static float s_resGenCpuMs;              // cumulative payload-gen + enqueue CPU
+        private static int   s_resBackpressureFrames;    // frames we hit the queue high-water and waited to drain
 
         // Client: tally for the level currently being received.
         private static long s_rxNonce = -1;
@@ -174,7 +188,7 @@ namespace FiresGhettoNetworkMod
             {
                 float mbps = (s_resAckBytes / 1024f / 1024f) / Math.Max(0.001f, s_resSecs);
                 verdict = $"[Flood] PASS — {s_resAckBytes}/{s_resSent} bytes received, corrupt={s_resCorrupt}, "
-                    + $"{mbps:F1} MB/s over {s_resSecs:F1}s. No loss.";
+                    + $"delivered {mbps:F1} MB/s over {s_resSecs:F1}s. No loss. {DiagLine()}";
             }
             else if (s_resStatus == LevelStatus.Disconnected)
                 verdict = $"[Flood] FAIL — you DISCONNECTED after ~{s_resSent} bytes. That burst exceeded what the socket could take.";
@@ -216,100 +230,139 @@ namespace FiresGhettoNetworkMod
         private static IEnumerator RampRun(long target, int startGB, int stepGB, int maxGB)
         {
             s_busy = true;
-            StressResults.Write($"===== socketramp START -> peer {target} (start={startGB}GB step={stepGB}GB max={maxGB}GB) =====");
-            // PlayFab/crossplay runs its own windowed protocol — no Steam knob applies, so report honestly.
-            ZNetPeer peer = ZNet.instance.GetPeer(target);
-            bool isSteam = NetworkingRatesGroup.IsSteamSocket(peer);
-            StressResults.Write($"peer socket = {NetworkingRatesGroup.UnwrappedSocketName(peer)}");
-            if (isSteam)
+            bool isSteam = false;
+            // try/finally so the rate override is ALWAYS restored and AdaptiveSendRate.Suspend is ALWAYS
+            // cleared even if a level throws — otherwise a mid-ramp exception strands the adaptive controller
+            // suspended for the rest of the server's life. (yield + try/finally is legal; yield + catch is not.)
+            try
             {
-                NetworkingRatesGroup.OverrideForStressTest(RampRateOverrideBytes, RampBufferOverrideBytes);
-                NetworkingRatesGroup.OverrideConnectionForStressTest(peer, RampRateMinOverrideBytes, RampRateOverrideBytes, RampBufferOverrideBytes);
-                ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcClientPrep, RampRecvBufferOverrideBytes, RampRecvMaxMessageOverrideBytes);
-                StressResults.Write($"Steam connection — send rate lifted to {RampRateOverrideBytes / BytesPerMB}MB/s "
-                    + $"(min {RampRateMinOverrideBytes / BytesPerMB}MB/s) + send buffer {RampBufferOverrideBytes / BytesPerMB}MB. "
-                    + $"Asked client to lift recv buffer to {RampRecvBufferOverrideBytes / BytesPerMB}MB + recv max-message {RampRecvMaxMessageOverrideBytes / BytesPerMB}MB.");
-                Msg(target, $"[Ramp] starting {startGB}GB +{stepGB}GB -> {maxGB}GB on a STEAM connection "
-                    + $"(rate {RampRateOverrideBytes / BytesPerMB}MB/s, send buffer {RampBufferOverrideBytes / BytesPerMB}MB, client recv {RampRecvBufferOverrideBytes / BytesPerMB}MB). Recording to {StressResults.FileName}.");
-                yield return new WaitForSeconds(ClientRecvPrepSettleSeconds);
-            }
-            else
-            {
-                StressResults.Write("PlayFab/crossplay connection — rate is PlayFab-governed (windowed protocol), NOT liftable via config; measuring the crossplay cliff at native rate");
-                Msg(target, $"[Ramp] starting {startGB}GB +{stepGB}GB -> {maxGB}GB on a PLAYFAB/CROSSPLAY connection. Its ~1 MB/s rate is governed by PlayFab's own protocol — NOT liftable via config — so this measures the crossplay cliff at native rate. Recording to {StressResults.FileName}.");
-            }
-
-            int lastGoodGB = 0;
-            int round = 0;
-            for (int levelGB = startGB; levelGB <= maxGB; levelGB += stepGB)
-            {
-                round++;
-                StressResults.Write($"ATTEMPTING level {levelGB}GB (round {round})");
-                yield return FiresGhettoNetworkMod.Instance.StartCoroutine(SendLevel(target, ++s_nonce, (long)levelGB * BytesPerGB, ChunkBytes, true));
-
-                if (s_resStatus == LevelStatus.Ok)
+                StressResults.Write($"===== socketramp START -> peer {target} (start={startGB}GB step={stepGB}GB max={maxGB}GB) =====");
+                // PlayFab/crossplay runs its own windowed protocol — no Steam knob applies, so report honestly.
+                ZNetPeer peer = ZNet.instance.GetPeer(target);
+                isSteam = NetworkingRatesGroup.IsSteamSocket(peer);
+                StressResults.Write($"peer socket = {NetworkingRatesGroup.UnwrappedSocketName(peer)}");
+                if (isSteam)
                 {
-                    float mbps = (s_resAckBytes / (float)BytesPerMB) / Math.Max(0.001f, s_resSecs);
-                    StressResults.Write($"level {levelGB}GB OK ({s_resAckBytes} bytes, {mbps:F1} MB/s)");
-                    Msg(target, $"[Ramp] {levelGB}GB OK ({mbps:F1} MB/s) — escalating...");
-                    lastGoodGB = levelGB;
-                    yield return new WaitForSeconds(LevelGapSeconds);
-                    continue;
+                    NetworkingRatesGroup.OverrideForStressTest(RampRateOverrideBytes, RampBufferOverrideBytes);
+                    NetworkingRatesGroup.OverrideConnectionForStressTest(peer, RampRateMinOverrideBytes, RampRateOverrideBytes, RampBufferOverrideBytes);
+                    try { ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcClientPrep, RampRecvBufferOverrideBytes, RampRecvMaxMessageOverrideBytes); } catch { }
+                    StressResults.Write($"Steam connection — send rate lifted to {RampRateOverrideBytes / BytesPerMB}MB/s "
+                        + $"(min {RampRateMinOverrideBytes / BytesPerMB}MB/s) + send buffer {RampBufferOverrideBytes / BytesPerMB}MB. "
+                        + $"Asked client to lift recv buffer to {RampRecvBufferOverrideBytes / BytesPerMB}MB + recv max-message {RampRecvMaxMessageOverrideBytes / BytesPerMB}MB.");
+                    Msg(target, $"[Ramp] starting {startGB}GB +{stepGB}GB -> {maxGB}GB on a STEAM connection "
+                        + $"(rate {RampRateOverrideBytes / BytesPerMB}MB/s, send buffer {RampBufferOverrideBytes / BytesPerMB}MB, client recv {RampRecvBufferOverrideBytes / BytesPerMB}MB). Recording to {StressResults.FileName}.");
+                    yield return new WaitForSeconds(ClientRecvPrepSettleSeconds);
+                }
+                else
+                {
+                    StressResults.Write("PlayFab/crossplay connection — rate is PlayFab-governed (windowed protocol), NOT liftable via config; measuring the crossplay cliff at native rate");
+                    Msg(target, $"[Ramp] starting {startGB}GB +{stepGB}GB -> {maxGB}GB on a PLAYFAB/CROSSPLAY connection. Its ~1 MB/s rate is governed by PlayFab's own protocol — NOT liftable via config — so this measures the crossplay cliff at native rate. Recording to {StressResults.FileName}.");
                 }
 
-                string why = s_resStatus == LevelStatus.Disconnected ? "client DISCONNECTED"
-                           : s_resStatus == LevelStatus.Timeout ? $"no ack in {s_resTimeoutSecs:F0}s (stalled)"
-                           : $"incomplete/corrupt ({s_resAckBytes}/{s_resSent} bytes, corrupt={s_resCorrupt})";
-                StressResults.Write($"level {levelGB}GB FAILED — {why}.");
-                StressResults.Write($"===== CLIFF: highest sustained burst = {lastGoodGB}GB; failed at {levelGB}GB =====");
-                Msg(target, $"[Ramp] STOP at {levelGB}GB — {why}. Cliff = {lastGoodGB}GB. Recorded to {StressResults.FileName}.");
-                NetworkingRatesGroup.RestoreSendRates();
-                NetworkingRatesGroup.RestoreConnection(ZNet.instance.GetPeer(target));
-                if (isSteam) try { ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcClientUnprep); } catch { }
-                s_busy = false;
-                yield break;
-            }
+                int lastGoodGB = 0;
+                int round = 0;
+                for (int levelGB = startGB; levelGB <= maxGB; levelGB += stepGB)
+                {
+                    round++;
+                    StressResults.Write($"ATTEMPTING level {levelGB}GB (round {round})");
+                    yield return FiresGhettoNetworkMod.Instance.StartCoroutine(SendLevel(target, ++s_nonce, (long)levelGB * BytesPerGB, ChunkBytes, true));
 
-            StressResults.Write($"===== RAMP TOPPED OUT: reached {maxGB}GB with no failure (raise maxGB to find the cliff) =====");
-            Msg(target, $"[Ramp] reached max {maxGB}GB with no failure — raise maxGB to keep climbing. Highest good = {lastGoodGB}GB.");
-            NetworkingRatesGroup.RestoreSendRates();
-            NetworkingRatesGroup.RestoreConnection(ZNet.instance.GetPeer(target));
-            if (isSteam) try { ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcClientUnprep); } catch { }
-            s_busy = false;
+                    if (s_resStatus == LevelStatus.Ok)
+                    {
+                        float mbps = (s_resAckBytes / (float)BytesPerMB) / Math.Max(0.001f, s_resSecs);
+                        string diag = DiagLine();
+                        StressResults.Write($"level {levelGB}GB OK (delivered {mbps:F1} MB/s, {s_resAckBytes} bytes) — {diag}");
+                        Msg(target, $"[Ramp] {levelGB}GB OK — delivered {mbps:F1} MB/s; {diag} — escalating...");
+                        lastGoodGB = levelGB;
+                        yield return new WaitForSeconds(LevelGapSeconds);
+                        continue;
+                    }
+
+                    string why = s_resStatus == LevelStatus.Disconnected ? "client DISCONNECTED"
+                               : s_resStatus == LevelStatus.Timeout ? $"no ack in {s_resTimeoutSecs:F0}s (stalled)"
+                               : $"incomplete/corrupt ({s_resAckBytes}/{s_resSent} bytes, corrupt={s_resCorrupt})";
+                    StressResults.Write($"level {levelGB}GB FAILED — {why}.");
+                    StressResults.Write($"===== CLIFF: highest sustained burst = {lastGoodGB}GB; failed at {levelGB}GB =====");
+                    Msg(target, $"[Ramp] STOP at {levelGB}GB — {why}. Cliff = {lastGoodGB}GB. Recorded to {StressResults.FileName}.");
+                    yield break;
+                }
+
+                StressResults.Write($"===== RAMP TOPPED OUT: reached {maxGB}GB with no failure (raise maxGB to find the cliff) =====");
+                Msg(target, $"[Ramp] reached max {maxGB}GB with no failure — raise maxGB to keep climbing. Highest good = {lastGoodGB}GB.");
+            }
+            finally
+            {
+                if (isSteam)
+                {
+                    NetworkingRatesGroup.RestoreSendRates();
+                    NetworkingRatesGroup.RestoreConnection(ZNet.instance.GetPeer(target));
+                    try { ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcClientUnprep); } catch { }
+                }
+                AdaptiveSendRate.Suspend = false;
+                s_busy = false;
+            }
         }
 
         /// Sends totalBytes in pktBytes chunks, flushes, then waits for the client's ack. Result lands in s_res*.
+        /// Drain-driven: each frame it tops the peer's send queue up to QueueHighWaterBytes (capped at
+        /// MaxBurstChunksPerFrame) then yields, so the socket is offered as much as it can drain rather than a
+        /// fixed pace. The s_res* instrumentation records offered-vs-delivered so the real limiter is visible.
         private static IEnumerator SendLevel(long target, long nonce, long totalBytes, int pktBytes, bool raw)
         {
             s_waitNonce = nonce; s_ackGot = false; s_ackBytes = 0; s_ackCorrupt = 0;
             s_resSent = 0; s_resAckBytes = 0; s_resCorrupt = 0; s_resSecs = 0; s_resStatus = LevelStatus.Ok;
+            s_resSendWallSecs = 0f; s_resPeakQueueBytes = 0; s_resGenCpuMs = 0f; s_resBackpressureFrames = 0;
 
             pktBytes = Mathf.Clamp(pktBytes, 1024, ChunkBytes);
+            ZNetPeer peer = ZNet.instance != null ? ZNet.instance.GetPeer(target) : null;
+            ISocket sock = peer != null ? peer.m_socket : null;   // ISocket.GetSendQueueSize — same value ZDOMan reads
+            var genSw = new System.Diagnostics.Stopwatch();
+
             float t0 = Time.time;
+            float lastProgress = Time.time;
+            long lastSent = 0;
             int seq = 0;
-            int inFrame = 0;
             long sent = 0;
             while (sent < totalBytes)
             {
                 if (!PeerConnected(target)) { s_resStatus = LevelStatus.Disconnected; s_resSent = sent; yield break; }
 
-                int thisChunk = (int)Math.Min(pktBytes, totalBytes - sent);
-                ZPackage pkg = new ZPackage();
-                pkg.Write(nonce);
-                pkg.Write(seq);
-                byte[] payload = MakePayload(thisChunk, seq, raw);
-                pkg.Write(payload);
-                pkg.Write(Checksum(payload));
+                int burst = 0;
+                bool hitHighWater = false;
+                while (sent < totalBytes && burst < MaxBurstChunksPerFrame)
+                {
+                    int queued = sock != null ? sock.GetSendQueueSize() : 0;
+                    if (queued > s_resPeakQueueBytes) s_resPeakQueueBytes = queued;
+                    if (queued >= QueueHighWaterBytes) { hitHighWater = true; break; }   // socket full — let it drain
 
-                bool sendFailed = false;
-                try { ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcData, pkg); }
-                catch { sendFailed = true; }
-                if (sendFailed) { s_resStatus = LevelStatus.Disconnected; s_resSent = sent; yield break; }
+                    int thisChunk = (int)Math.Min(pktBytes, totalBytes - sent);
+                    genSw.Start();
+                    ZPackage pkg = new ZPackage();
+                    pkg.Write(nonce);
+                    pkg.Write(seq);
+                    byte[] payload = MakePayload(thisChunk, seq, raw);
+                    pkg.Write(payload);
+                    pkg.Write(Checksum(payload));
+                    bool sendFailed = false;
+                    try { ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcData, pkg); }
+                    catch { sendFailed = true; }
+                    genSw.Stop();
+                    if (sendFailed) { s_resStatus = LevelStatus.Disconnected; s_resSent = sent; yield break; }
 
-                sent += thisChunk; seq++;
-                if (++inFrame >= ChunksPerFrame) { inFrame = 0; yield return null; }
+                    sent += thisChunk; seq++; burst++;
+                }
+                if (hitHighWater) s_resBackpressureFrames++;
+
+                if (sent > lastSent) { lastSent = sent; lastProgress = Time.time; }
+                else if (Time.time - lastProgress > SendStallSecs)
+                {
+                    s_resStatus = LevelStatus.Timeout; s_resSent = sent; yield break;   // socket stopped draining entirely
+                }
+                yield return null;
             }
             s_resSent = sent;
+            s_resSendWallSecs = Time.time - t0;
+            s_resGenCpuMs = (float)genSw.Elapsed.TotalMilliseconds;
 
             try { ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcFlush, nonce, seq); } catch { }
 
@@ -330,6 +383,18 @@ namespace FiresGhettoNetworkMod
                 yield return null;
             }
             s_resStatus = LevelStatus.Timeout;
+        }
+
+        // One-line "what was the limiter?" summary for a completed level: offered (how fast we could shove
+        // bytes into the socket) vs the delivered rate the caller prints. offered >> delivered or high
+        // backpressure => the socket/wire is the cap; offered ~= delivered and low => gen/CPU is the cap.
+        private static string DiagLine()
+        {
+            float offeredMbps = s_resSendWallSecs > 0.001f ? (s_resSent / (float)BytesPerMB) / s_resSendWallSecs : 0f;
+            float chunks = Math.Max(1f, s_resSent / (float)ChunkBytes);
+            float perChunkMs = s_resGenCpuMs / chunks;
+            return $"offered {offeredMbps:F1} MB/s into socket, peak queue {s_resPeakQueueBytes / BytesPerMB} MB, "
+                + $"gen-CPU {s_resGenCpuMs:F0} ms ({perChunkMs:F2} ms/chunk), backpressure {s_resBackpressureFrames} frame(s)";
         }
 
         private static void RPC_Data(long sender, ZPackage pkg)

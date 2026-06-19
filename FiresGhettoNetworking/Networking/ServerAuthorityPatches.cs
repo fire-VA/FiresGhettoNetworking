@@ -181,10 +181,17 @@ namespace FiresGhettoNetworkMod
         {
             dest.Clear();
             _cdoSeenSet.Clear();
+            ZNetScene scene = ZNetScene.instance;
             for (int i = 0; i < source.Count; i++)
             {
                 var zdo = source[i];
                 if (zdo == null || !zdo.IsValid() || zdo.m_uid.IsNone()) continue;
+                // Skip prefabs this server doesn't have registered (e.g. a Marketplace mod's hammer that's
+                // registered client-side only). If it reaches CreateObjects, vanilla can't build it and the
+                // SERVER branch destroys the ZDO ("Destroyed invalid prefab ZDO"), wiping the client's object.
+                // Leaving it out of the server's create sweep keeps it client-owned and intact.
+                int prefab = zdo.m_prefab;
+                if (prefab != 0 && scene != null && !scene.HasPrefab(prefab)) continue;
                 if (_cdoSeenSet.Add(zdo)) dest.Add(zdo);
             }
         }
@@ -398,6 +405,37 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool ShieldDomeImageEffect_Awake_Prefix() => !IsDedicatedServer();
 
+        // The dedicated server instantiates planted crops but must NOT run their grow logic. Plant.SUpdate
+        // calls Grow() on the owner, and Grow() DESTROYS the crop (9999 dmg) when m_status != Healthy &&
+        // m_destroyIfCantGrow. The headless server reads the wrong status — it skips TerrainComp (above), so
+        // its terrain has no cultivation and the crop evaluates as NotCultivated/NoSpace and gets reaped.
+        // Skipping SUpdate on the dedi leaves crops to the owning client, which grows them correctly; a crop
+        // with no client present simply waits and grows when one returns, exactly like vanilla.
+        [HarmonyPatch(typeof(Plant), "SUpdate")]
+        [HarmonyPrefix]
+        public static bool Plant_SUpdate_Prefix() => !IsDedicatedServer();
+
+        // The dedicated server instantiates carts for collision/awareness but must NOT simulate their
+        // physics — a live (non-kinematic) Rigidbody runs before the zone's colliders finish streaming in,
+        // so the cart phases through walls / pops out of its stall and then fights ZSyncTransform as the
+        // colliders load. Make every cart body kinematic on the dedi; ZSyncTransform then drives position via
+        // MovePosition from the owning client. Set Speculative collision first so isKinematic doesn't log the
+        // "Kinematic body only supports Speculative Continuous collision detection" warning.
+        [HarmonyPatch(typeof(Vagon), "Awake")]
+        [HarmonyPostfix]
+        public static void Vagon_Awake_DediKinematic_Postfix(Vagon __instance)
+        {
+            if (!IsDedicatedServer() || __instance == null) return;
+            foreach (var rb in __instance.GetComponentsInChildren<Rigidbody>())
+            {
+                if (rb == null) continue;
+                if (rb.collisionDetectionMode == CollisionDetectionMode.Continuous
+                    || rb.collisionDetectionMode == CollisionDetectionMode.ContinuousDynamic)
+                    rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+                rb.isKinematic = true;
+            }
+        }
+
         private static bool IsDedicatedServer() => ZNet.instance != null && ZNet.instance.IsDedicated();
 
         private static int s_fellOutRescueMaskCached;
@@ -446,20 +484,22 @@ namespace FiresGhettoNetworkMod
             Vector3 pos = __instance.transform.position;
             if (pos.y >= KillPlaneY) return true;
 
-            FreezeRigidbodyIfActive(___m_body);
-            TryRescueOntoGroundCollider(__instance, ___m_body, pos);
+            StopRigidbody(___m_body);
+            TryRescueOntoGroundCollider(__instance, pos);
             return false;
         }
 
-        private static void FreezeRigidbodyIfActive(Rigidbody rb)
+        // Kill the fall momentum so the rescue reposition lands clean. We do NOT set isKinematic: setting
+        // a velocity on a kinematic body logs "Setting velocity of a kinematic body is not supported" every
+        // tick a body sits below the kill plane. Zeroing velocity on the live body stops it just as well.
+        private static void StopRigidbody(Rigidbody rb)
         {
             if (rb == null || rb.isKinematic) return;
-            rb.isKinematic = true;
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
         }
 
-        private static void TryRescueOntoGroundCollider(ZSyncTransform sync, Rigidbody rb, Vector3 currentPos)
+        private static void TryRescueOntoGroundCollider(ZSyncTransform sync, Vector3 currentPos)
         {
             Vector3 rayStart = new Vector3(currentPos.x, RescueRaycastStartHeight, currentPos.z);
             if (!Physics.Raycast(rayStart, Vector3.down, out RaycastHit hit, RescueRaycastMaxDistance, GetFellOutRescueMask()))
@@ -468,11 +508,7 @@ namespace FiresGhettoNetworkMod
             Vector3 rescued = currentPos;
             rescued.y = hit.point.y + RescueGroundClearance;
             sync.transform.position = rescued;
-            if (rb != null)
-            {
-                rb.isKinematic = false;
-                Physics.SyncTransforms();
-            }
+            Physics.SyncTransforms();
         }
     }
 }

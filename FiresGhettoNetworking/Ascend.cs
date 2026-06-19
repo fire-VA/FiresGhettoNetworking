@@ -44,7 +44,6 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<bool> ConfigEnableAdaptiveThrottling;
         public static ConfigEntry<int> ConfigSendCongestionThresholdPct;
         public static ConfigEntry<bool> ConfigEnableSendHeartbeatLog;
-        public static ConfigEntry<bool> ConfigEnableFallThroughGuard;
         public static ConfigEntry<bool> ConfigEnableFallThroughDiagnostics;
         public static ConfigEntry<int> ConfigZoneLoadBatchSize;
         public static ConfigEntry<int> ConfigZPackageReceiveBufferSize;
@@ -75,6 +74,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<float> ConfigDiagnosticIntervalSec;
         public static ConfigEntry<bool> ConfigEnableBulkTransferBoost;
         public static ConfigEntry<int> ConfigBulkTransferBudgetPercent;
+        public static ConfigEntry<bool> ConfigHyperBoost;
 
         private static bool _dummyRpcRegistered = false;
 
@@ -140,6 +140,7 @@ namespace FiresGhettoNetworkMod
             SafeInvokeInit("FiresGhettoNetworkMod.NetworkingRatesGroup", "Init", new object[] { Config });
             SafeInvokeInit("FiresGhettoNetworkMod.DedicatedServerGroup", "Init", new object[] { Config });
             SendQueueHeadroomMonitor.InitConfig(Config);
+            AdaptiveSendRate.InitConfig(Config);
 
             // Core networking patches that are safe and useful on both client and server
             Harmony.PatchAll(typeof(CompressionGroup));
@@ -154,14 +155,6 @@ namespace FiresGhettoNetworkMod
             // send-side queue saturation. Cost is two int increments per
             // SendZDOs call.
             Harmony.PatchAll(typeof(SendZDOsHeartbeatDiagnostic));
-
-            // Fall-through guard — PRODUCTION fix, both sides. On the peer that owns a freshly
-            // spawned ItemDrop/TombStone, freeze it the moment it appears if nothing is beneath
-            // it yet, then release once support streams in (or after a short timeout). Stops
-            // drops/tombstones sinking through floors during the zone-load physics race. This is
-            // the correct fix for the fall-through — pure local physics, no send-order or
-            // ObjectType changes (that 1.3.6 approach was reverted). Gated by config, default on.
-            Harmony.PatchAll(typeof(FallThroughGuard));
 
             // Fall-through DIAGNOSTICS — verbose, opt-in (default off). Two probes that
             // investigate items/tombstones sinking through structures:
@@ -214,6 +207,10 @@ namespace FiresGhettoNetworkMod
 
             // Passive, opt-in send-queue headroom telemetry (fgn_headroom). Off by default = zero cost.
             Harmony.PatchAll(typeof(SendQueueHeadroomMonitor));
+
+            // Per-peer adaptive send-rate controller (AIMD). Server-gated internally; ramps each peer's
+            // pinned send rate from the Auto-Tune baseline toward HYPERBOOST as the link proves it can take it.
+            Harmony.PatchAll(typeof(AdaptiveSendRate));
 
             // Instantiation / zone-load stress (fgn_zdoflood). Idle until an admin runs it.
             Harmony.PatchAll(typeof(ZdoFloodTest));
@@ -651,14 +648,30 @@ namespace FiresGhettoNetworkMod
             ConfigSendRateMin = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Min",
-                SendRateMinOptions._256KB,
-                "Minimum send rate Steam will attempt.");
+                SendRateMinOptions._512KB,
+                "Minimum send rate Steam will attempt. Steam's adapter has a sticky-down quirk — peers " +
+                "that back off toward this value tend to stay there. Keep it well above unplayable.");
 
             ConfigSendRateMax = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Max",
-                SendRateMaxOptions._512KB,
-                "Maximum send rate Steam will attempt.");
+                SendRateMaxOptions._2048KB,
+                "Maximum send rate Steam will attempt. This is 'permission to burst' — Steam still ramps " +
+                "adaptively between Min and Max, this just removes the artificial ceiling.");
+
+            ConfigHyperBoost = Config.Bind(
+                "05 - Networking - Steamworks",
+                "HYPERBOOST",
+                false,
+                "MAX-THROUGHPUT MODE. Overrides Auto-Tune AND the Send Rate Min/Max above, lifting Steam's\n" +
+                "send rate, send buffer, and recv buffer / per-message ceiling to their proven unlocked\n" +
+                "maximums — the same lifts fgn_socketramp uses to reach ~40 MB/s, versus the ~8 MB/s the\n" +
+                "High tier caps everyday traffic at. Applies LIVE the instant you toggle it (no reconnect).\n" +
+                "For a server->client transfer, set it on BOTH sides: the server lifts its outbound, the\n" +
+                "client lifts its inbound. The recv side needs FiresSteamworksPatcher installed.\n" +
+                "This trades Steam's conservative congestion ceiling for raw headroom and lets the buffers\n" +
+                "grow large under load, so leave it OFF for normal play and ON for high-bandwidth links or\n" +
+                "benchmarking.");
 
             AutoTuneConfig.Init(Config);
 
@@ -1167,18 +1180,6 @@ namespace FiresGhettoNetworkMod
                 "state and should be investigated. Disable as a kill switch if it ever causes\n" +
                 "trouble (you'd then see the original NRE caught by the existing fallback).");
 
-            ConfigEnableFallThroughGuard = Config.Bind(
-                "01 - General",
-                "Enable Fall-Through Guard",
-                true,
-                "Stops dropped items and tombstones from sinking through floors, decks, and other\n" +
-                "structures right after they appear. On a busy server an item can spawn a frame\n" +
-                "before the floor under it finishes loading, so gravity pulls it through before the\n" +
-                "collider exists. With this on, an item that spawns with nothing beneath it is held\n" +
-                "in place until its support loads in (or a few seconds pass), then drops normally —\n" +
-                "so it lands on the floor instead of vanishing under the world. Runs on whichever\n" +
-                "side owns the item (the player's client, or the server under Server-Side Simulation).");
-
             ConfigEnableFallThroughDiagnostics = Config.Bind(
                 "01 - General",
                 "Enable Fall-Through Diagnostics",
@@ -1189,8 +1190,8 @@ namespace FiresGhettoNetworkMod
                 "fall), and a one-shot startup audit that names build pieces left non-Solid (the load\n" +
                 "order that lets an item spawn before its support). The per-spawn probe adds real cost\n" +
                 "and log volume on a busy server, so leave this OFF for normal play and the live read —\n" +
-                "turn it on only to investigate a fall-through report. The fix itself is the separate\n" +
-                "Enable Fall-Through Guard toggle, which stays on independently of this.");
+                "turn it on only to investigate a suspected fall-through. These probes only observe and\n" +
+                "log; they do not change any physics.");
 
             // === CONFIG CHANGE LOGGING (fixed for generic types) ===
             var allConfigs = new ConfigEntryBase[]
@@ -1236,7 +1237,6 @@ namespace FiresGhettoNetworkMod
         ConfigPredictionMaxLookaheadZones,
         ConfigEnableInvulnerableSupportSkip,
         ConfigEnableInstanceOrphanPrune,
-        ConfigEnableFallThroughGuard,
         ConfigEnableFallThroughDiagnostics,
         ConfigEnableBulkTransferBoost,
         ConfigBulkTransferBudgetPercent,

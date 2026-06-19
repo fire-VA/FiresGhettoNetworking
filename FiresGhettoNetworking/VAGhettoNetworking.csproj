@@ -224,6 +224,7 @@
     <Compile Include="Networking\DisarmOverloadTest.cs" />
     <Compile Include="Networking\SocketStressTests.cs" />
     <Compile Include="Networking\SendQueueHeadroomMonitor.cs" />
+    <Compile Include="Networking\AdaptiveSendRate.cs" />
     <Compile Include="Networking\ZdoFloodTest.cs" />
     <Compile Include="Networking\LoggerOptions.cs" />
     <Compile Include="Networking\MonsterAiPatches.cs" />
@@ -249,7 +250,6 @@
     <Compile Include="Networking\ServerOwnershipPatches.cs" />
     <Compile Include="Networking\ServerOwnershipPatchesV3.cs" />
     <Compile Include="Networking\FallThroughProbe.cs" />
-    <Compile Include="Networking\FallThroughGuard.cs" />
     <Compile Include="Networking\PieceTypeAudit.cs" />
     <Compile Include="Networking\ServerDisconnectDiagnostics.cs" />
     <Compile Include="Networking\ServerStabilityPatches.cs" />

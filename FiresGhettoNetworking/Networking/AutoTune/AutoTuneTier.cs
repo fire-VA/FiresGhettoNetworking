@@ -124,18 +124,17 @@ namespace FiresGhettoNetworkMod.AutoTune
                 case Tier.High:
                     return new TierPreset
                     {
-                        // Min stays at the safe baseline regardless of tier so Steam can
-                        // always back off for a struggling peer. Only Max scales with tier
-                        // — that's "permission to burst", not "must push this fast".
-                        SteamSendRateMinBytes = 150  * 1024,
-                        SteamSendRateMaxBytes = 1024 * 1024,
-                        SteamSendBufferBytes     = 2 * 1024 * 1024, // 2MB — big headroom to absorb initial-sync flood
-                        // 8 MB recv buffer / 4 MB per-message ceiling. Recv buffer needs to
-                        // exceed both Steam's 512 KB default and any large reliable chunk a
-                        // peer might send (ClientLogRelay pushes ~400 KB chunks). Per-message
-                        // cap stays flat across tiers because it's a wire-format ceiling, not
-                        // a steady-state throughput hint.
-                        SteamRecvBufferBytes     = 8 * 1024 * 1024,
+                        // Steam's send-rate adapter has a sticky-down quirk: any peer that backs off
+                        // toward Min tends to stay there. So Min is a long-term floor, not just a
+                        // safety net — keep it well above unplayable. Max is "permission to burst" —
+                        // Steam still ramps adaptively, this just removes the artificial ceiling.
+                        SteamSendRateMinBytes = 1024 * 1024,
+                        SteamSendRateMaxBytes = 32768 * 1024,    // 32 MB/s burst ceiling (was 8). Benchmark: link sustains ~92 MB/s; beats the 14-40 MB/s rivals on AutoTune alone. HyperBoost stays the unlocked max.
+                        SteamSendBufferBytes     = 16 * 1024 * 1024,
+                        // Recv buffer must exceed Steam's 512 KB default AND any large reliable chunk
+                        // a peer might send (ClientLogRelay pushes ~400 KB; config syncs burst higher).
+                        // Per-message cap is a wire-format ceiling, stays flat across tiers.
+                        SteamRecvBufferBytes     = 32 * 1024 * 1024,
                         SteamRecvMaxMessageBytes = 4 * 1024 * 1024,
                         ZoneLoadBatchSize        = 4,
                         // 5 ms steady-state budget on a high-tier client. Capable
@@ -148,7 +147,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         SafetyFallbackThreshold = 5000,
 
                         UpdateRate            = UpdateRateOptions._150,
-                        QueueSize             = QueueSizeOptions._48KB,
+                        QueueSize             = QueueSizeOptions._80KB,
                         ZDOThrottleDistance   = 700f,
                         AILODNearDistance     = 150f,
                         AILODFarDistance      = 500f,
@@ -160,11 +159,10 @@ namespace FiresGhettoNetworkMod.AutoTune
                 case Tier.Medium:
                     return new TierPreset
                     {
-                        // Same safe baseline Min as HIGH — see HIGH-tier note above.
-                        SteamSendRateMinBytes = 150 * 1024,
-                        SteamSendRateMaxBytes = 512 * 1024,
-                        SteamSendBufferBytes     = 1 * 1024 * 1024, // 1MB
-                        SteamRecvBufferBytes     = 4 * 1024 * 1024,
+                        SteamSendRateMinBytes = 768  * 1024,
+                        SteamSendRateMaxBytes = 16384 * 1024,    // 16 MB/s burst ceiling (was 4).
+                        SteamSendBufferBytes     = 8 * 1024 * 1024,
+                        SteamRecvBufferBytes     = 16 * 1024 * 1024,
                         SteamRecvMaxMessageBytes = 4 * 1024 * 1024,
                         ZoneLoadBatchSize        = 2,
                         InstantiationBudgetMs   = 3,
@@ -173,7 +171,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         SafetyFallbackThreshold = 5000,
 
                         UpdateRate            = UpdateRateOptions._100,
-                        QueueSize             = QueueSizeOptions._32KB,
+                        QueueSize             = QueueSizeOptions._48KB,
                         ZDOThrottleDistance   = 500f,
                         AILODNearDistance     = 100f,
                         AILODFarDistance      = 300f,
@@ -186,19 +184,13 @@ namespace FiresGhettoNetworkMod.AutoTune
                 default:
                     return new TierPreset
                     {
-                        // Baseline Min for all tiers. Max / buffer / update-rate are held at or above
-                        // vanilla even on the weakest tier — Low means "don't push the enhanced rates",
-                        // never "go below stock". (Previously 384KB max / 512KB buffer / _75 update
-                        // rate; the _75 was sub-vanilla and throttled weak peers below what they'd get
-                        // unmodded, timing out ServerCharacters' compressed inventory push.)
-                        SteamSendRateMinBytes = 150 * 1024,
-                        SteamSendRateMaxBytes = 1024 * 1024,
-                        SteamSendBufferBytes     = 1 * 1024 * 1024, // 1MB — at/above vanilla, never below
-                        // Even at Low we hold the recv ceiling at 2 MB; less than that
-                        // narrows from Steam's own 512 KB default and lets ClientLogRelay-
-                        // sized chunks fail. The per-connection cost (2 MB × peer count)
-                        // is trivial on any host that can run a Valheim server.
-                        SteamRecvBufferBytes     = 2 * 1024 * 1024,
+                        // Low Min is still a real Min — Steam's sticky-down behaviour means any peer that
+                        // backs off here stays here. 512 KB/s is ~3.4x vanilla floor: safe for slow links,
+                        // but not "modded server falls over" territory.
+                        SteamSendRateMinBytes = 512  * 1024,
+                        SteamSendRateMaxBytes = 2048 * 1024,
+                        SteamSendBufferBytes     = 2 * 1024 * 1024,
+                        SteamRecvBufferBytes     = 8 * 1024 * 1024,
                         SteamRecvMaxMessageBytes = 4 * 1024 * 1024,
                         ZoneLoadBatchSize        = 1,
                         // Tight 2 ms budget on a low-tier client; cap 50 keeps us
@@ -300,6 +292,23 @@ namespace FiresGhettoNetworkMod.AutoTune
     /// </summary>
     public static class EffectiveConfig
     {
+        // ---------------- HYPERBOOST ----------------
+        // A single max-throughput override that wins over BOTH auto-tune and manual config, pushed to the
+        // limits the Steam API itself allows. These configs are Int32 BYTES, so the send rate maxes at
+        // int.MaxValue (~2 GB/s) and the buffers sit just under it — there is no higher value to set; a
+        // bigger number simply overflows the field. The High tier caps SendRateMax at 8 MB/s, which is the
+        // everyday ceiling HyperBoost removes; fgn_socketramp lifts a connection to these exact values to
+        // find the real cliff. The send/recv buffers are CEILINGS ("up to", not preallocated), so the cost
+        // is headroom a genuine flood can fill — hence opt-in, default OFF.
+        public const int HyperBoostSendRateMaxBytes    = int.MaxValue;       // ~2 GB/s — the Int32 API ceiling
+        public const int HyperBoostSendRateMinBytes    =  640 * 1024 * 1024; // 640 MB/s floor (defeats Steam sticky-down)
+        public const int HyperBoostSendBufferBytes     = 2047 * 1024 * 1024; // ~2 GB outbound staging (just under Int32 max)
+        public const int HyperBoostRecvBufferBytes     = 1024 * 1024 * 1024; // 1 GB inbound
+        public const int HyperBoostRecvMaxMessageBytes =   64 * 1024 * 1024; // 64 MB per-message ceiling
+
+        public static bool HyperBoost()
+            => FiresGhettoNetworkMod.ConfigHyperBoost != null && FiresGhettoNetworkMod.ConfigHyperBoost.Value;
+
         // ---------------- Client knobs ----------------
 
         // Steam send rates apply per-process: on the client this scales the client's
@@ -309,6 +318,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         // otherwise client tier (or manual config).
         public static int SteamSendRateMin()
         {
+            if (HyperBoost()) return HyperBoostSendRateMinBytes;
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
                 return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMinBytes, "SendRateMin", "ServerTier");
             if (UseClientAutoTune())
@@ -318,6 +328,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         public static int SteamSendRateMax()
         {
+            if (HyperBoost()) return HyperBoostSendRateMaxBytes;
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
                 return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMaxBytes, "SendRateMax", "ServerTier");
             if (UseClientAutoTune())
@@ -341,6 +352,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         // caused the "Reliable message size too large" disconnect.
         public static int SteamRecvBufferBytes()
         {
+            if (HyperBoost()) return HyperBoostRecvBufferBytes;
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
                 return VanillaFloor.ClampRecvBuffer(TierPresets.For(AutoTuneState.ServerTier).SteamRecvBufferBytes, "ServerTier");
             if (UseClientAutoTune())
@@ -357,6 +369,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         // throughput knob. Falls back to the same value when no tier is active.
         public static int SteamRecvMaxMessageBytes()
         {
+            if (HyperBoost()) return HyperBoostRecvMaxMessageBytes;
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
                 return TierPresets.For(AutoTuneState.ServerTier).SteamRecvMaxMessageBytes;
             if (UseClientAutoTune())
@@ -372,6 +385,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         // the client can drain it. Same side-aware logic as send rates.
         public static int SteamSendBufferBytes()
         {
+            if (HyperBoost()) return HyperBoostSendBufferBytes;
             if (IsDedicatedServerRuntime() && UseServerAutoTune())
                 return VanillaFloor.ClampSendBuffer(TierPresets.For(AutoTuneState.ServerTier).SteamSendBufferBytes, "ServerTier");
             if (UseClientAutoTune())
