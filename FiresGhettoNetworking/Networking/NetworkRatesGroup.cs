@@ -233,19 +233,21 @@ namespace FiresGhettoNetworkMod
         // Pin a connection's send rate: SendRateMin == SendRateMax == rateBytes, so Steam has no adaptive
         // window to drift inside (its sticky-down adapter is what otherwise leaves peers parked near Min).
         // Order the two writes so Min never momentarily exceeds Max: raising -> Max first; lowering -> Min first.
-        public static void SetConnectionRatePinned(uint conn, int rateBytes, bool raising)
+        public static bool SetConnectionRatePinned(uint conn, int rateBytes, bool raising)
         {
-            if (conn == 0u) return;
+            if (conn == 0u) return false;
+            bool a, b;
             if (raising)
             {
-                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
-                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
+                a = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
+                b = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
             }
             else
             {
-                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
-                SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
+                a = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
+                b = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
             }
+            return a && b;
         }
 
         public static void RestoreConnection(ZNetPeer peer)
