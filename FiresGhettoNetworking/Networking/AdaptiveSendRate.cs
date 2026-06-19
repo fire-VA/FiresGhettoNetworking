@@ -40,14 +40,12 @@ namespace FiresGhettoNetworkMod
 
         private const float TickSeconds       = 1.5f;
         private const float HighWaterFraction = 0.70f;   // queue vs send-buffer ratio — logged only, NOT a trigger
-        private const int   SustainTicks      = 3;       // consecutive overshoot ticks before easing down (rules out post-raise lag)
-        private const float SlowStartFactor   = 2.00f;   // fast climb (double/tick) until the first real overshoot
-        private const float CongAvoidFactor   = 1.10f;   // fine steps after that, so the steady cap is stable
-        private const float RaiseFraction     = 0.65f;   // delivering >= 65% of the cap = link keeping up -> push higher
-        private const float BackoffFraction   = 0.40f;   // delivering < 40% of the cap (sustained) = genuine overshoot -> ease down
-        private const float BackOffHeadroom   = 1.10f;   // ease to 1.1x the REAL delivered rate — never below the baseline floor
+        private const int   SustainTicks      = 3;       // ticks the bad-connection warning must persist before we back off
+        private const float SlowStartFactor   = 2.00f;   // fast climb (double/tick) until the first bad-connection back-off
+        private const float CongAvoidFactor   = 1.10f;   // fine steps after that, so it re-approaches the edge gently
+        private const float BadConnectionSecs = 5.00f;   // ping reply overdue past this = Valheim's bad-connection icon flashes (ZNet.m_badConnectionPing); 1/3 of the 30s hard timeout
+        private const float BackoffStep       = 0.50f;   // halve the cap when the game says the connection is genuinely in trouble
         private const int   MinStepBytes      = 1024 * 1024;
-        private const int   IdleFloorBytes    = 2 * 1024 * 1024;   // delivered below this = idle/no real traffic -> hold (don't ease, keep slow-start armed)
 
         private sealed class PeerState
         {
@@ -120,7 +118,7 @@ namespace FiresGhettoNetworkMod
             s_state.Clear();
             var wait = new WaitForSeconds(TickSeconds);
             LoggerOptions.LogMessage($"[AdaptiveRate] controller ON (tick {TickSeconds:F1}s, high-water "
-                + $"raise>={RaiseFraction:F2} backoff<{BackoffFraction:F2} over {SustainTicks} ticks, up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, ease to 1.1x delivered).");
+                + $"back off when bad-connection (ping>{BadConnectionSecs:F0}s) holds {SustainTicks} ticks, up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, down x{BackoffStep:F1}).");
 
             while (ZNet.instance != null && ZNet.instance.IsServer() && ConfigEnabled != null && ConfigEnabled.Value)
             {
@@ -165,7 +163,7 @@ namespace FiresGhettoNetworkMod
                 s_loggedConfig = true;
                 LoggerOptions.LogMessage($"[AdaptiveRate] effective: start={baseline / 1048576}MB floor={minRate / 1048576}MB "
                     + $"ceiling={ceiling / 1048576L}MB sendBuf={buffer / 1048576}MB highWater={highWater / 1048576}MB "
-                    + $"(slowStart=x{SlowStartFactor:F1} congAvoid=x{CongAvoidFactor:F2} raise={RaiseFraction:F2} backoff={BackoffFraction:F2})");
+                    + $"(up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, back off x{BackoffStep:F1} after badconn>{BadConnectionSecs:F0}s x{SustainTicks})");
             }
 
             s_seen.Clear();
@@ -197,14 +195,33 @@ namespace FiresGhettoNetworkMod
                 string branch;
                 bool? pinned = null;
 
-                // The limiter is delivered-vs-cap, NOT the queue. The queue is a useless signal here: a
-                // saturating transfer fills it to its own high-water mark regardless of how fast the link is,
-                // so "queue full" fires on a healthy 90 MB/s link exactly as on a slow one — only the DELIVERED
-                // rate tells them apart. So: keep pushing while delivered keeps up with the cap; ease down ONLY
-                // when delivered sits far below the cap for several ticks (a real overshoot, not post-raise
-                // measurement lag). Erring high is cheap (the link just runs at its real rate, queue bounded,
-                // ~30s grace); easing down below the real rate would actually throttle it.
-                if (delivered >= st.Target * RaiseFraction)
+                // The ONLY back-off trigger is Valheim's own "bad connection" condition for this peer: its ping
+                // reply overdue past BadConnectionSecs — the exact value (ZNet.m_badConnectionPing = 5s) that
+                // flashes the on-screen disconnect icon, a third of the 30s hard timeout. Queue depth and
+                // throughput were red herrings. While the game says the link is healthy we keep ramping UP;
+                // only when it says the connection is in trouble, sustained for SustainTicks, do we ease down.
+                float pingAge = 0f;
+                bool badConn = false;
+                try { if (peer.IsReady() && peer.m_rpc != null) { pingAge = peer.m_rpc.GetTimeSinceLastPing(); badConn = pingAge > BadConnectionSecs; } } catch { }
+
+                if (badConn)
+                {
+                    branch = $"BADCONN {st.PressureTicks + 1}/{SustainTicks}";
+                    if (++st.PressureTicks >= SustainTicks)
+                    {
+                        st.PressureTicks = 0;
+                        st.SlowStart = false;
+                        int next = Mathf.Max(minRate, (int)(st.Target * BackoffStep));
+                        if (next < st.Target)
+                        {
+                            st.Target = next;
+                            pinned = NetworkingRatesGroup.SetConnectionRatePinned(st.Conn, st.Target, raising: false);
+                            branch = "BACKOFF";
+                        }
+                        else branch = "BACKOFF-floored";
+                    }
+                }
+                else
                 {
                     st.PressureTicks = 0;
                     if (st.Target < ceiling)
@@ -218,32 +235,10 @@ namespace FiresGhettoNetworkMod
                     }
                     else branch = "RAISE-ceiling";
                 }
-                else if (delivered >= IdleFloorBytes && delivered < st.Target * BackoffFraction)
-                {
-                    branch = $"PRESSURE {st.PressureTicks + 1}/{SustainTicks}";
-                    if (++st.PressureTicks >= SustainTicks)
-                    {
-                        st.PressureTicks = 0;
-                        st.SlowStart = false;   // found the ceiling — fine congestion-avoidance from here on
-                        int next = Mathf.Max(minRate, (int)(delivered * BackOffHeadroom));   // 1.1x the real rate, never below it
-                        if (next < st.Target)
-                        {
-                            st.Target = next;
-                            pinned = NetworkingRatesGroup.SetConnectionRatePinned(st.Conn, st.Target, raising: false);
-                            branch = "BACKOFF";
-                        }
-                        else branch = "BACKOFF-floored";
-                    }
-                }
-                else
-                {
-                    st.PressureTicks = 0;
-                    branch = "HOLD";   // delivered between the two thresholds — sit tight, no harm in over-pinning
-                }
 
                 if (ConfigLog != null && ConfigLog.Value)
                     LoggerOptions.LogMessage($"[AdaptiveRate] peer {peer.m_uid} {branch}: cap {oldTarget / 1048576}->{st.Target / 1048576} MB/s, "
-                        + $"delivered {delivered / 1048576f:F1} MB/s ({(oldTarget > 0 ? delivered / oldTarget * 100f : 0f):F0}% of cap), "
+                        + $"delivered {delivered / 1048576f:F1} MB/s, pingAge {pingAge:F1}/{BadConnectionSecs:F0}s, "
                         + $"queue {queue / 1048576f:F1}/{highWater / 1048576} MB"
                         + (pinned.HasValue ? (pinned.Value ? " [pin ok]" : " [PIN FAILED]") : ""));
             }
