@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.7";
+        public const string PluginVersion = "1.3.8";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -684,11 +684,12 @@ namespace FiresGhettoNetworkMod
             ConfigForceCrossplay = Config.Bind(
                 "09 - Dedicated Server",
                 "Force Crossplay",
-                ForceCrossplayOptions.steamworks,
-                "Requires restart.\n" +
-                "steamworks = Force crossplay DISABLED (Steam friends only)\n" +
-                "playfab = Force crossplay ENABLED (PlayFab matchmaking)\n" +
-                "vanilla = Respect command-line -crossplay flag (default Valheim behavior)");
+                ForceCrossplayOptions.vanilla,
+                "Requires restart. Selects the networking backend for a DEDICATED SERVER.\n" +
+                "vanilla = respect the command-line -crossplay flag (DEFAULT — does NOT change how your server connects).\n" +
+                "steamworks = force Steam-only; DISABLES crossplay. Best performance for an all-Steam playerbase, " +
+                "but Xbox / Game Pass / PlayStation players cannot join.\n" +
+                "playfab = force crossplay ENABLED (PlayFab matchmaking) regardless of the -crossplay flag.");
 
             ConfigPlayerLimit = Config.Bind(
                 "09 - Dedicated Server",
