@@ -32,10 +32,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         static void ApplyForceCrossplay()
         {
-            // Message-level (NOT Info, which the dedi suppresses) so we can finally see whether this even
-            // runs, plus the backend before/after + the dedi-detection — to diagnose why "force steamworks"
-            // wasn't sticking (the live connection came up PlayFab despite the config).
-            LoggerOptions.LogMessage($"[Crossplay] ParseServerArguments postfix: dedi={isDedicatedDetected}, "
+            LoggerOptions.LogInfo($"[Crossplay] ParseServerArguments postfix: dedi={isDedicatedDetected}, "
                 + $"config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}, backend-before={ZNet.m_onlineBackend}.");
             if (!isDedicatedDetected) return;
             switch (FiresGhettoNetworkMod.ConfigForceCrossplay.Value)
@@ -49,10 +46,10 @@ namespace FiresGhettoNetworkMod
                     LoggerOptions.LogMessage("[Crossplay] Forcing crossplay DISABLED (Steamworks backend).");
                     break;
                 default:
-                    LoggerOptions.LogMessage("[Crossplay] mode: vanilla (respecting command line).");
+                    LoggerOptions.LogInfo("[Crossplay] mode: vanilla (respecting command line).");
                     break;
             }
-            LoggerOptions.LogMessage($"[Crossplay] backend-after={ZNet.m_onlineBackend}.");
+            LoggerOptions.LogInfo($"[Crossplay] backend-after={ZNet.m_onlineBackend}.");
         }
 
         // Diagnostic: log the FINAL backend when ZNet actually starts. If it differs from what
@@ -62,7 +59,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         static void LogBackendAtZNetStart()
         {
-            LoggerOptions.LogMessage($"[Crossplay] ZNet.Start — online backend is now {ZNet.m_onlineBackend} (dedi={isDedicatedDetected}).");
+            LoggerOptions.LogInfo($"[Crossplay] ZNet.Start — online backend is now {ZNet.m_onlineBackend} (dedi={isDedicatedDetected}).");
         }
 
         // ====================== CLIENT-SIDE FORCE ======================
@@ -86,7 +83,7 @@ namespace FiresGhettoNetworkMod
         {
             OnlineBackendType? forced = ForcedBackend();
             if (!forced.HasValue || __result == forced.Value) return;
-            LoggerOptions.LogMessage($"[Crossplay] client GetOnlineBackend {__result} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
+            LoggerOptions.LogInfo($"[Crossplay] client GetOnlineBackend {__result} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
             __result = forced.Value;
         }
 
@@ -98,7 +95,7 @@ namespace FiresGhettoNetworkMod
         {
             OnlineBackendType? forced = ForcedBackend();
             if (!forced.HasValue || ZNet.m_onlineBackend == forced.Value) return;
-            LoggerOptions.LogMessage($"[Crossplay] client SetServerHost(addr) {ZNet.m_onlineBackend} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
+            LoggerOptions.LogInfo($"[Crossplay] client SetServerHost(addr) {ZNet.m_onlineBackend} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
             ZNet.m_onlineBackend = forced.Value;
         }
 

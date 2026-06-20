@@ -155,6 +155,10 @@ namespace FiresGhettoNetworkMod
                 var scopeType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigScope");
                 var dataType = allTypes.FirstOrDefault(t => t.FullName == "Steamworks.ESteamNetworkingConfigDataType");
                 if (enumType == null || scopeType == null || dataType == null) return false;
+                // Recv-buffer-family members (RecvBufferSize / RecvMaxMessageSize / …) only exist when
+                // FiresSteamworksPatcher is installed. Without it, skip silently so the setting simply caps at
+                // Steam's default instead of throwing + warning per connection. Send-side members always exist.
+                if (Array.IndexOf(Enum.GetNames(enumType), enumMemberName) < 0) return false;
 
                 var enumVal = Enum.Parse(enumType, enumMemberName);
                 var scopeVal = Enum.Parse(scopeType, "k_ESteamNetworkingConfig_Connection");
@@ -473,6 +477,9 @@ namespace FiresGhettoNetworkMod
                     LoggerOptions.LogWarning("Steamworks.NET types not found - send rate config skipped.");
                     return;
                 }
+                // Skip silently for members only present with FiresSteamworksPatcher (recv-buffer family) —
+                // the value caps at Steam's default rather than throwing.
+                if (Array.IndexOf(Enum.GetNames(enumType), enumMemberName) < 0) return;
 
                 var enumVal = Enum.Parse(enumType, enumMemberName);
                 var scopeVal = Enum.Parse(scopeType, "k_ESteamNetworkingConfig_Global");
