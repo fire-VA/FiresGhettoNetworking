@@ -67,7 +67,6 @@ namespace FiresGhettoNetworkMod.AutoTune
         // Cached at initial probe so rolling monitor doesn't have to re-sample fps/cpu.
         // Hardware doesn't change mid-session and FPS is stable enough on the same scene.
         private static Tier _sessionMachineTier = Tier.Medium;
-        private static bool _hasMachineTier;
         private static string _sessionServerKey = string.Empty;
         private static string _sessionHwHash = string.Empty;
 
@@ -479,7 +478,6 @@ namespace FiresGhettoNetworkMod.AutoTune
                     _sessionServerKey   = serverKey;
                     _sessionHwHash      = hwHash;
                     _sessionMachineTier = cpuTier;
-                    _hasMachineTier     = true;
                     if (FiresGhettoNetworkMod.Instance != null)
                         _rollingMonitorHandle = FiresGhettoNetworkMod.Instance.StartCoroutine(RunRollingMonitor(serverPeer));
 
@@ -636,7 +634,6 @@ namespace FiresGhettoNetworkMod.AutoTune
 
             // Stash for the rolling monitor — machine tier is fixed for the session.
             _sessionMachineTier = machineTier;
-            _hasMachineTier     = true;
 
             LoggerOptions.LogMessage($"[AutoTune] Final tier: machine={machineTier} (cpu={cpuTier} fps={fpsTier}) latency={latencyTier} bw={(bwProbeCompleted ? bwKbPerSec.ToString("0") + "KB/s" : "n/a")} → {finalTier}");
 
