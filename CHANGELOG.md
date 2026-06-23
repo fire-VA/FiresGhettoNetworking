@@ -1,12 +1,46 @@
-* v1.0.2 update for not playing well with wackies db
-* v1.1.0 compatibility updates
-* v1.1.1 fixed single player running logic as dedicated server and spamming errors finally
-* v1.1.5 fixes to server authority ai patches. improved performance, stopped causing issues with interactions and monsters... 
-* v1.1.6 better server checking for renamed assemblys 
-* v1.1.7 various tweaks and a bug fix for accidentally hiding the player-player poistion sync in configs 
-* v1.1.8 better client position handling for players with higher ping differences (only works when installed on server and client)
-* v1.1.9 adjustments to player positioning patches as well as default config settings, added a new beta feature for login snapshots as well
-* v1.2.0 removed log snapshots beta, will have to become its own mod someday soon
+* v1.3.8 crossplay default fix + per-peer adaptive send rate 
+  - Crossplay servers could fail to connect after installing FGN. "Force Crossplay" now defaults to "vanilla" 
+  - Per-peer adaptive send rate — each client now ramps from the auto-tune baseline up toward its own real link capacity 
+  - Auto-tune HIGH send ceiling raised (~8 -> ~32 MB/s) with a larger send buffer and queue, so a healthy link isn't artificially throttled.
+  - HYPERBOOST toggle — one-switch max-throughput override (Steam send/recv rates + buffers) for benchmarking or high-bandwidth links. Default off; pinning everything wide open really isn't a great idea, but if you really want to, have at it (requires fires steamworks patcher on client as well as server)
+  - Patcher-dependent settings (the recv-buffer tuning, including HyperBoost's recv side)
+  - Crops should now grow correctly under server-side simulation
+* v1.3.7 disconnect + fall-through + steamworks-limit fixes
+  - Clients no longer choke on default Steam bandwidth limits during big transfers.
+  - The bandwidth lift now applies through other mods' socket wrappers instead of getting lost.
+  - Fixed a compression bug that caused "Disconnected" drops on busy servers.
+  - Items and graves stay put until the floor under them finishes loading instead of falling through.
+  - Fall-through diagnostic logging is now off by default behind a toggle.
+* v1.3.6 tombstone/tames fix 
+  - graves and tames should stop dropping through structures on zone reload 
+* v1.3.5 auto-tune adjustment
+  - a strong PC on a high-ping connection no longer gets dropped to low settings. your hardware sets the ceiling, a bad connection only nudges it down a step
+  - player smoothing/prediction are left to the clients preferences again, auto-tune doesn't force them on
+* v1.3.4 stability pass for big/busy servers
+  - smoother on rented/shared hosts, now TRYING to read the actual server box specs not the hosts specs
+  - "Update Rate" renamed to "ZDO Send Rate"
+  - better disconnect logging to track down any hiccups
+* v1.3.3 multi-player area fixes + permission-mod compat
+  - players flying / hits from across the map fixed. BulkTransferGuard was the cause, replaced with BulkTransferGate (raises ServerSync send queue gate at the source instead of suppressing ZDOMan.SendZDOs)
+  - delta compression self-heals now — full vanilla keyframe every 5s per peer/zdo so a dropped packet doesn't desync fields forever
+  - RPC router stopped wasting cycles forwarding server-targeted RPCs to itself
+  - IsActiveAreaLoaded gate uses vanilla active-area only, megabases stop choking on it
+  - ported SSS defensive trio (humanoid null guard, WNT collider re-init, ship request-handoff)
+  - CreateDestroyObjects NRE prune. fires when permission mods like TargetPortalProtection block portal destroy on the dedi and leave m_instances out of sync
+  - broad server ownership auto-skips portals when TargetPortalProtection is installed
+  - misc log + diagnostic tidy
+* v1.3.2 realized the error of my ways
+  - compat with serversync send limits
+  - added experimental server ownership toggles... basically ports the rest of server simulations. off by default
+* v1.3.1 fixes for compression conflicts with SC
+* v1.3.0 server + bandwidth performance pass:
+  - ZDO delta compression — server only re-sends ZDO fields that changed (wire-compatible with vanilla)
+  - Server-side WearNTear skip — UpdateWear short-circuits for stable / invulnerable pieces
+  - Client-side support skip — invulnerable pieces stop running UpdateSupport, max-support pinned at Awake
+  - Shared invulnerability classifier — Immune + Ignore both treated as zero-damage
+  - AoI-filtered SpawnedZone rebroadcast — server-side rebroadcast bound by AoI radius instead of all-peers
+  - Public-test build gating — ready for live valheim updates
+  - Internal reorg — 
 * v1.2.1 per-client Auto-Tune system added:
   - Network/hardware probe runs on first login (latency, jitter, frame time, bandwidth, hardware fingerprint), picks a LOW/MED/HIGH tier, applies tier-appropriate settings automatically
   - Two-axis tier scoring (machine vs link) — strong client on a clean-latency link no longer dragged down by server-bottlenecked bandwidth measurements
@@ -20,15 +54,12 @@
   - Default `Enable Server Auto-Tune` flipped ON (was OFF in 1.2.0)
   - Default `Enable Client-Side Interpolation` flipped OFF (was ON before — the rest of the networking improvements deliver smooth positions on their own; turn back ON if you still see snap/teleport)
   - README rewritten with proper documentation of features, auto-tune, server-authority patches, and the four client-side knobs that are the only settings users should ever touch
-* v1.3.0 server + bandwidth performance pass:
-  - ZDO delta compression — server only re-sends ZDO fields that changed (wire-compatible with vanilla)
-  - Server-side WearNTear skip — UpdateWear short-circuits for stable / invulnerable pieces
-  - Client-side support skip — invulnerable pieces stop running UpdateSupport, max-support pinned at Awake
-  - Shared invulnerability classifier — Immune + Ignore both treated as zero-damage
-  - AoI-filtered SpawnedZone rebroadcast — server-side rebroadcast bound by AoI radius instead of all-peers
-  - Public-test build gating — ready for live valheim updates
-  - Internal reorg — 
-* v1.3.1 fixes for compression conflicts with SC
-* v1.3.2 realized the error of my ways
-  - compat with serversync send limits
-  - added experimental server ownership toggles... basically ports the rest of server simulations. off by default
+* v1.2.0 removed log snapshots beta, will have to become its own mod someday soon
+* v1.1.9 adjustments to player positioning patches as well as default config settings, added a new beta feature for login snapshots as well
+* v1.1.8 better client position handling for players with higher ping differences (only works when installed on server and client)
+* v1.1.7 various tweaks and a bug fix for accidentally hiding the player-player poistion sync in configs 
+* v1.1.6 better server checking for renamed assemblys 
+* v1.1.5 fixes to server authority ai patches. improved performance, stopped causing issues with interactions and monsters... 
+* v1.1.1 fixed single player running logic as dedicated server and spamming errors finally
+* v1.1.0 compatibility updates
+* v1.0.2 update for not playing well with wackies db
