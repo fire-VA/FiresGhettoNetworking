@@ -121,7 +121,7 @@ namespace FiresGhettoNetworkMod
 
             try
             {
-                int extendedRadius = FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value;
+                int extendedRadius = RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
                 int activeArea = (ZoneSystem.instance?.m_activeArea ?? DefaultActiveArea) + extendedRadius;
                 int distantArea = (ZoneSystem.instance?.m_activeDistantArea ?? DefaultDistantArea) + extendedRadius;
 
@@ -351,7 +351,7 @@ namespace FiresGhettoNetworkMod
             if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetPeers().Count == 0)
                 return true;
 
-            int extendedRadius = FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value;
+            int extendedRadius = RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
             int activeArea = (ZoneSystem.instance?.m_activeArea ?? DefaultActiveArea) + extendedRadius;
 
             __result = !IsPointInsideAnyPeerActiveArea(point, activeArea);

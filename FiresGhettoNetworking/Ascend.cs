@@ -23,6 +23,10 @@ namespace FiresGhettoNetworkMod
         // can call StartCoroutine via the plugin instance.
         public static FiresGhettoNetworkMod Instance { get; private set; }
 
+        // BepInEx log source — banner emitters route through this (not Debug.Log)
+        // so banner lines don't stdout-echo a raw white console duplicate.
+        public static BepInEx.Logging.ManualLogSource Log;
+
         public static ConfigEntry<LogLevel> ConfigLogLevel;
         public static ConfigEntry<bool> ConfigEnableCompression;
         public static ConfigEntry<UpdateRateOptions> ConfigUpdateRate;
@@ -81,6 +85,7 @@ namespace FiresGhettoNetworkMod
         private void Awake()
         {
             Instance = this;
+            Log = Logger;
             Harmony = new Harmony(PluginGUID);
 
             // BIG obnoxious "loading" banner — fires FIRST before any

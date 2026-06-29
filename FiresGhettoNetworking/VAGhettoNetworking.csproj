@@ -242,6 +242,7 @@
     <Compile Include="Networking\RpcHandlers\TriggerOnDeathHandler.cs" />
     <Compile Include="Networking\RpcHandlers\WNTHealthChangedHandler.cs" />
     <Compile Include="Networking\RpcMethodHandler.cs" />
+    <Compile Include="Networking\RenderLimitsCompat.cs" />
     <Compile Include="Networking\RpcRouterPatches.cs" />
     <Compile Include="Networking\ServerAuthorityPatches.cs" />
     <Compile Include="Networking\ServerClientUtils.cs" />

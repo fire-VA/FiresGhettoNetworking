@@ -131,9 +131,18 @@ namespace FiresGhettoNetworkMod
         //  Public entry points
         // ─────────────────────────────────────────────────────────────
 
+        // Routes a one-line banner header through the plugin's BepInEx log source
+        // (not Debug.Log) so it prints once instead of colour+white. FUC colours it
+        // by the Fires source name.
+        private static void EmitHeader(string text)
+        {
+            if (FiresGhettoNetworkMod.Log != null) FiresGhettoNetworkMod.Log.LogInfo(text);
+            else Debug.Log($"[FiresGhettoNetworkMod] {text}");
+        }
+
         public static void Print()
         {
-            try { Debug.Log($"[FiresGhettoNetworkMod] Fires Ghetto Networking Loaded."); }
+            try { EmitHeader("Fires Ghetto Networking Loaded."); }
             catch { }
 
             try
@@ -149,7 +158,7 @@ namespace FiresGhettoNetworkMod
 
         public static void PrintBig()
         {
-            try { Debug.Log($"[FiresGhettoNetworkMod] Fires Ghetto Networking Loading..."); }
+            try { EmitHeader("Fires Ghetto Networking Loading..."); }
             catch { }
 
             try
