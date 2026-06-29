@@ -5,6 +5,7 @@
   - HYPERBOOST toggle — one-switch max-throughput override (Steam send/recv rates + buffers) for benchmarking or high-bandwidth links. Default off; pinning everything wide open really isn't a great idea, but if you really want to, have at it (requires fires steamworks patcher on client as well as server)
   - Patcher-dependent settings (the recv-buffer tuning, including HyperBoost's recv side)
   - Crops should now grow correctly under server-side simulation
+  - Plays nice with Render Limits now — if Jere's Render Limits is installed, FGN stops stacking its extended zone radius on top and lets Render Limits own the zone load distances (server authority stays intact)
 * v1.3.7 disconnect + fall-through + steamworks-limit fixes
   - Clients no longer choke on default Steam bandwidth limits during big transfers.
   - The bandwidth lift now applies through other mods' socket wrappers instead of getting lost.

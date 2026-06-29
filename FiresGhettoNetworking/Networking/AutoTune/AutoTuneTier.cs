@@ -516,6 +516,8 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         public static int ExtendedZoneRadius()
         {
+            // Defer to Render Limits when present — it owns zone-load sizing, so FGN adds no layers.
+            if (RenderLimitsCompat.Present) return 0;
             if (UseServerAutoTune())
                 return TierPresets.For(AutoTuneState.ServerTier).ExtendedZoneRadius;
             return FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value;
