@@ -389,17 +389,17 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool AudioMan_Update_Prefix() => !IsDedicatedServer();
 
-        [HarmonyPatch(typeof(TerrainComp), "Awake")]
-        [HarmonyPrefix]
-        public static bool TerrainComp_Awake_Prefix() => !IsDedicatedServer();
-
+        // TerrainComp.Awake + OnDestroy MUST run on the dedicated server — they are NOT rendering work.
+        // Awake sets m_nview (GetComponent<ZNetView>()), registers the terrain-op RPC, and Loads saved
+        // terrain data; OnDestroy saves + unregisters. Previously both were skipped on the dedi, which left
+        // TerrainComp.m_nview NULL forever → vanilla + ExpandWorldData both NRE at
+        // hm.GetAndCreateTerrainCompiler().m_nview.GetZDO() during location placement (bulk pregen/zone reset
+        // flooded the log), and the server's terrain had no cultivation state (crops got wrongly reaped — see
+        // the Plant.SUpdate note below, which was a band-aid for this same skip). Only the per-frame Update
+        // (mesh/collision rebuild — pure render cost the headless server doesn't need) stays skipped.
         [HarmonyPatch(typeof(TerrainComp), "Update")]
         [HarmonyPrefix]
         public static bool TerrainComp_Update_Prefix() => !IsDedicatedServer();
-
-        [HarmonyPatch(typeof(TerrainComp), "OnDestroy")]
-        [HarmonyPrefix]
-        public static bool TerrainComp_OnDestroy_Prefix() => !IsDedicatedServer();
 
         [HarmonyPatch(typeof(ShieldDomeImageEffect), "Awake")]
         [HarmonyPrefix]

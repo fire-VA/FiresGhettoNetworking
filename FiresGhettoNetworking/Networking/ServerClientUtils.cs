@@ -19,42 +19,46 @@ namespace FiresGhettoNetworkMod
         {
             _earlyLogger = logger;
             IsDedicatedServerDetected = false;
+            string exeName = "";
+
+            // Single summary line ("Detected: DEDICATED (exe via method)") through the
+            // deliberately-early raw logger — replaces the old per-method log trail.
+            void Summarize(string via)
+            {
+                string side = IsDedicatedServerDetected ? "DEDICATED" : "CLIENT/LISTEN";
+                Log($"Detected: {side} ({exeName}{(string.IsNullOrEmpty(via) ? "" : " via " + via)})");
+            }
 
             try
             {
                 // Method 1: Check executable name - most reliable early detection
                 // Supports: valheim_server.exe, valheim_server1.exe, server2.exe, myserver.exe, etc.
                 string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";
-                string exeName = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
+                exeName = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
                 string exeDir = Path.GetDirectoryName(exePath)?.ToLowerInvariant() ?? "";
-                
-                Log($"Executable name: {exeName}");
-                Log($"Executable directory: {exeDir}");
-                
+
                 // Check if executable name contains "server" (handles server1, server2, myserver, etc.)
                 if (exeName.Contains("server"))
                 {
                     IsDedicatedServerDetected = true;
-                    Log("Detected dedicated server via executable name containing 'server'.");
+                    Summarize("exe name");
                     return;
                 }
-                
-                // Check if the executable is in a folder containing "server" 
+
+                // Check if the executable is in a folder containing "server"
                 // (common pattern: "Valheim Server 1", "dedicated_server", etc.)
                 if (exeDir.Contains("server") || exeDir.Contains("dedicated"))
                 {
                     IsDedicatedServerDetected = true;
-                    Log("Detected dedicated server via directory path containing 'server' or 'dedicated'.");
+                    Summarize("exe directory");
                     return;
                 }
 
                 // Method 2: Fast check - dedicated servers commonly run in batch mode
-                Log($"Application.isBatchMode = {Application.isBatchMode}");
-                
                 if (Application.isBatchMode)
                 {
                     IsDedicatedServerDetected = true;
-                    Log("Detected dedicated server via Application.isBatchMode.");
+                    Summarize("Application.isBatchMode");
                     return;
                 }
 
@@ -66,7 +70,7 @@ namespace FiresGhettoNetworkMod
                     if (lowerArg == "-batchmode" || lowerArg == "-nographics" || lowerArg.Contains("dedicated"))
                     {
                         IsDedicatedServerDetected = true;
-                        Log($"Detected dedicated server via command line argument: {arg}");
+                        Summarize($"command line arg '{arg}'");
                         return;
                     }
                 }
@@ -75,7 +79,7 @@ namespace FiresGhettoNetworkMod
                 if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
                 {
                     IsDedicatedServerDetected = true;
-                    Log("Detected dedicated server via null graphics device (headless mode).");
+                    Summarize("null graphics device");
                     return;
                 }
 
@@ -83,7 +87,7 @@ namespace FiresGhettoNetworkMod
                 var znetType = AccessTools.TypeByName("ZNet") ?? Type.GetType("ZNet, Assembly-CSharp");
                 if (znetType == null)
                 {
-                    Log("ZNet type not found; assuming client/listen-server.");
+                    Summarize("no ZNet type found");
                     return;
                 }
 
@@ -95,7 +99,7 @@ namespace FiresGhettoNetworkMod
                     if (result is bool b && b)
                     {
                         IsDedicatedServerDetected = true;
-                        Log("Detected dedicated server via ZNet.IsDedicated().");
+                        Summarize("ZNet.IsDedicated()");
                         return;
                     }
                 }
@@ -108,7 +112,7 @@ namespace FiresGhettoNetworkMod
                     if (result is bool b && b)
                     {
                         IsDedicatedServerDetected = true;
-                        Log("Detected dedicated server via ZNet.IsServer().");
+                        Summarize("ZNet.IsServer()");
                         return;
                     }
                 }
@@ -126,7 +130,7 @@ namespace FiresGhettoNetworkMod
                         if (val is bool vb && vb)
                         {
                             IsDedicatedServerDetected = true;
-                            Log("Detected dedicated server via ZNet.instance.IsServer.");
+                            Summarize("ZNet.instance.IsServer");
                             return;
                         }
                     }
@@ -138,13 +142,13 @@ namespace FiresGhettoNetworkMod
                         if (res is bool vb2 && vb2)
                         {
                             IsDedicatedServerDetected = true;
-                            Log("Detected dedicated server via ZNet.instance.IsDedicated.");
+                            Summarize("ZNet.instance.IsDedicated");
                             return;
                         }
                     }
                 }
 
-                Log("No dedicated-server indicator found; assuming client/listen-server.");
+                Summarize(null);
             }
             catch (Exception ex)
             {

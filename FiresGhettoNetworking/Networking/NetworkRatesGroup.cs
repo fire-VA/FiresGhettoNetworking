@@ -36,7 +36,7 @@ namespace FiresGhettoNetworkMod
 
         private static void ApplyUpdateRate()
         {
-            LoggerOptions.LogMessage($"Update rate set to {FiresGhettoNetworkMod.ConfigUpdateRate.Value}");
+            LoggerOptions.LogInfo($"Update rate set to {FiresGhettoNetworkMod.ConfigUpdateRate.Value}");
         }
 
         public static void ApplySendRates()
@@ -52,7 +52,7 @@ namespace FiresGhettoNetworkMod
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMin", min);
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", max);
 
-            LoggerOptions.LogMessage($"Steam send rates applied: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
+            LoggerOptions.LogInfo($"Steam send rates applied: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
         }
 
         // Temporarily lift global send-rate + send-buffer above the configured tier for fgn_socketramp.
@@ -329,7 +329,7 @@ namespace FiresGhettoNetworkMod
 
             int bytes = EffectiveConfig.SteamSendBufferBytes();
             SetSteamConfig("k_ESteamNetworkingConfig_SendBufferSize", bytes);
-            LoggerOptions.LogMessage($"Steam send buffer applied: {bytes / 1024} KB");
+            LoggerOptions.LogInfo($"Steam send buffer applied: {bytes / 1024} KB");
         }
 
         /// <summary>
@@ -354,7 +354,7 @@ namespace FiresGhettoNetworkMod
 
             int bytes = EffectiveConfig.SteamRecvBufferBytes();
             SetSteamConfig("k_ESteamNetworkingConfig_RecvBufferSize", bytes);
-            LoggerOptions.LogMessage($"Steam recv buffer applied: {bytes / 1024} KB");
+            LoggerOptions.LogInfo($"Steam recv buffer applied: {bytes / 1024} KB");
         }
 
         /// <summary>
@@ -387,7 +387,7 @@ namespace FiresGhettoNetworkMod
 
             int bytes = EffectiveConfig.SteamRecvMaxMessageBytes();
             SetSteamConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", bytes);
-            LoggerOptions.LogMessage($"Steam recv-max-message applied: {bytes / 1024} KB");
+            LoggerOptions.LogInfo($"Steam recv-max-message applied: {bytes / 1024} KB");
         }
 
         // True when the running Steamworks build exposes the per-connection send-buffer
@@ -457,6 +457,13 @@ namespace FiresGhettoNetworkMod
             ApplySendBufferSize();
             ApplyRecvBufferSize();
             ApplyRecvMaxMessageSize();
+
+            // ONE always-visible rates summary per world load; the per-knob
+            // "applied" lines above are LogInfo detail.
+            LoggerOptions.LogMessage(
+                $"Network rates applied: update rate {VanillaFloor.Percent(EffectiveConfig.UpdateRate())}%, "
+                + $"send {EffectiveConfig.SteamSendRateMin() / 1024}-{EffectiveConfig.SteamSendRateMax() / 1024} KB/s, "
+                + $"send buffer {EffectiveConfig.SteamSendBufferBytes() / 1024} KB");
         }
 
         // ====================== SEND RATE PATCHES (Steamworks) ======================

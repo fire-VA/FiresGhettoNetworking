@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.8";
+        public const string PluginVersion = "1.3.10";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -741,11 +741,15 @@ namespace FiresGhettoNetworkMod
             ConfigEnableTimeSliceInstantiation = Config.Bind(
                 "02 - Client Performance",
                 "Enable Time-Slice Instantiation",
-                true,
+                false,
                 "Replace vanilla's fixed 10/100 per-frame ZDO instantiation cap with a per-frame ms\n" +
                 "budget that drains incoming objects across multiple ticks. Eliminates the big spike\n" +
                 "when crossing into a heavy zone. Disable to fall back to the cap-bump transpiler\n" +
                 "(set 'Zone Load Batch Size' to control its multiplier).\n" +
+                "OFF by default: instantiating this fast can spawn a creature/item the instant its ZDO\n" +
+                "arrives — before the structure it rests on, when that ZDO lags a tick behind — which can\n" +
+                "let tames slip locked pens or drop items through floors on zone load. Opt in for the\n" +
+                "smoother zone crossings if your world doesn't hit that.\n" +
                 "CLIENT-ONLY — no effect on dedicated server.");
 
             ConfigInstantiationBudgetMs = Config.Bind(

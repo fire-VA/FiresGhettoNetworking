@@ -120,13 +120,13 @@ namespace FiresGhettoNetworkMod
 
             s_serverSyncCopyCount = CountServerSyncCopies();
             s_budgetedGate = GetBudgetedGate();
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogInfo(
                 $"Bulk-transfer gate budget: {s_serverSyncCopyCount} ServerSync.ConfigSync copy/ies, "
                 + $"Steam buffer ceiling {GetEffectiveSendBufferCeilingBytes() / 1024}KB, "
                 + $"{FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? 40}% budget → per-mod gate "
                 + $"{s_budgetedGate} bytes (Queue Size target {target}).");
             if (s_budgetedGate <= 20000)
-                LoggerOptions.LogMessage(
+                LoggerOptions.LogInfo(
                     "Bulk-transfer budget floored the per-mod gate at the vanilla 20 KB (many ServerSync "
                     + "mods on the current Steam send buffer), so the gate is NOT raised — but the 30s "
                     + "self-disconnect is disarmed regardless, so slow/high-ping peers are never dropped. "
@@ -176,7 +176,7 @@ namespace FiresGhettoNetworkMod
                                         typeof(BulkTransferGatePatches),
                                         nameof(RaiseGateAndDisarmTimeout)));
                                 sitesPatched++;
-                                LoggerOptions.LogMessage(
+                                LoggerOptions.LogInfo(
                                     $"Bulk-transfer patched: {asm.GetName().Name} → {inspectedType.FullName}.{m.Name} "
                                     + $"(gate {t.VanillaConstant} → {(willRaiseGate ? s_budgetedGate : t.VanillaConstant)} bytes, "
                                     + $"30s self-disconnect disarmed at {s_lastTimeoutSitesDisarmed} site(s)).");
@@ -192,7 +192,7 @@ namespace FiresGhettoNetworkMod
 
                 totalTypesFound += typesFound;
                 totalSitesPatched += sitesPatched;
-                LoggerOptions.LogMessage(
+                LoggerOptions.LogInfo(
                     $"Bulk-transfer scan for {t.TypeName}: {typesFound} copies found, {sitesPatched} gate sites patched.");
             }
 
@@ -201,7 +201,7 @@ namespace FiresGhettoNetworkMod
                 + $"{totalSitesPatched} gate sites patched (per-mod gate {s_budgetedGate} bytes, 30s self-disconnect disarmed).");
 
             ApplyJotunnTimeout();
-            LoggerOptions.LogMessage(s_jotunnTimeoutField != null
+            LoggerOptions.LogInfo(s_jotunnTimeoutField != null
                 ? $"Jotunn CustomRPC self-disconnect disarmed (Timeout -> {DisconnectTimeoutSeconds}s)."
                 : "Jotunn CustomRPC not present — no Jotunn timeout to disarm.");
         }
