@@ -1,3 +1,8 @@
+* v1.3.10 dedicated-server terrain fix (world pre-gen, Upgrade World resets, crops)
+  - Fixed a null-reference error flood on dedicated servers during bulk world pre-generation when using server authority 
+* v1.3.9 stuck-raid fix for dedicated servers
+  - Fixed raids / random events that could run forever on a dedicated server — mobs chasing players "for days," only stopping if FGN was removed. With no local player standing at the event origin, vanilla pauses the event timer the moment every player leaves the area, so the raid never reaches its end time — while FGN keeps spawning its event mobs around whoever is online. The timer now runs on wall-clock regardless of who is in the area, so raids end at their authored duration, with a 1-hour hard failsafe that force-ends any event that somehow outlives it.
+  - Internal networking pass (per-packet compression negotiation, bulk-transfer gate, auto-tune probe). No config changes.
 * v1.3.8 crossplay default fix + per-peer adaptive send rate 
   - Crossplay servers could fail to connect after installing FGN. "Force Crossplay" now defaults to "vanilla" 
   - Per-peer adaptive send rate — each client now ramps from the auto-tune baseline up toward its own real link capacity 

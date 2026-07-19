@@ -215,6 +215,12 @@ namespace FiresGhettoNetworkMod
                 $"GetCurrentSpawners.Count={count} Players={_playersInZoneScratch.Count}");
         }
 
+        // Hard ceiling (seconds) on how long a single FGN-driven random event may run on a
+        // dedicated server before it is force-ended, regardless of its authored m_duration.
+        // A raid that outlives any sane duration is a stuck event, not a design choice — this
+        // guarantees the "raid ran for days and never ended" failure mode can never recur.
+        private const float MaxEventWallClockSec = 3600f;
+
         [HarmonyPatch(typeof(RandEventSystem), "FixedUpdate")]
         [HarmonyPrefix]
         static void RandEventSystem_FixedUpdate_Prefix(RandEventSystem __instance)
@@ -224,6 +230,29 @@ namespace FiresGhettoNetworkMod
 
             RandomEvent randomEvent = _f_randomEvent.GetValue(__instance) as RandomEvent;
             if (randomEvent == null) return;
+
+            // A dedicated server has no local player to occupy the event origin, so vanilla's
+            // pause-if-no-player-in-area logic freezes m_time the instant every player leaves
+            // m_eventRange of the spawn point — and the event can then never reach m_duration to
+            // end. Because FGN drives event spawns from live player proximity (UpdateSpawning_Prefix
+            // / RunEventSpawners), not from the origin, a fled raid keeps spawning around the
+            // players forever while its end-timer sits frozen. Forcing the running event to not
+            // pause makes m_time advance on wall-clock so vanilla's own end path
+            // (m_time > m_duration in RandEventSystem.FixedUpdate) fires normally.
+            randomEvent.m_pauseIfNoPlayerInArea = false;
+
+            // Absolute failsafe for events authored with no finite duration (m_duration <= 0) or a
+            // pathologically large one: once the wall-clock run exceeds the ceiling, force-end via
+            // the vanilla teardown so a stuck raid can never persist (nor survive across restarts,
+            // since m_randomEvent is saved). Logged so the drop is visible, never silent.
+            if (randomEvent.m_time > MaxEventWallClockSec)
+            {
+                LoggerOptions.LogWarning(
+                    $"[EventDiag] Random event '{randomEvent.m_name}' exceeded {MaxEventWallClockSec:F0}s wall-clock " +
+                    $"(m_time={randomEvent.m_time:F0}, m_duration={randomEvent.m_duration:F0}) — force-ending as a stuck-raid failsafe.");
+                __instance.ResetRandomEvent();
+                return;
+            }
 
             bool anyPlayerInEventArea = (bool)_m_isAnyPlayerIn.Invoke(__instance, new object[] { randomEvent });
             if (anyPlayerInEventArea)

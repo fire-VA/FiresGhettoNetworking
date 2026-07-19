@@ -469,6 +469,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     SendTierReport(serverPeer, cached.Tier, cached.PingMedianMs);
                     _probeCompletedThisSession = true;
                     _probeRunning = false;
+                    VAGhettoLoadSummary.EmitAutoTune("cached", cached.Tier.ToString());
 
                     // Rolling monitor still kicks in on cached hits — the cached tier
                     // could be stale (network conditions changed since last session)
@@ -485,7 +486,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 }
             }
 
-            LoggerOptions.LogMessage($"[AutoTune] Starting probe — cores={cores}, RAM={ramMb}MB, GPU={gpu}");
+            LoggerOptions.LogInfo($"[AutoTune] Starting probe — cores={cores}, RAM={ramMb}MB, GPU={gpu}");
 
             // Stash session-scoped state so the rolling monitor can reuse it
             // without re-detecting hardware or re-resolving the cache key.
@@ -497,7 +498,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
             if (_latLastAborted)
             {
-                LoggerOptions.LogMessage($"[AutoTune] Initial latency probe aborted (raw=[{string.Join(",", _latLastRawMs)}]) — defaulting to LOW tier, skipping bandwidth probe.");
+                LoggerOptions.LogInfo($"[AutoTune] Initial latency probe aborted (raw=[{string.Join(",", _latLastRawMs)}]) — defaulting to LOW tier, skipping bandwidth probe.");
                 Finalize(serverKey, hwHash, Tier.Low, _latLastMedianMs, serverPeer);
                 yield break;
             }
@@ -505,7 +506,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             int  pingMedian = _latLastMedianMs;
             Tier netTier    = _latLastTier;
 
-            LoggerOptions.LogMessage($"[AutoTune] Latency: raw=[{string.Join(",", _latLastRawMs)}] trimmed→ median={pingMedian}ms p95={_latLastP95Ms}ms iqrJitter={_latLastJitterMs}ms → {netTier}");
+            LoggerOptions.LogInfo($"[AutoTune] Latency: raw=[{string.Join(",", _latLastRawMs)}] trimmed→ median={pingMedian}ms p95={_latLastP95Ms}ms iqrJitter={_latLastJitterMs}ms → {netTier}");
 
             // ---- 5. Frame-time sample (5s passive) ----
             Tier fpsTier = Tier.Medium;
@@ -525,7 +526,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     float fpsMedian = MedianFloat(frameMs);
                     float fpsP95    = P95Float(frameMs);
                     fpsTier         = ScoreFpsTier(fpsMedian, fpsP95);
-                    LoggerOptions.LogMessage($"[AutoTune] Frame time: median={fpsMedian:0.0}ms p95={fpsP95:0.0}ms → {fpsTier}");
+                    LoggerOptions.LogInfo($"[AutoTune] Frame time: median={fpsMedian:0.0}ms p95={fpsP95:0.0}ms → {fpsTier}");
                 }
             }
 
@@ -617,11 +618,11 @@ namespace FiresGhettoNetworkMod.AutoTune
                     foreach (var v in bwSamples) if (v > peak) peak = v;
                     bwKbPerSec = peak;
                     bwProbeCompleted = true;
-                    LoggerOptions.LogMessage($"[AutoTune] Bandwidth: samples=[{string.Join(",", bwSamples.ConvertAll(v => v.ToString("0")))}] KB/s, peak={bwKbPerSec:0} KB/s, timeouts={timeouts}");
+                    LoggerOptions.LogInfo($"[AutoTune] Bandwidth: samples=[{string.Join(",", bwSamples.ConvertAll(v => v.ToString("0")))}] KB/s, peak={bwKbPerSec:0} KB/s, timeouts={timeouts}");
                 }
                 else if (timeouts > 0)
                 {
-                    LoggerOptions.LogMessage($"[AutoTune] Bandwidth probe: all {timeouts} samples timed out — treated as bandwidth-bad signal.");
+                    LoggerOptions.LogInfo($"[AutoTune] Bandwidth probe: all {timeouts} samples timed out — treated as bandwidth-bad signal.");
                     bwKbPerSec = 0f;
                     bwProbeCompleted = true;
                 }
@@ -635,7 +636,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             // Stash for the rolling monitor — machine tier is fixed for the session.
             _sessionMachineTier = machineTier;
 
-            LoggerOptions.LogMessage($"[AutoTune] Final tier: machine={machineTier} (cpu={cpuTier} fps={fpsTier}) latency={latencyTier} bw={(bwProbeCompleted ? bwKbPerSec.ToString("0") + "KB/s" : "n/a")} → {finalTier}");
+            LoggerOptions.LogInfo($"[AutoTune] Final tier: machine={machineTier} (cpu={cpuTier} fps={fpsTier}) latency={latencyTier} bw={(bwProbeCompleted ? bwKbPerSec.ToString("0") + "KB/s" : "n/a")} → {finalTier}");
 
             Finalize(serverKey, hwHash, finalTier, pingMedian, serverPeer);
 
@@ -1011,6 +1012,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             SendTierReport(serverPeer, tier, pingMedianMs);
             _probeCompletedThisSession = true;
             _probeRunning = false;
+            VAGhettoLoadSummary.EmitAutoTune("probed", tier.ToString());
         }
 
         private static void ProbeAbort(string reason)
@@ -1044,7 +1046,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             try { NetworkingRatesGroup.ApplyRecvMaxMessageSize(); }
             catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] ApplyRecvMaxMessageSize failed: {ex.Message}"); }
 
-            LoggerOptions.LogMessage($"[AutoTune] Applied client tier {tier}");
+            LoggerOptions.LogInfo($"[AutoTune] Applied client tier {tier}");
         }
 
         private static void SendTierReport(ZNetPeer serverPeer, Tier tier, int pingMedianMs)

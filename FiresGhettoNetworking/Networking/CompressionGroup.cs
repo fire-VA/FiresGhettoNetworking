@@ -81,7 +81,7 @@ namespace FiresGhettoNetworkMod
             {
                 if (socket == null) return;
                 peerStatus[socket] = new SocketStatus();
-                LoggerOptions.LogMessage($"Compression: New peer connected {socket.GetEndPointString()}");
+                LoggerOptions.LogInfo($"Compression: New peer connected {socket.GetEndPointString()}");
             }
 
             public static void RemovePeer(ISocket socket)
@@ -150,7 +150,7 @@ namespace FiresGhettoNetworkMod
                 yield return null;
             yield return new WaitForEndOfFrame();
             if (ZRoutedRpc.instance == null || ZNet.instance == null) yield break;
-            LoggerOptions.LogMessage($"Compression: ready gate reached (server={_isServer}).");
+            LoggerOptions.LogInfo($"Compression: ready gate reached (server={_isServer}).");
             if (_isServer) yield break;
 
             float deadline = Time.time + 30f;
@@ -164,7 +164,7 @@ namespace FiresGhettoNetworkMod
                 if (status != null && status.sendingCompressed) yield break;   // negotiated — done
                 if (status != null) status.helloSent = true;
                 attempt++;
-                LoggerOptions.LogMessage($"Compression: greeting server via 0L routed RPC (attempt {attempt}).");
+                LoggerOptions.LogInfo($"Compression: greeting server via 0L routed RPC (attempt {attempt}).");
                 SendHelloToServer();
                 yield return new WaitForSeconds(2f);
             }
@@ -209,7 +209,7 @@ namespace FiresGhettoNetworkMod
 
             int version = pkg.ReadInt();
             bool enabled = pkg.ReadBool();
-            LoggerOptions.LogMessage($"Compression: CompHello received from {GetPeerName(peer)} (peer v{version} enabled={enabled}).");
+            LoggerOptions.LogInfo($"Compression: CompHello received from {GetPeerName(peer)} (peer v{version} enabled={enabled}).");
 
             var status = CompressionStatus.GetOrAddStatus(peer.m_socket);
             if (status == null) return;

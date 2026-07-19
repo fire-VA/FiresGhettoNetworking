@@ -439,7 +439,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         {
             // Master gate is purely user-config; no tier override. Tier values
             // only kick in WHEN this is enabled.
-            return FiresGhettoNetworkMod.ConfigEnableTimeSliceInstantiation?.Value ?? true;
+            return FiresGhettoNetworkMod.ConfigEnableTimeSliceInstantiation?.Value ?? false;
         }
 
         // Visual-rendering preferences (how OTHER players look on your screen) are
