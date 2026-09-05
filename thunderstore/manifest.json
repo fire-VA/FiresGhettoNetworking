@@ -1,6 +1,6 @@
 {
     "name": "FiresGhettoNetworking",
-    "version_number": "1.3.10",
+    "version_number": "1.3.16",
     "website_url": "https://github.com/fire-VA/FiresGhettoNetworking",
     "description": "Comprehensive networking + server-authority mod with ZDO delta compression, WearNTear server/client CPU skips for invulnerable pieces, AoI-filtered RPC broadcasts, and a built-in per-client config auto-tuner.",
     "dependencies": [

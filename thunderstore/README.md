@@ -16,6 +16,55 @@ Valheim's vanilla networking is built around small, friend-group sessions. It wo
 You don't need to be a networking engineer to run a heavily-modded server with this. That's the point... 
 I'd rather you not touch your configs at all if you dont understand what they do. 
 
+## What runs in each configuration
+
+The mod is layered. Installing it does not turn everything on — most of the heavy server-authority work sits behind one master switch, and mob simulation sits behind another. Here is exactly what you get.
+
+### Server only (vanilla clients)
+
+Everything here is server-side and needs nothing installed on your players' machines:
+
+- Player limit + advertised player limit, crossplay backend selection
+- Steam send rate / send buffer, send queue size, ZDO send rate
+- Per-peer adaptive send rate (each client ramps toward its own real link capacity)
+- **Bulk-transfer gate** — raises the 20 KB queue limit inside every loaded ServerSync / ServerCharacters copy, so large config syncs on join stop stalling and dropping peers. This is one of the biggest real-world wins and it is entirely server-side
+- Server-side auto-tune, plus all diagnostics and admin commands (`fgn_headroom`, `fgn_flood`, `fgn_socketramp`, `fgn_comptest`, `fgn_zdoflood`)
+- Everything under **Server-Side Simulation**, if you enable it (see below)
+
+### Server + client
+
+Installing on both adds the client-side half:
+
+- **ZSTD packet compression** — negotiated per peer, so it only engages when both ends have the mod. A vanilla client simply never negotiates and stays uncompressed
+- Client-side interpolation and prediction — smooths other players' movement
+- Client auto-tune: zone-load batching, instantiation budget, receive-buffer sizing, destroy throttling
+- HyperBoost receive side (also needs FiresSteamworksPatcher)
+
+### Default settings
+
+Out of the box you get compression, all the send-rate / queue / buffer tuning, adaptive send rate, the bulk-transfer gate, auto-tune, and player-position priority.
+
+**`Enable Server-Side Simulation` is OFF by default**, and it is the master gate — while it is off, the RPC router, area-of-interest filtering, AI LOD, ZDO throttling, server-side raids and the ship fixes are all inactive *even if their own toggles read true*. If you are running a busy server and wondering why those features do not seem to be doing anything, this is why.
+
+### Server-Side Simulation ON
+
+Turning on the master switch activates:
+
+- **RPC router + area-of-interest filtering** — damage numbers, health bars and similar stop being broadcast to everyone and only go to players near the action. This is the big one for large fights
+- AI LOD throttling and distance-based ZDO throttling
+- ZDO delta compression, WearNTear server CPU skips
+- Server-driven spawning and raids / random events
+- Extended zone radius and predictive zone streaming, zone create/destroy authority
+- Ship steering fixes
+
+Note that mobs are still simulated by the nearest **client** at this point. The server decides when and where they spawn, and filters the traffic, but it is not running their brains.
+
+### ZDO ownership transfer — not recommended
+
+This is the switch that moves creature simulation itself onto the server. Ownership is simulation: whoever owns a creature runs its AI, pathing, attacks, movement physics and death checks. There is a broad variant and a Selective one (creatures, plus ships only if you have also enabled server-side ship physics).
+
+**We do not recommend enabling this.** It is the least-tested path in the mod, and handing rigidbody simulation to a headless server has knock-on effects — vehicles are the usual casualty. Every other server-authority feature above works without it. If you do want to experiment, use **Selective** rather than broad, and expect to keep an eye on your boats and carts.
+
 ## Auto-Tune (the new feature in 1.2.1)
 
 The mod now ships with an auto-tuner that handles config adjustments. Most users should never need to touch a config setting again.

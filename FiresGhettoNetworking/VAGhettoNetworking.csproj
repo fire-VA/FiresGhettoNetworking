@@ -106,6 +106,14 @@
       <HintPath>..\..\..\customspawnsmod\lib\BepInEx.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!-- FiresUnifiedCore — SOFT dependency, help-panel registration only.
+         Call site is NoInlining-guarded behind a Chainloader check. (FGN also
+         source-links FiresLog.cs from Core's tree; the local copy wins any
+         type-identity tie, which is fine — we only consume FiresCore.Help.) -->
+    <Reference Include="FiresUnifiedCore">
+      <HintPath>..\..\FiresUnifiedCore\FiresUnifiedCore\bin\Debug\FiresUnifiedCore.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="gui_framework">
       <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\gui_framework.dll</HintPath>
     </Reference>
@@ -218,6 +226,7 @@
     <Compile Include="Networking\BigZdoDiagnostic.cs" />
     <Compile Include="Networking\BulkTransferGatePatches.cs" />
     <Compile Include="Networking\ClientCleanupThrottle.cs" />
+    <Compile Include="Networking\OwnershipHandoffPatches.cs" />
     <Compile Include="Networking\CompressionGroup.cs" />
     <Compile Include="Networking\CompressionRoundTripTest.cs" />
     <Compile Include="Networking\DedicatedServerGroup.cs" />
@@ -255,6 +264,7 @@
     <Compile Include="Networking\ServerDisconnectDiagnostics.cs" />
     <Compile Include="Networking\ServerStabilityPatches.cs" />
     <Compile Include="Networking\ServerStatusDiagnostics.cs" />
+    <Compile Include="Networking\ServerShipSimulationPatches.cs" />
     <Compile Include="Networking\ShipFixesGroup.cs" />
     <Compile Include="Networking\WearNTearClassifier.cs" />
     <Compile Include="Networking\WearNTearClientSupportPatches.cs" />
@@ -269,6 +279,7 @@
     </Compile>
     <Compile Include="Utilities\FiresLogColorPatch.cs" />
     <Compile Include="Utilities\VAGhettoBanner.cs" />
+    <Compile Include="Utilities\FgnHelpContent.cs" />
     <Compile Include="Utilities\VAGhettoLoadSummary.cs" />
   </ItemGroup>
   <ItemGroup>
