@@ -76,19 +76,33 @@ namespace FiresGhettoNetworkMod
             s_built = false;
             if (__instance == null || __instance.m_prefabs == null) return;
 
+            // Ships are only claimed when the operator has explicitly opted into server-driven
+            // ship physics. Claiming a Ship IS simulating it: ownership is what decides who runs
+            // the Rigidbody, and ImpactEffect.OnCollisionEnter only fires for the owner — so a
+            // server that owns an empty hull generates its own collisions and damages the boat
+            // on flat water. Before this gate the toggle below was bound, documented as
+            // "disabled by default", and then never read, so enabling selective ownership
+            // silently handed ship physics to the server anyway. Left off, ships stay
+            // peer-owned exactly like vanilla and the sailing client simulates them.
+            bool ownShips = FiresGhettoNetworkMod.ConfigEnableServerSideShipSimulation?.Value ?? false;
+
             foreach (var prefab in __instance.m_prefabs)
             {
                 if (prefab == null) continue;
                 if (prefab.GetComponent<Player>() != null) continue; // never server-own players
-                if (prefab.GetComponent<Ship>() != null
-                    || prefab.GetComponent<Character>() != null)
+                bool isShip = prefab.GetComponent<Ship>() != null;
+                if (isShip && !ownShips) continue;
+                if (isShip || prefab.GetComponent<Character>() != null)
                 {
                     s_simulatedPrefabs.Add(prefab.name.GetStableHashCode());
                 }
             }
             s_built = true;
             LoggerOptions.LogMessage(
-                $"[ServerOwnership-V3] simulated-prefab set built ({s_simulatedPrefabs.Count} entries — Character/Ship only).");
+                $"[ServerOwnership-V3] simulated-prefab set built ({s_simulatedPrefabs.Count} entries — "
+                + (ownShips
+                    ? "Character + Ship; server-side ship physics is ON)."
+                    : "Character only; ships stay peer-owned because 'Server-Side Ship Simulation' is off)."));
         }
 
         [HarmonyPatch(typeof(ZNetScene), "Shutdown")]

@@ -1,3 +1,12 @@
+* v1.3.16 - pens, boats, and an honest toggle
+  - Tamed and trapped creatures stay put. Leaving an area tore the world down over several frames, so a creature could outlive the walls around it, wander out through the gap, and have that escaped position saved. Anything that can move is now removed in the same frame vanilla removes it, and containment is destroyed last.
+  - Boats no longer take damage on calm water. A server that owned a hull applied no buoyancy until that zone's water finished loading but left gravity running, so empty ships sank into the seabed and damaged themselves on landing. Server-owned hulls now hold still until their surroundings actually exist.
+  - "Server-Side Ship Simulation" now does what it says. It was never wired to anything, so switching on ZDO ownership quietly handed ship physics to the server even with that setting off. Ships stay client-simulated unless you deliberately opt in.
+  - Creatures are placed where the world says they are before the server's first physics step after it takes ownership, rather than one step afterwards.
+  - Added diagnostics so the fixes report what they actually did: teardown now logs how many moving objects it removed in-frame, and a parked ship logs how long it waited for its surroundings to load.
+
+* v1.3.11 - maintenance and fixes
+
 * v1.3.10 dedicated-server terrain fix (world pre-gen, Upgrade World resets, crops)
   - Fixed a null-reference error flood on dedicated servers during bulk world pre-generation when using server authority 
 * v1.3.9 stuck-raid fix for dedicated servers

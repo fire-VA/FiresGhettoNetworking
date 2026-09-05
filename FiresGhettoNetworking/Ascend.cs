@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.10";
+        public const string PluginVersion = "1.3.16";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -244,6 +244,13 @@ namespace FiresGhettoNetworkMod
             // Prefix self-skips on dedi; safe to register on both sides.
             Harmony.PatchAll(typeof(ClientCleanupThrottle));
 
+            // Ownership-handoff pre-snap. Applies vanilla's own OwnerSync rising-edge
+            // snap at the top of FixedUpdate instead of in LateUpdate, so a creature
+            // never simulates a physics step from a dead-reckoned position that drifted
+            // into geometry. Registered on every side — ownership migrates on the
+            // dedicated server too — and it self-limits to creatures with real drift.
+            Harmony.PatchAll(typeof(OwnershipHandoffPatches));
+
             // ====================================================================
             // AUTO-TUNE — runs on both client (probe) and server (self-tune + aggregator).
             // Config entries for Auto-Tune are bound from inside BindConfigs() so the
@@ -270,6 +277,13 @@ namespace FiresGhettoNetworkMod
                 // running with ship fixes off pays zero per-tick ship overhead.
                 if (ConfigEnableShipFixes.Value)
                     Harmony.PatchAll(typeof(ShipFixesGroup));
+
+                // Registered independently of the ship-fixes toggle: this is a correctness guard for
+                // server-OWNED hulls, not a steering feature. Vanilla applies no buoyancy while the
+                // water level is unresolvable but leaves the Rigidbody live, so an unloaded zone means
+                // the hull free-falls and then damages itself on landing (ImpactEffect fires for the
+                // owner). Self-gates to dedicated + owner, so it is inert on the peer-owned default.
+                Harmony.PatchAll(typeof(ServerShipSimulationPatches));
 
                 // ZDO memory management (useful on long-running dedicated servers)
                 Harmony.PatchAll(typeof(ZDOMemoryManager));
@@ -312,6 +326,12 @@ namespace FiresGhettoNetworkMod
                     Harmony.PatchAll(typeof(ServerOwnershipPatches));
                     LoggerOptions.LogMessage(
                         "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED — every persistent ZDO in any peer's active area will be claimed by the server.");
+                    if (!ConfigEnableServerSideShipSimulation.Value)
+                        LoggerOptions.LogWarning(
+                            "V2 BROAD claims SHIPS as well, regardless of 'Server-Side Ship Simulation' being off — it is a "
+                            + "deliberate verbatim port with no per-prefab exclusions. A server-owned hull runs its own physics, "
+                            + "and ImpactEffect only fires for the owner, so boats can take phantom damage on calm water. "
+                            + "Use the Selective (V3) toggle instead if your players sail; it honours that setting.");
                 }
                 else
                 {
@@ -421,6 +441,9 @@ namespace FiresGhettoNetworkMod
 
             // Dummy RPC registration – harmless and needed for some features on both sides
             StartCoroutine(RegisterDummyRpcWhenReady());
+
+            // Shared help panel (FiresCore) — SOFT dependency; no-ops when Core is absent.
+            FgnHelpContent.TryRegister();
 
             // Compact "loaded" banner — antenna with signal-strength bar.
             // Deferred to WORLD LOAD time (when ZNetScene is up) so it
@@ -809,7 +832,14 @@ namespace FiresGhettoNetworkMod
                 "Server-Side Ship Simulation",
                 false,
                 "Server authoritatively simulates ship physics.\n" +
-                "Disabled by default \u2014 enable manually if you want the server to drive ship physics.");
+                "Disabled by default \u2014 enable manually if you want the server to drive ship physics.\n" +
+                "\n" +
+                "This also gates whether Selective (V3) ZDO ownership claims ships. Ownership IS simulation:\n" +
+                "whoever owns a hull runs its Rigidbody, and vanilla only applies impact damage on the owner,\n" +
+                "so a server that owns an empty boat can collide it against its own streaming colliders and\n" +
+                "damage it on flat water. Left OFF, ships stay peer-owned and the sailing client simulates\n" +
+                "them exactly as in vanilla, while creatures still move to the server.\n" +
+                "NOTE: the BROAD (V2) ownership toggle ignores this and claims ships regardless.");
 
             ConfigEnableRpcAoI = Config.Bind(
                 "10 - Server Authority",
