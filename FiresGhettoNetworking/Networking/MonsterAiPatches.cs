@@ -8,6 +8,12 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     public static class MonsterAIPatches
     {
+        // Valheim 1.0 added a groupSalt to SpawnSystem.UpdateSpawnList; it keys the spawn
+        // grouping, so replicating vanilla's own values keeps our replacement pass identical
+        // to the one it stands in for ("b_" biome spawners, "e_" event spawners).
+        private const string BiomeSpawnerSalt = "b_";
+        private const string EventSpawnerSalt = "e_";
+
         private const float SpawnZoneHalfExtentMeters = 32f;
         private const float SpawnZoneExtraExtentForEventDetection = 32f;
         private const float EventDiagnosticIntervalSec = 30f;
@@ -128,7 +134,7 @@ namespace FiresGhettoNetworkMod
             DateTime time = ZNet.instance.GetTime();
             foreach (SpawnSystemList spawnList in ___m_spawnLists)
                 if (spawnList?.m_spawners != null)
-                    __instance.UpdateSpawnList(spawnList.m_spawners, time, false);
+                    __instance.UpdateSpawnList(spawnList.m_spawners, time, false, BiomeSpawnerSalt);
 
             RunEventSpawners(__instance, time, shouldLogEventDiagnostic, activeEvt, runningEvt);
             return false;
@@ -191,7 +197,7 @@ namespace FiresGhettoNetworkMod
             if (shouldLog)
                 LogEventDiagnosticRanEventPath(ss, activeEvt, runningEvt, currentSpawners);
             if (currentSpawners != null)
-                ss.UpdateSpawnList(currentSpawners, time, true);
+                ss.UpdateSpawnList(currentSpawners, time, true, EventSpawnerSalt);
         }
 
         private static void LogEventDiagnosticSkippedNoPlayers(SpawnSystem ss, RandomEvent activeEvt, RandomEvent runningEvt)

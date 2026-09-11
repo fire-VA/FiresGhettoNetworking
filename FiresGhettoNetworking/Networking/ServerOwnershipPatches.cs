@@ -95,14 +95,11 @@ namespace FiresGhettoNetworkMod
             LogFirstFireOnce(serverUid);
             ServerStatusDiagnostics.s_so_passes++;
 
-#if PUBLIC_TEST
             Vector2s zone = ZoneSystem.GetZone(refPosition);
-#else
-            Vector2i zone = ZoneSystem.GetZone(refPosition);
-#endif
 
             __instance.m_tempNearObjects.Clear();
-            __instance.FindSectorObjects(zone, ZoneSystem.instance.m_activeArea, 0, __instance.m_tempNearObjects);
+            // Near band only — the old call passed distantArea 0, which is a far distance of 0 now.
+            __instance.FindSectorObjects(zone, new SimulationDistance(SimDistance.Near(), 0), __instance.m_tempNearObjects);
 
             foreach (var zdo in __instance.m_tempNearObjects)
             {
@@ -117,11 +114,7 @@ namespace FiresGhettoNetworkMod
 
         private static void ApplySssOwnershipRule(ZDOMan zdoMan, ZDO zdo, long callerUid, long serverUid)
         {
-#if PUBLIC_TEST
             Vector2s sector = zdo.GetSector();
-#else
-            Vector2i sector = zdo.GetSector();
-#endif
             bool coveredByAnyPeer = SectorCoveredByAnyConnectedPeer(sector);
             long owner = zdo.GetOwner();
 
@@ -135,7 +128,9 @@ namespace FiresGhettoNetworkMod
                 return;
             }
 
-            bool currentOwnerCovers = owner != 0L && zdoMan.IsInPeerActiveArea(sector, owner);
+            // IsInPeerActiveArea takes a world point now, not a sector — vanilla passes the ZDO's
+            // own position here.
+            bool currentOwnerCovers = owner != 0L && zdoMan.IsInPeerActiveArea(zdo.GetPosition(), owner);
             if (!currentOwnerCovers && coveredByAnyPeer)
             {
                 zdo.SetOwner(serverUid);
@@ -143,16 +138,14 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-#if PUBLIC_TEST
         private static bool SectorCoveredByAnyConnectedPeer(Vector2s sector)
-#else
-        private static bool SectorCoveredByAnyConnectedPeer(Vector2i sector)
-#endif
         {
+            int near = SimDistance.Near();
             foreach (var peer in ZNet.instance.GetPeers())
             {
                 if (peer == null) continue;
-                if (ZNetScene.InActiveArea(sector, ZoneSystem.GetZone(peer.GetRefPos())))
+                // ZNetScene.InActiveArea now takes a world point, not a sector, so compare zones directly.
+                if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(peer.GetRefPos()), sector, near))
                     return true;
             }
             return false;

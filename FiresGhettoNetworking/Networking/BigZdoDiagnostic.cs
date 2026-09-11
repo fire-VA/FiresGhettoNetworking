@@ -4,14 +4,13 @@ using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
-#if !PUBLIC_TEST
     [HarmonyPatch]
     public static class BigZdoDiagnostic
     {
         private const int VanillaWarningThreshold = 100;
         private const int WireFormatByteCountCeiling = 255;
 
-        // True only while ZDOMan.SaveAsync is iterating the full ZDO set to disk.
+        // True only while ZDOMan is iterating the full ZDO set to disk.
         // During a full-world save every ZDO.Save fires this prefix; on a large
         // world that is millions of calls in one burst. The diagnostic allocates
         // seven Lists per call (one GetSave* each), which roughly doubles the
@@ -24,13 +23,18 @@ namespace FiresGhettoNetworkMod
         // same oversized buckets during normal play.
         private static bool s_bulkSaveInProgress;
 
-        [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.SaveAsync))]
+        // Valheim 1.0 replaced ZDOMan.SaveAsync with a save state machine
+        // (PrepareSave/BeginSave/UpdateSaveState/EndSave/SaveChunk(s)/SaveCleanup). SaveChunk is
+        // the method that actually loops zdo.Save() over the world, so bracketing it is both the
+        // exact analogue of the old patch and self-balancing — the flag cannot get stuck on if a
+        // save is abandoned midway, which a PrepareSave/SaveCleanup pair could.
+        [HarmonyPatch(typeof(ZDOMan), "SaveChunk")]
         [HarmonyPrefix]
-        public static void ZDOMan_SaveAsync_Prefix() => s_bulkSaveInProgress = true;
+        public static void ZDOMan_SaveChunk_Prefix() => s_bulkSaveInProgress = true;
 
-        [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.SaveAsync))]
+        [HarmonyPatch(typeof(ZDOMan), "SaveChunk")]
         [HarmonyFinalizer]
-        public static void ZDOMan_SaveAsync_Finalizer() => s_bulkSaveInProgress = false;
+        public static void ZDOMan_SaveChunk_Finalizer() => s_bulkSaveInProgress = false;
 
         [HarmonyPatch(typeof(ZDO), nameof(ZDO.Save))]
         [HarmonyPrefix]
@@ -73,27 +77,42 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        private static BucketSnapshot SnapshotSaveBuckets(ZDOID uid) => new BucketSnapshot
+        // Valheim 1.0 folded the seven per-type getters into one call that hands back every
+        // bucket at once. That is strictly better here: the old shape allocated seven lists per
+        // ZDO, which is exactly the cost the bulk-save guard below exists to dodge.
+        private static BucketSnapshot SnapshotSaveBuckets(ZDOID uid)
         {
-            Floats      = ZDOExtraData.GetSaveFloats(uid).Count,
-            Vector3s    = ZDOExtraData.GetSaveVec3s(uid).Count,
-            Quaternions = ZDOExtraData.GetSaveQuaternions(uid).Count,
-            Ints        = ZDOExtraData.GetSaveInts(uid).Count,
-            Longs       = ZDOExtraData.GetSaveLongs(uid).Count,
-            Strings     = ZDOExtraData.GetSaveStrings(uid).Count,
-            ByteArrays  = ZDOExtraData.GetSaveByteArrays(uid).Count,
-        };
+            ZDOExtraData.GetSaveData(uid,
+                out var floats, out var vec3s, out var quats, out var ints,
+                out var longs, out var strings, out var byteArrays, out _);
+            return Count(floats, vec3s, quats, ints, longs, strings, byteArrays);
+        }
 
-        private static BucketSnapshot SnapshotLiveBuckets(ZDOID uid) => new BucketSnapshot
+        private static BucketSnapshot SnapshotLiveBuckets(ZDOID uid)
         {
-            Floats      = ZDOExtraData.GetFloats(uid).Count,
-            Vector3s    = ZDOExtraData.GetVec3s(uid).Count,
-            Quaternions = ZDOExtraData.GetQuaternions(uid).Count,
-            Ints        = ZDOExtraData.GetInts(uid).Count,
-            Longs       = ZDOExtraData.GetLongs(uid).Count,
-            Strings     = ZDOExtraData.GetStrings(uid).Count,
-            ByteArrays  = ZDOExtraData.GetByteArrays(uid).Count,
-        };
+            ZDOExtraData.GetData(uid,
+                out var floats, out var vec3s, out var quats, out var ints,
+                out var longs, out var strings, out var byteArrays, out _);
+            return Count(floats, vec3s, quats, ints, longs, strings, byteArrays);
+        }
+
+        private static BucketSnapshot Count<TF, TV, TQ, TI, TL, TS, TB>(
+            System.Collections.Generic.List<TF> floats,
+            System.Collections.Generic.List<TV> vec3s,
+            System.Collections.Generic.List<TQ> quats,
+            System.Collections.Generic.List<TI> ints,
+            System.Collections.Generic.List<TL> longs,
+            System.Collections.Generic.List<TS> strings,
+            System.Collections.Generic.List<TB> byteArrays) => new BucketSnapshot
+            {
+                Floats      = floats?.Count     ?? 0,
+                Vector3s    = vec3s?.Count      ?? 0,
+                Quaternions = quats?.Count      ?? 0,
+                Ints        = ints?.Count       ?? 0,
+                Longs       = longs?.Count      ?? 0,
+                Strings     = strings?.Count    ?? 0,
+                ByteArrays  = byteArrays?.Count ?? 0,
+            };
 
         private static string FormatZdoContext(ZDO zdo, string sourceLabel)
         {
@@ -148,5 +167,4 @@ namespace FiresGhettoNetworkMod
             };
         }
     }
-#endif
 }

@@ -1,3 +1,7 @@
+* v1.4.1 - fixed a compatibility issue with ValheimCommunityPatch
+
+* v1.4.0 - updated for Valheim 1.0
+
 * v1.3.16 - pens, boats, and an honest toggle
   - Tamed and trapped creatures stay put. Leaving an area tore the world down over several frames, so a creature could outlive the walls around it, wander out through the gap, and have that escaped position saved. Anything that can move is now removed in the same frame vanilla removes it, and containment is destroyed last.
   - Boats no longer take damage on calm water. A server that owned a hull applied no buoyancy until that zone's water finished loading but left gravity running, so empty ships sank into the seabed and damaged themselves on landing. Server-owned hulls now hold still until their surroundings actually exist.

@@ -54,13 +54,18 @@ namespace FiresGhettoNetworkMod
         // wrap entirely.
         private static readonly HashSet<ZDO> _inAreaThisFrame = new HashSet<ZDO>();
 
+        // Stands down when an earlier prefix already owns the unload pass. Those lists need not be the full
+        // in-area set (ValheimCommunityPatch passes empty ones), and trusting them destroys every live instance.
         [HarmonyPatch(typeof(ZNetScene), "RemoveObjects")]
         [HarmonyPrefix]
         public static bool RemoveObjects_ClientThrottle_Prefix(
             ZNetScene __instance,
             List<ZDO> currentNearObjects,
-            List<ZDO> currentDistantObjects)
+            List<ZDO> currentDistantObjects,
+            bool __runOriginal)
         {
+            if (!__runOriginal) return false;
+
             if (IsDedicatedServer()) return true;
 
             int maxDestroysPerFrame = FiresGhettoNetworkMod.ConfigClientMaxDestroysPerFrame?.Value ?? 0;

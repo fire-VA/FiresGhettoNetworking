@@ -1,4 +1,4 @@
-﻿using BepInEx.Configuration;
+using BepInEx.Configuration;
 using HarmonyLib;
 using System.Collections.Generic;
 using System.Reflection;
@@ -242,7 +242,6 @@ namespace FiresGhettoNetworkMod
         // (falling back to ConfigPlayerLimit), matching the same ResolveAdvertisedLimit
         // helper used elsewhere in this file.
 
-#if !PUBLIC_TEST
         [HarmonyPatch(typeof(Steamworks.SteamMatchmaking), nameof(Steamworks.SteamMatchmaking.CreateLobby))]
         [HarmonyPrefix]
         static void OverrideSteamLobbyMaxMembers(Steamworks.ELobbyType eLobbyType, ref int cMaxMembers)
@@ -264,7 +263,6 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogInfo($"Overriding SteamGameServer.SetMaxPlayerCount cPlayersMax: {cPlayersMax} → {target}");
             cPlayersMax = target;
         }
-#endif
 
         private static List<CodeInstruction> RewriteConstBeforeFieldStore(
             IEnumerable<CodeInstruction> instructions,

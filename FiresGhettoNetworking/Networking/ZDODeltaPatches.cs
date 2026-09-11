@@ -25,12 +25,7 @@ namespace FiresGhettoNetworkMod
     /// vanilla sets only the keys present in the packet and never clears the
     /// field dicts, so a delta packet applies cleanly on top of existing client
     /// state. See assembly_valheim/ZDO.cs:565 Deserialize for the contract.
-    ///
-    /// Public-test note: ZDOExtraData.Get* helpers were removed in the
-    /// public-test refactor; the whole class compiles out under PUBLIC_TEST
-    /// and sessions fall back to vanilla full-state serialization.
     /// </summary>
-#if !PUBLIC_TEST
     [HarmonyPatch]
     public static class ZDODeltaPatches
     {
@@ -217,14 +212,11 @@ namespace FiresGhettoNetworkMod
         // for the reference wire format this mirrors.
         private static void WriteDelta(ZDO zdo, ZPackage pkg, ZDOSnapshot snap)
         {
-            var allFloats  = ZDOExtraData.GetFloats(zdo.m_uid);
-            var allVec3s   = ZDOExtraData.GetVec3s(zdo.m_uid);
-            var allQuats   = ZDOExtraData.GetQuaternions(zdo.m_uid);
-            var allInts    = ZDOExtraData.GetInts(zdo.m_uid);
-            var allLongs   = ZDOExtraData.GetLongs(zdo.m_uid);
-            var allStrings = ZDOExtraData.GetStrings(zdo.m_uid);
-            var allBytes   = ZDOExtraData.GetByteArrays(zdo.m_uid);
-            var conn       = ZDOExtraData.GetConnection(zdo.m_uid);
+            // Valheim 1.0 folded the seven per-type getters into a single call that returns
+            // every bucket plus the connection at once.
+            ZDOExtraData.GetData(zdo.m_uid,
+                out var allFloats, out var allVec3s, out var allQuats, out var allInts,
+                out var allLongs, out var allStrings, out var allBytes, out var conn);
 
             var dF = DiffFloats(allFloats, snap.floats);
             var dV = DiffVec3s (allVec3s,  snap.vec3s);
@@ -393,12 +385,14 @@ namespace FiresGhettoNetworkMod
             snap.quats.Clear();
             snap.ints.Clear();
             snap.longs.Clear();
-            foreach (var kv in ZDOExtraData.GetFloats(zdo.m_uid))      snap.floats[kv.Key] = kv.Value;
-            foreach (var kv in ZDOExtraData.GetVec3s(zdo.m_uid))       snap.vec3s[kv.Key]  = kv.Value;
-            foreach (var kv in ZDOExtraData.GetQuaternions(zdo.m_uid)) snap.quats[kv.Key]  = kv.Value;
-            foreach (var kv in ZDOExtraData.GetInts(zdo.m_uid))        snap.ints[kv.Key]   = kv.Value;
-            foreach (var kv in ZDOExtraData.GetLongs(zdo.m_uid))       snap.longs[kv.Key]  = kv.Value;
+            ZDOExtraData.GetData(zdo.m_uid,
+                out var floats, out var vec3s, out var quats, out var ints,
+                out var longs, out _, out _, out _);
+            if (floats != null) foreach (var kv in floats) snap.floats[kv.Key] = kv.Value;
+            if (vec3s  != null) foreach (var kv in vec3s)  snap.vec3s[kv.Key]  = kv.Value;
+            if (quats  != null) foreach (var kv in quats)  snap.quats[kv.Key]  = kv.Value;
+            if (ints   != null) foreach (var kv in ints)   snap.ints[kv.Key]   = kv.Value;
+            if (longs  != null) foreach (var kv in longs)  snap.longs[kv.Key]  = kv.Value;
         }
     }
-#endif
 }

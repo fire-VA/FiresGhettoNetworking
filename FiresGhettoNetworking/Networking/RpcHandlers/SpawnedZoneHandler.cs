@@ -76,11 +76,7 @@ namespace FiresGhettoNetworkMod
             //
             // To actually AoI filter this, we store the zone world position in
             // a thread-local so RoutedRpcManager can pick it up as a position hint.
-#if PUBLIC_TEST
             Vector3 zoneWorldPos = ZoneSystem.GetZonePos(new Vector2s(zoneX, zoneY));
-#else
-            Vector3 zoneWorldPos = ZoneSystem.GetZonePos(new Vector2i(zoneX, zoneY));
-#endif
             SpawnedZonePositionHint.Position = zoneWorldPos;
             SpawnedZonePositionHint.HasHint = true;
 
