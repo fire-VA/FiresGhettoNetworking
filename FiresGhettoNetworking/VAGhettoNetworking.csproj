@@ -17,24 +17,12 @@
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
     <!--
-      Public-test build toggle.
-      Default flipped to `true` on 2026-05-11 when the HintPath'd
-      assembly_valheim_publicized.dll (Steam install path) was refreshed against
-      the upcoming public-test build. With the publicized DLL now exposing
-      Vector2s-style ZoneSystem.GetZone and the new ZDOExtraData internals,
-      the live-build (#else) code path no longer compiles — Vector2i ↔ Vector2s
-      mismatches and missing ZDOExtraData.Get*/GetSave* methods are the
-      expected failure mode if you try to build with this back to `false`.
-
-      To return to live-build compilation: regenerate
-      assembly_valheim_publicized.dll from a live assembly_valheim.dll AND
-      flip this default back to `false`. Don't do one without the other.
-
-      Override at the command line with: msbuild /p:PublicTest=false
-      The conditional <DefineConstants> append lives BELOW the Debug/Release
-      groups so it post-extends whatever DefineConstants those set.
+      The PUBLIC_TEST build toggle was removed on 2026-09-09 when Valheim 1.0 shipped and
+      became the only build in circulation. The mod now targets that API exclusively:
+      Vector2s zones, ZoneSystem/ZNet SimulationDistance instead of m_activeArea, and the
+      consolidated ZDOExtraData.GetData/GetSaveData. Rebuild assembly_valheim_publicized.dll
+      from the live assembly_valheim.dll after any game patch — see Tools/Publicize-Valheim.ps1.
     -->
-    <PublicTest Condition=" '$(PublicTest)' == '' ">false</PublicTest>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -52,16 +40,6 @@
     <DefineConstants>TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  <!--
-    Append PUBLIC_TEST to DefineConstants when the toggle is on. Placed AFTER
-    the Debug/Release groups so $(DefineConstants) already holds DEBUG;TRACE
-    (or TRACE) — the append produces DEBUG;TRACE;PUBLIC_TEST without losing
-    the configuration-specific symbols. Toggle by setting <PublicTest>true</PublicTest>
-    in the top property group, or pass /p:PublicTest=true at the msbuild CLI.
-  -->
-  <PropertyGroup Condition=" '$(PublicTest)' == 'true' ">
-    <DefineConstants>$(DefineConstants);PUBLIC_TEST</DefineConstants>
   </PropertyGroup>
   <Choose>
     <When Condition="($(OS) == 'Unix' OR $(OS) == 'OSX') AND $(GamePath) == ''">
@@ -111,7 +89,7 @@
          source-links FiresLog.cs from Core's tree; the local copy wins any
          type-identity tie, which is fine — we only consume FiresCore.Help.) -->
     <Reference Include="FiresUnifiedCore">
-      <HintPath>..\..\FiresUnifiedCore\FiresUnifiedCore\bin\Debug\FiresUnifiedCore.dll</HintPath>
+      <HintPath>..\..\FiresUnifiedCore\FiresUnifiedCore\bin\Release\FiresUnifiedCore.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="gui_framework">
@@ -265,6 +243,7 @@
     <Compile Include="Networking\ServerStabilityPatches.cs" />
     <Compile Include="Networking\ServerStatusDiagnostics.cs" />
     <Compile Include="Networking\ServerShipSimulationPatches.cs" />
+    <Compile Include="Networking\SimDistance.cs" />
     <Compile Include="Networking\ShipFixesGroup.cs" />
     <Compile Include="Networking\WearNTearClassifier.cs" />
     <Compile Include="Networking\WearNTearClientSupportPatches.cs" />

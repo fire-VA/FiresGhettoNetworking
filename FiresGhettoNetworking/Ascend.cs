@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.3.16";
+        public const string PluginVersion = "1.4.1";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -190,12 +190,7 @@ namespace FiresGhettoNetworkMod
             // with ZDO uid / prefab / position so the offender is actually findable.
             // Runs on both sides because ZDO.Save is hit on both sides; cost is negligible
             // when no bucket is oversized (seven dict lookups, zero allocations).
-#if !PUBLIC_TEST
-            // BigZdoDiagnostic depends on ZDOExtraData.GetSave*/Get* static helpers
-            // which the public-test refactor removed. The class itself is conditionally
-            // compiled out of public-test builds; this registration follows suit.
             Harmony.PatchAll(typeof(BigZdoDiagnostic));
-#endif
 
             // Admin console test for the ServerSync/ServerCharacters disconnect disarm:
             // registers the 'fgn_overload' command + its routed RPCs. The queue force only
@@ -388,21 +383,11 @@ namespace FiresGhettoNetworkMod
                 // is built on; the class is conditionally compiled out on public test.
                 // The registration follows suit, and config-on-but-no-op is fine —
                 // sessions fall back to vanilla full-ZDO serialization.
-#if !PUBLIC_TEST
                 if (ConfigEnableZDODelta.Value)
                 {
                     Harmony.PatchAll(typeof(ZDODeltaPatches));
                     LoggerOptions.LogInfo("ZDO delta compression enabled.");
                 }
-#else
-                if (ConfigEnableZDODelta.Value)
-                {
-                    LoggerOptions.LogWarning(
-                        "ZDO delta compression DISABLED on public-test build " +
-                        "(depends on removed ZDOExtraData.Get* API). " +
-                        "Falling back to vanilla full-ZDO serialization.");
-                }
-#endif
 
                 // WearNTear server CPU optimization — skip support calc for full-health pieces
                 if (ConfigEnableWNTServerOptimization.Value)

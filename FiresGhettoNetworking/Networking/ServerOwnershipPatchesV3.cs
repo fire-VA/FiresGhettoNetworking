@@ -145,19 +145,12 @@ namespace FiresGhettoNetworkMod
 
             long serverUid = ZDOMan.GetSessionID();
 
-#if PUBLIC_TEST
             Vector2s zone = ZoneSystem.GetZone(refPosition);
-#else
-            Vector2i zone = ZoneSystem.GetZone(refPosition);
-#endif
 
             s_tempNearObjects.Clear();
-            __instance.FindSectorObjects(
-                zone,
-                ZoneSystem.instance.m_activeArea,
-                0,
-                s_tempNearObjects);
-            int activatedArea = ZoneSystem.instance.m_activeArea - 1;
+            int nearArea = SimDistance.Near();
+            __instance.FindSectorObjects(zone, new SimulationDistance(nearArea, 0), s_tempNearObjects);
+            int activatedArea = nearArea - 1;
 
             s_passCount++;
             int zdosThisPass = 0;
@@ -168,11 +161,7 @@ namespace FiresGhettoNetworkMod
                 if (zdo == null || !zdo.Persistent) continue;
                 zdosThisPass++;
 
-#if PUBLIC_TEST
                 Vector2s sector = zdo.GetSector();
-#else
-                Vector2i sector = zdo.GetSector();
-#endif
                 long owner = zdo.GetOwner();
                 bool simulated = s_simulatedPrefabs.Contains(zdo.m_prefab);
                 if (simulated) simulatedThisPass++;
@@ -181,13 +170,13 @@ namespace FiresGhettoNetworkMod
                 {
                     // Caller or server owns. Release if no peer covers.
                     // Vanilla / SSS-exact behaviour, same as V2.
-                    if (!ZNetScene.InActiveArea(sector, zone, activatedArea))
+                    if (!SimDistance.ZoneInRadius(zone, sector, activatedArea))
                     {
                         bool anyPeerCovers = false;
                         foreach (var peer in ZNet.instance.GetPeers())
                         {
                             if (peer == null) continue;
-                            if (ZNetScene.InActiveArea(sector, ZoneSystem.GetZone(peer.GetRefPos())))
+                            if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(peer.GetRefPos()), sector, nearArea))
                             {
                                 anyPeerCovers = true;
                                 break;
@@ -204,15 +193,16 @@ namespace FiresGhettoNetworkMod
 
                 // Someone else owns. Vanilla / SSS-exact transfer condition:
                 // owner has stale coverage AND a peer covers this sector.
+                // IsInPeerActiveArea takes a world point now, not a sector.
                 bool currentOwnerCovers = (owner != 0L)
-                    && __instance.IsInPeerActiveArea(sector, owner);
+                    && __instance.IsInPeerActiveArea(zdo.GetPosition(), owner);
                 bool ownerHasStaleCoverage = !currentOwnerCovers;
 
                 bool sectorCoveredByPeer = false;
                 foreach (var peer in ZNet.instance.GetPeers())
                 {
                     if (peer == null) continue;
-                    if (ZNetScene.InActiveArea(sector, ZoneSystem.GetZone(peer.GetRefPos())))
+                    if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(peer.GetRefPos()), sector, nearArea))
                     {
                         sectorCoveredByPeer = true;
                         break;

@@ -1,5 +1,7 @@
 # FiresGhettoNetworkMod
 
+**Updated for Valheim 1.0.**
+
 A comprehensive networking and server-authority mod for Valheim dedicated servers.
  Combines compression, send-rate tuning, queue management, server-side simulation, RPC filtering,
  and a per-client auto-tuner into a single drop-in plugin.

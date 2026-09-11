@@ -122,10 +122,8 @@ namespace FiresGhettoNetworkMod
             try
             {
                 int extendedRadius = RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
-                int activeArea = (ZoneSystem.instance?.m_activeArea ?? DefaultActiveArea) + extendedRadius;
-                int distantArea = (ZoneSystem.instance?.m_activeDistantArea ?? DefaultDistantArea) + extendedRadius;
 
-                CollectZdosFromAllPeerActiveAreas(activeArea, distantArea);
+                CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(extendedRadius));
                 FilterAndDedupeZdos(_cdoNearScratch, _cdoNearFiltered);
                 FilterAndDedupeZdos(_cdoDistantScratch, _cdoDistantFiltered);
                 RecordCreateDestroyObjectsDiagnostics();
@@ -160,20 +158,15 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        private static void CollectZdosFromAllPeerActiveAreas(int activeArea, int distantArea)
+        private static void CollectZdosFromAllPeerActiveAreas(SimulationDistance simulationDistance)
         {
             _cdoNearScratch.Clear();
             _cdoDistantScratch.Clear();
             foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers())
             {
                 if (!peer.IsReady()) continue;
-                Vector3 pos = GetPredictedRefPos(peer);
-#if PUBLIC_TEST
-                Vector2s zone = ZoneSystem.GetZone(pos);
-#else
-                Vector2i zone = ZoneSystem.GetZone(pos);
-#endif
-                ZDOMan.instance.FindSectorObjects(zone, activeArea, distantArea, _cdoNearScratch, _cdoDistantScratch);
+                Vector2s zone = ZoneSystem.GetZone(GetPredictedRefPos(peer));
+                ZDOMan.instance.FindSectorObjects(zone, simulationDistance, _cdoNearScratch, _cdoDistantScratch);
             }
         }
 
@@ -285,7 +278,7 @@ namespace FiresGhettoNetworkMod
 
         private static int CountMissingZonesAcrossAllPeers(ZoneSystem zs, out int firstMissX, out int firstMissY)
         {
-            int activeArea = zs.m_activeArea;
+            int activeArea = SimDistance.Near();
             var zones = zs.m_zones;
             int missing = 0;
             firstMissX = 0;
@@ -296,25 +289,21 @@ namespace FiresGhettoNetworkMod
             {
                 if (!peer.IsReady()) continue;
                 Vector3 refPos = GetPredictedRefPos(peer);
-#if PUBLIC_TEST
                 Vector2s centre = ZoneSystem.GetZone(refPos);
                 for (int y = centre.y - activeArea; y <= centre.y + activeArea; y++)
                     for (int x = centre.x - activeArea; x <= centre.x + activeArea; x++)
-                        if (!zones.ContainsKey(new Vector2s(x, y)))
+                    {
+                        var zone = new Vector2s(x, y);
+                        // Vanilla's own IsActiveAreaLoaded sweeps the square then discards the
+                        // corners via ZonesWithinRadius, so counting them here would report
+                        // zones as "missing" that the game never asked to be loaded.
+                        if (!SimDistance.ZoneInRadius(centre, zone, activeArea)) continue;
+                        if (!zones.ContainsKey(zone))
                         {
                             missing++;
                             if (!capturedFirstMiss) { firstMissX = x; firstMissY = y; capturedFirstMiss = true; }
                         }
-#else
-                Vector2i centre = ZoneSystem.GetZone(refPos);
-                for (int y = centre.y - activeArea; y <= centre.y + activeArea; y++)
-                    for (int x = centre.x - activeArea; x <= centre.x + activeArea; x++)
-                        if (!zones.ContainsKey(new Vector2i(x, y)))
-                        {
-                            missing++;
-                            if (!capturedFirstMiss) { firstMissX = x; firstMissY = y; capturedFirstMiss = true; }
-                        }
-#endif
+                    }
             }
             return missing;
         }
@@ -352,24 +341,21 @@ namespace FiresGhettoNetworkMod
                 return true;
 
             int extendedRadius = RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
-            int activeArea = (ZoneSystem.instance?.m_activeArea ?? DefaultActiveArea) + extendedRadius;
+            int activeArea = SimDistance.Near() + extendedRadius;
 
             __result = !IsPointInsideAnyPeerActiveArea(point, activeArea);
             return false;
         }
 
+        // ZNetScene.InActiveArea / OutsideActiveArea no longer accept a radius — they read the
+        // synced SimulationDistance internally — so an extended radius has to be evaluated
+        // against the same radial rule directly.
         private static bool IsPointInsideAnyPeerActiveArea(Vector3 point, int activeArea)
         {
-#if PUBLIC_TEST
             Vector2s pointZone = ZoneSystem.GetZone(point);
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
-                if (peer.IsReady() && ZNetScene.InActiveArea(pointZone, ZoneSystem.GetZone(GetPredictedRefPos(peer)), activeArea))
+                if (peer.IsReady() && SimDistance.ZoneInRadius(ZoneSystem.GetZone(GetPredictedRefPos(peer)), pointZone, activeArea))
                     return true;
-#else
-            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
-                if (peer.IsReady() && !ZNetScene.OutsideActiveArea(point, ZoneSystem.GetZone(GetPredictedRefPos(peer)), activeArea))
-                    return true;
-#endif
             return false;
         }
 
