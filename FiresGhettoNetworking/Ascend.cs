@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.11";
+        public const string PluginVersion = "1.4.12";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -82,7 +82,6 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<int> ConfigBulkTransferBudgetPercent;
         public static ConfigEntry<bool> ConfigHyperBoost;
 
-        private static bool _dummyRpcRegistered = false;
 
         private void Awake()
         {
@@ -323,9 +322,6 @@ namespace FiresGhettoNetworkMod
                     LoggerOptions.LogInfo("Server-side features disabled via ConfigEnableServerAuthority = false.");
                 }
             }
-
-            StartCoroutine(RegisterDummyRpcWhenReady());
-
 
             StartCoroutine(EmitCompactBannerWhenZNetReady());
         }
@@ -1209,29 +1205,6 @@ namespace FiresGhettoNetworkMod
             {
                 ConfigEnableServerAuthority.Value = false;
             }
-        }
-
-        private void Start()
-        {
-            StartCoroutine(RegisterDummyRpcWhenReady());
-        }
-
-        
-
-        private IEnumerator RegisterDummyRpcWhenReady()
-        {
-            while (ZRoutedRpc.instance == null)
-                yield return null;
-
-            if (_dummyRpcRegistered)
-            {
-                Logger.LogInfo("Dummy ForceUpdateZDO RPC already registered — skipping.");
-                yield break;
-            }
-
-            ZRoutedRpc.instance.Register("ForceUpdateZDO", (Action<long>)((sender) => { }));
-            _dummyRpcRegistered = true;
-            Logger.LogInfo("Dummy ForceUpdateZDO RPC registered.");
         }
     }
 
