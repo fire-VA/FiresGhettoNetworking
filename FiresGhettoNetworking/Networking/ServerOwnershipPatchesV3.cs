@@ -4,40 +4,9 @@ using HarmonyLib;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// V3 ServerOwnership — selective include-list. SSS-exact release/transfer
-    /// logic from <see cref="ServerOwnershipPatches"/> with one critical
-    /// difference: only prefabs whose root has a <see cref="Character"/>
-    /// (excluding <see cref="Player"/>) or <see cref="Ship"/> component get
-    /// ownership transferred to the server. Everything else — drops,
-    /// containers, doors, signs, workstations, pickables, beds, traders,
-    /// wards, heightmap pieces, built structures, carts — stays under
-    /// vanilla peer ownership.
-    ///
-    /// Why this exists: V2 (broad SSS-exact) reproduces the original SSS
-    /// behaviour faithfully but inherits SSS's edge cases:
-    ///   - Drops dropped by mob actions sometimes can't be `removedrops`'d
-    ///     (Gand 2026-05-23) — ownership transfer races vs interaction RPC.
-    ///   - Voxel mining/flattening intermittently fails on busy servers
-    ///     (KanKub 2026-05-23) — heightmap RPC routes to server, server
-    ///     applies, but the delta back to clients gets starved.
-    ///   - Carts shake/sink/fly when parked — Rigidbody+ZSyncTransform
-    ///     under server ownership without a ShipFixesGroup equivalent.
-    ///
-    /// V3's bet: 90% of the simulation-offload benefit (mob AI, ship
-    /// physics) lives in the include set. Excluding interactables avoids
-    /// every interaction-RPC race condition. Carts stay peer-owned until
-    /// a `VagonFixesGroup` equivalent of ShipFixesGroup is written.
-    ///
-    /// MUTUAL EXCLUSION with V2: Ascend.cs picks ONE of V2 or V3 based on
-    /// config. They both prefix <see cref="ZDOMan.ReleaseNearbyZDOS"/> so
-    /// they cannot coexist — V3 takes precedence when both flags are on,
-    /// since selective is the safer default.
-    ///
-    /// HISTORY: V1 (deleted 2026-05-22) had selective scope BUT also two
-    /// extra deviations that froze mobs — CHANGE #1 (server-as-owner
-    /// always-covering) and CHANGE #3 (sticky ownership never releases
-    /// simulated prefabs). V3 inherits ONLY the selective scope idea from
-    /// V1; the release/transfer mechanics are SSS-exact like V2.
+    /// Selective server ownership: only Character (excluding Player) and Ship prefabs transfer, so
+    /// interactables stay peer-owned and avoid the interaction-RPC races broad ownership exposes. Mutually
+    /// exclusive with ServerOwnershipPatches, and this one wins when both are enabled.
     /// </summary>
     [HarmonyPatch]
     public static class ServerOwnershipPatchesV3

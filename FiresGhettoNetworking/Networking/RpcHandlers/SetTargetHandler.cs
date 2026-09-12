@@ -33,19 +33,19 @@ namespace FiresGhettoNetworkMod
 
             if (targetZDOID == ZDOID.None)
             {
-                return true; // Clearing target — allow
+                return true; // Clearing target - allow
             }
 
             ZDO targetZDO;
             if (!ZDOMan.instance.m_objectsByID.TryGetValue(targetZDOID, out targetZDO))
             {
-                return true; // Target doesn't exist — allow (vanilla will handle)
+                return true; // Target doesn't exist - allow (vanilla will handle)
             }
 
-            // Distance sanity check — if target is >50km from origin, it's suspicious
+            // Distance sanity check - if target is >50km from origin, it's suspicious
             if (Utils.DistanceXZ(Vector3.zero, targetZDO.m_position) > 50000f)
             {
-                LoggerOptions.LogWarning($"[RpcRouter] SetTarget suspicious — target ZDO at extreme distance ({targetZDO.m_position})");
+                LoggerOptions.LogWarning($"[RpcRouter] SetTarget suspicious - target ZDO at extreme distance ({targetZDO.m_position})");
                 return true;
             }
 
@@ -62,7 +62,7 @@ namespace FiresGhettoNetworkMod
                 // Route back to sender so their client sees the cleared target
                 routedRpcData.m_senderPeerID = ZRoutedRpc.instance.m_id;
 
-                LoggerOptions.LogInfo("[RpcRouter] SetTarget cleared — target was player or tamed creature");
+                LoggerOptions.LogInfo("[RpcRouter] SetTarget cleared - target was player or tamed creature");
             }
 
             return true;

@@ -8,17 +8,10 @@ using FiresGhettoNetworkMod.AutoTune;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Passive, opt-in headroom telemetry: how close real outbound traffic gets to the socket cliff
-    /// that fgn_socketramp finds. The server samples each peer's send-queue (ISocket.GetSendQueueSize —
-    /// the same value vanilla reads in ZDOMan) on a low-frequency timer and logs the peak each minute.
-    ///
-    /// ZERO standing cost by design:
-    ///   * OFF by default — the sampler coroutine is never even started, so it costs literally nothing.
-    ///   * No Harmony hook on any hot method (it POLLS; it does not patch GetSendQueueSize like the
-    ///     overload test does), and no per-frame Update.
-    ///   * When ON, it wakes once every SampleSeconds (default 5s), reads ints, and allocates nothing
-    ///     per sample (one reused WaitForSeconds). A string is built only on the once-a-minute report.
-    ///   * fgn_headroom prints an on-demand snapshot and costs nothing until it's actually run.
+    /// Opt-in headroom telemetry: how close real traffic gets to the socket cliff fgn_socketramp finds. Polls
+    /// each peer's ISocket.GetSendQueueSize on a slow timer and logs the peak once a minute; fgn_headroom
+    /// prints a snapshot on demand. Off by default, so the sampler coroutine never starts. Nothing here
+    /// patches a hot method or allocates per sample.
     /// </summary>
     [HarmonyPatch]
     public static class SendQueueHeadroomMonitor
@@ -117,8 +110,8 @@ namespace FiresGhettoNetworkMod
             {
                 var sock = peers[i] != null ? peers[i].m_socket : null;
                 if (sock == null) continue;
-                int q = sock.GetSendQueueSize();
-                if (q > max) max = q;
+                int queueBytes = sock.GetSendQueueSize();
+                if (queueBytes > max) max = queueBytes;
             }
             return max;
         }
@@ -135,36 +128,32 @@ namespace FiresGhettoNetworkMod
         private static void RPC_Req(long sender)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!IsAdmin(sender)) { Reply(sender, "FGN headroom denied — admin only."); return; }
+            if (!ServerClientUtils.IsAdmin(sender)) { Reply(sender, "FGN headroom denied — admin only."); return; }
             Reply(sender, BuildSnapshot());
         }
 
-        private static void RPC_Resp(long sender, string msg)
-        {
-            if (Console.instance != null) Console.instance.AddString(msg);
-            else LoggerOptions.LogMessage(msg);
-        }
+        private static void RPC_Resp(long sender, string msg) => AdminConsoleEcho.Print(msg);
 
         private static string BuildSnapshot()
         {
             var peers = ZNet.instance.GetPeers();
-            int n = peers.Count, max = 0;
+            int peerCount = peers.Count, max = 0;
             long sum = 0;
             for (int i = 0; i < peers.Count; i++)
             {
                 var sock = peers[i] != null ? peers[i].m_socket : null;
                 if (sock == null) continue;
-                int q = sock.GetSendQueueSize();
-                sum += q;
-                if (q > max) max = q;
+                int queueBytes = sock.GetSendQueueSize();
+                sum += queueBytes;
+                if (queueBytes > max) max = queueBytes;
             }
             int bufKB = EffectiveConfig.SteamSendBufferBytes() / 1024;
-            int avgKB = n > 0 ? (int)(sum / n / 1024) : 0;
+            int avgKB = peerCount > 0 ? (int)(sum / peerCount / 1024) : 0;
             int pct = bufKB > 0 ? (max / 1024) * 100 / bufKB : 0;
             string peak = s_sampling
                 ? $"session peak {s_sessionPeakBytes / 1024} KB"
                 : "session peak n/a (enable the Headroom Monitor config to track it during play)";
-            return $"[Headroom] peers={n}, current max queue={max / 1024} KB ({pct}% of {bufKB} KB buffer), "
+            return $"[Headroom] peers={peerCount}, current max queue={max / 1024} KB ({pct}% of {bufKB} KB buffer), "
                 + $"avg={avgKB} KB; {peak}.";
         }
 
@@ -173,12 +162,5 @@ namespace FiresGhettoNetworkMod
             try { if (ZRoutedRpc.instance != null) ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcResp, msg); } catch { }
         }
 
-        private static bool IsAdmin(long sender)
-        {
-            ZNetPeer peer = ZNet.instance.GetPeer(sender);
-            if (peer == null) return true;   // originated locally on the server/host — the host is admin
-            string host = peer.m_rpc?.GetSocket()?.GetHostName();
-            return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
-        }
     }
 }

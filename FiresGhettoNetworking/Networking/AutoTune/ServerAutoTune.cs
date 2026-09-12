@@ -24,7 +24,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         private static readonly TimeSpan SummaryInterval = TimeSpan.FromMinutes(15);
 
         // Per-peer "AutoTune probe has completed for this peer" flag, populated when
-        // RPC_TIER_REPORT arrives and cleared on disconnect. Other mods can poll this
+        // RpcTierReport arrives and cleared on disconnect. Other mods can poll this
         // (via reflection — soft dependency) to gate their own heavy server→client
         // pushes until the AutoTune probe is done. See FiresRPGmaker's
         // GhettoNetworkingCoexistence helper for the consuming side.

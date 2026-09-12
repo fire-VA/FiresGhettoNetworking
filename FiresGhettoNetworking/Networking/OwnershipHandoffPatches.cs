@@ -4,37 +4,10 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Ownership-handoff pre-snap for creatures.
-    ///
-    /// Vanilla ZSyncTransform.OwnerSync snaps an object onto zdo.GetPosition() on the frame
-    /// it becomes owner (the m_wasOwner rising edge, ZSyncTransform.cs:85-108) — but that
-    /// runs from CustomLateUpdate (MonoUpdaters.cs:80), AFTER the FixedUpdate in which the
-    /// new owner already ran BaseAI.UpdateAI (MonoUpdaters.cs:39) and
-    /// Character.CustomFixedUpdate (:42), and after Unity stepped physics.
-    ///
-    /// Until the previous owner's final update lands, a non-owner dead-reckons the transform
-    /// forward on last-known velocity (ClientSync extrapolates, clamped to 2s), so that first
-    /// owned step can run from a position that drifted into — or through — nearby geometry.
-    /// Unity then depenetrates along the shortest axis at maxDepenetrationVelocity = 2, which
-    /// for a thin wall is frequently the OUTSIDE face. Vanilla's late snap restores position
-    /// and rotation but NOT velocity: m_syncBodyVelocity defaults false (ZSyncTransform.cs:16),
-    /// so the kick that bogus step produced outlives the correction that follows it.
-    ///
-    /// This performs vanilla's own snap at the earliest point of FixedUpdate — ZSyncTransform
-    /// is updated at MonoUpdaters.cs:30, ahead of both BaseAI and Character — so the step
-    /// starts where the ZDO says the creature is and never generates the kick to begin with.
-    ///
-    /// Deliberately conservative:
-    ///   * velocity is left alone. Zeroing it would stall a legitimately-moving creature on
-    ///     every handoff, and ZDOMan.ReleaseNearbyZDOS migrates ownership every 2s.
-    ///   * m_wasOwner is NOT written. Vanilla's LateUpdate pass still runs and lands on the
-    ///     same values, so this is purely the same correction applied earlier.
-    ///   * creatures only. Ships and carts have their own separately tuned handling.
-    ///
-    /// Relevant to this mod specifically: anything that widens the gap between ZDO updates
-    /// (distant-ZDO throttling and AI LOD, both ServerAuthority-gated) lengthens the
-    /// dead-reckoning window and makes the drift worse, so FGN's own optimizations raise the
-    /// odds of the very step this removes.
+    /// Applies vanilla's ownership-edge snap (ZSyncTransform.OwnerSync) at the top of FixedUpdate instead of
+    /// in LateUpdate, so a creature's first owned physics step starts from the ZDO position rather than a
+    /// dead-reckoned one that may have drifted into geometry. Velocity and m_wasOwner are left to vanilla;
+    /// creatures only.
     /// </summary>
     [HarmonyPatch]
     public static class OwnershipHandoffPatches

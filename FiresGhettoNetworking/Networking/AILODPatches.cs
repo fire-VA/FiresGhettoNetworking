@@ -23,17 +23,17 @@ namespace FiresGhettoNetworkMod
                 && !SendCongestion.AnyPeerCongested())
                 return true;
 
-            ServerStatusDiagnostics.s_ailod_examined++;
+            ServerStatusDiagnostics.s_aiLod_examined++;
 
             if (__instance.IsPlayer() || __instance.IsTamed())
             {
-                ServerStatusDiagnostics.s_ailod_playerOrTamed++;
+                ServerStatusDiagnostics.s_aiLod_playerOrTamed++;
                 return true;
             }
 
             float nearestDist = ComputeDistanceToNearestPeer(__instance.transform.position,
                                                              out int peerCount);
-            ServerStatusDiagnostics.s_ailod_peersLastSeen = peerCount;
+            ServerStatusDiagnostics.s_aiLod_peersLastSeen = peerCount;
             UpdateNearestDistanceObservedRange(nearestDist);
 
             float nearMeters = FiresGhettoNetworkMod.ConfigAILODNearDistance.Value;
@@ -41,14 +41,14 @@ namespace FiresGhettoNetworkMod
 
             if (nearestDist <= nearMeters)
             {
-                ServerStatusDiagnostics.s_ailod_decidedNear++;
+                ServerStatusDiagnostics.s_aiLod_decidedNear++;
                 return true;
             }
 
             if (nearestDist > farMeters)
                 return DecideFarBandTickOrSkip(__instance, dt);
 
-            ServerStatusDiagnostics.s_ailod_decidedMidBand++;
+            ServerStatusDiagnostics.s_aiLod_decidedMidBand++;
             return true;
         }
 
@@ -77,10 +77,10 @@ namespace FiresGhettoNetworkMod
 
         private static void UpdateNearestDistanceObservedRange(float nearestDist)
         {
-            if (nearestDist < ServerStatusDiagnostics.s_ailod_minNearestDist)
-                ServerStatusDiagnostics.s_ailod_minNearestDist = nearestDist;
-            if (nearestDist > ServerStatusDiagnostics.s_ailod_maxNearestDist && nearestDist < float.MaxValue)
-                ServerStatusDiagnostics.s_ailod_maxNearestDist = nearestDist;
+            if (nearestDist < ServerStatusDiagnostics.s_aiLod_minNearestDist)
+                ServerStatusDiagnostics.s_aiLod_minNearestDist = nearestDist;
+            if (nearestDist > ServerStatusDiagnostics.s_aiLod_maxNearestDist && nearestDist < float.MaxValue)
+                ServerStatusDiagnostics.s_aiLod_maxNearestDist = nearestDist;
         }
 
         private static bool DecideFarBandTickOrSkip(Character mob, float dt)
@@ -91,10 +91,10 @@ namespace FiresGhettoNetworkMod
 
             if (shouldSkipThisTick)
             {
-                ServerStatusDiagnostics.s_ailod_decidedFarSkipped++;
+                ServerStatusDiagnostics.s_aiLod_decidedFarSkipped++;
                 return false;
             }
-            ServerStatusDiagnostics.s_ailod_decidedFarRan++;
+            ServerStatusDiagnostics.s_aiLod_decidedFarRan++;
             return true;
         }
     }

@@ -5,33 +5,11 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Server-driven ship physics: never simulate a hull in an environment that has not loaded yet.
-    ///
-    /// Vanilla resolves the water surface through Floating.GetWaterLevel, which locates a WaterVolume
-    /// with Physics.OverlapSphere and returns a -10000 SENTINEL when it finds none (Floating.cs:216).
-    /// Ship.CustomFixedUpdate averages five of those samples and bails out before m_body.WakeUp() and
-    /// before a single buoyancy force is applied whenever the result sits above m_disableLevel (-0.5):
-    ///
-    ///     num3 = worldCenterOfMass.y - waterLevelAverage - m_waterLevelOffset;
-    ///     if (num3 > m_disableLevel) return;
-    ///
-    /// With the sentinel that expression is roughly +10030, so the early-out always wins — yet the
-    /// Rigidbody is still live, so GRAVITY KEEPS RUNNING. The hull free-falls until the seabed collider
-    /// finishes streaming in, and because ImpactEffect.OnCollisionEnter only fires for the ZDO owner, a
-    /// server that owns the ship damages its own hull on the landing. That is the "empty boats take
-    /// damage on calm seas" report: not the sea at all, but a boat falling through a world that has not
-    /// finished loading around it.
-    ///
-    /// A client never hits this because it only owns ships inside zones it has already loaded. The
-    /// dedicated server owns them the moment ownership transfer claims them, which can be long before
-    /// that zone's water and terrain exist.
-    ///
-    /// While the environment is unresolvable — zone not loaded, or water still reading the sentinel —
-    /// the hull is parked (velocity zeroed, body kinematic) and vanilla's update is skipped entirely, so
-    /// no gravity accumulates and no collision can be generated. It is unparked the moment water
-    /// resolves, and only bodies this patch actually changed are ever restored. Engages solely on a
-    /// dedicated server, and solely for ships that server owns — with ownership left on the vanilla
-    /// peer-owned default, this never runs at all.
+    /// Server-driven ship physics never runs in an unloaded environment. Vanilla's water lookup returns a
+    /// sentinel until the zone's WaterVolume exists, which skips buoyancy but leaves gravity running, so a
+    /// server-owned hull free-falls and damages itself on the seabed. Hulls are parked (still and kinematic)
+    /// until water resolves, then released; only bodies this patch changed are ever restored. Dedicated
+    /// server and server-owned ships only.
     /// </summary>
     [HarmonyPatch]
     public static class ServerShipSimulationPatches
@@ -58,7 +36,7 @@ namespace FiresGhettoNetworkMod
             ZNetView ___m_nview,
             Rigidbody ___m_body)
         {
-            if (!IsDedicatedServer()) return true;
+            if (!ServerClientUtils.ZNetIsDedicated()) return true;
             if (__instance == null || ___m_body == null) return true;
             if (___m_nview == null || !___m_nview.IsValid()) return true;
 
@@ -82,7 +60,6 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         public static void ZNetScene_Shutdown_ClearParked() => _parkedByUs.Clear();
 
-        private static bool IsDedicatedServer() => ZNet.instance != null && ZNet.instance.IsDedicated();
 
         private static bool IsEnvironmentReady(Ship ship)
         {

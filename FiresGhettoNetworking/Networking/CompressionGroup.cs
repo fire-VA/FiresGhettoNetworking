@@ -10,21 +10,13 @@ using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
-    // Per-packet network compression using the runtime's built-in Deflate (System.IO.Compression).
-    // No external library, no dictionary, no extra DLLs.
+    // Per-packet compression on the runtime's own Deflate, no external library or shared dictionary.
     //
-    // Negotiation is copied from the proven ServerSync / ArbbyStuffs-AdminSync handshake (the shape
-    // every config-sync mod uses), verified against vanilla routing in assembly_valheim\ZRoutedRpc.cs:
-    //   * one Register<ZPackage> on ZRoutedRpc.instance (NOT bare typed params, NOT per-peer m_rpc) —
-    //     matches AdminSyncing.cs:26;
-    //   * a client reaches the server by targeting 0L (ZRoutedRpc.Everybody), which the receiver
-    //     ALWAYS dispatches locally (ZRoutedRpc.cs:127). Targeting the server peer's m_uid was the bug
-    //     that left every greet unanswered. See GuildSyncManager.cs:427 and ConfigSync.cs:671
-    //     (peer.m_server ? 0L : peer.m_uid);
-    //   * the server replies to a client by targeting that client's peer.m_uid;
-    //   * the handler resolves the peer by sender id and NEVER gates its reply on a status map
-    //     (AdminSyncing.cs:66) — the old "if (status == null) return;" was the silent dead-end;
-    //   * the payload is always a ZPackage (AdminSyncing.cs:60), never bare (int,bool).
+    // Negotiation follows the ServerSync / AdminSync handshake, which vanilla routing requires: one
+    // Register<ZPackage> on ZRoutedRpc.instance, a client reaching the server by targeting 0L (the receiver
+    // always dispatches that locally, while the server peer's m_uid goes unanswered), the server replying to
+    // that client's m_uid, the handler resolving the peer by sender id without gating its reply on a status
+    // map, and a ZPackage payload rather than bare parameters.
     [HarmonyPatch]
     public static class CompressionGroup
     {
@@ -34,7 +26,7 @@ namespace FiresGhettoNetworkMod
         // decompresses on the marker alone, never a per-socket flag. "FGD1" = Fires Ghetto Deflate v1.
         private static readonly byte[] CompressionMagic = { (byte)'F', (byte)'G', (byte)'D', (byte)'1' };
 
-        private const string RPC_COMP_HELLO = "FiresGhetto.CompHello";
+        private const string RpcCompressionHello = "FiresGhetto.CompHello";
 
         // Cached at ZNet.Start, exactly as AdminSyncing caches it at ZNet.Awake (AdminSyncing.cs:23).
         private static bool _isServer;
@@ -65,8 +57,8 @@ namespace FiresGhettoNetworkMod
         // ====================== COMPRESSION STATUS ======================
         internal static class CompressionStatus
         {
-            private const int COMPRESSION_VERSION = 8;
-            public static readonly SocketStatus ourStatus = new SocketStatus { version = COMPRESSION_VERSION, compressionEnabled = false };
+            private const int CompressionVersion = 8;
+            public static readonly SocketStatus ourStatus = new SocketStatus { version = CompressionVersion, compressionEnabled = false };
             private static readonly Dictionary<ISocket, SocketStatus> peerStatus = new Dictionary<ISocket, SocketStatus>();
 
             public class SocketStatus
@@ -135,7 +127,7 @@ namespace FiresGhettoNetworkMod
             // handler, matching AdminSyncing.cs:26 (Register<ZPackage>) rather than bare (int,bool).
             _isServer = ZNet.instance != null && ZNet.instance.IsServer();
             if (ZRoutedRpc.instance != null)
-                ZRoutedRpc.instance.Register<ZPackage>(RPC_COMP_HELLO, RPC_CompHello);
+                ZRoutedRpc.instance.Register<ZPackage>(RpcCompressionHello, RPC_CompHello);
             if (FiresGhettoNetworkMod.Instance != null)
                 FiresGhettoNetworkMod.Instance.StartCoroutine(CompressionReadyGate());
         }
@@ -187,7 +179,7 @@ namespace FiresGhettoNetworkMod
         private static void SendHelloToServer()
         {
             if (ZRoutedRpc.instance == null) return;
-            ZRoutedRpc.instance.InvokeRoutedRPC(0L, RPC_COMP_HELLO, BuildHelloPackage());
+            ZRoutedRpc.instance.InvokeRoutedRPC(0L, RpcCompressionHello, BuildHelloPackage());
         }
 
         // Reply to a specific peer: peer.m_server ? 0L : peer.m_uid — verbatim ServerSync/ArbbyStuffs
@@ -195,7 +187,7 @@ namespace FiresGhettoNetworkMod
         private static void SendHelloToPeer(ZNetPeer peer)
         {
             if (ZRoutedRpc.instance == null || peer == null) return;
-            ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_server ? 0L : peer.m_uid, RPC_COMP_HELLO, BuildHelloPackage());
+            ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_server ? 0L : peer.m_uid, RpcCompressionHello, BuildHelloPackage());
         }
 
         // Both sides run the same handler: record the sender's (version, enabled), decide agreement,

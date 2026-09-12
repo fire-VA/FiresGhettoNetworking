@@ -167,6 +167,19 @@ namespace FiresGhettoNetworkMod
         {
             _earlyLogger?.LogWarning(message);
         }
+        /// <summary>Runtime check for patch bodies: true only once ZNet exists and reports a dedicated server.</summary>
+        public static bool ZNetIsDedicated() => ZNet.instance != null && ZNet.instance.IsDedicated();
+
+        /// <summary>Admin check for routed-RPC senders. A null peer means the call originated on the server itself.</summary>
+        public static bool IsAdmin(long sender)
+        {
+            ZNetPeer peer = ZNet.instance.GetPeer(sender);
+            if (peer == null) return true;
+
+            string host = peer.m_rpc?.GetSocket()?.GetHostName();
+            return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
+        }
+
         
         /// <summary>
         /// Runtime check that can be called after ZNet is initialized

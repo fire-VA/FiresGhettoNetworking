@@ -72,7 +72,7 @@ namespace FiresGhettoNetworkMod
         private static void RPC_Start(long sender, int count, string prefabName, Vector3 pos)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!IsAdmin(sender)) { Msg(sender, "FGN zdoflood denied — admin only."); return; }
+            if (!ServerClientUtils.IsAdmin(sender)) { Msg(sender, "FGN zdoflood denied — admin only."); return; }
             if (s_busy) { Msg(sender, "FGN zdoflood already running."); return; }
             count = Mathf.Clamp(count, 1, MaxCount);
 
@@ -118,7 +118,7 @@ namespace FiresGhettoNetworkMod
         // client may have taken over (same pattern vanilla/Guild uses before mutating a foreign ZDO).
         private static int CleanupNow()
         {
-            int n = 0;
+            int destroyed = 0;
             foreach (var go in s_spawned)
             {
                 if (go == null) continue;
@@ -127,12 +127,12 @@ namespace FiresGhettoNetworkMod
                 {
                     if (!nv.IsOwner()) nv.ClaimOwnership();
                     ZNetScene.instance.Destroy(go);
-                    n++;
+                    destroyed++;
                 }
                 else Object.Destroy(go);
             }
             s_spawned.Clear();
-            return n;
+            return destroyed;
         }
 
         // ---- client: sample frame time across the instantiation ----
@@ -170,24 +170,10 @@ namespace FiresGhettoNetworkMod
             s_sampling = false;
         }
 
-        private static void RPC_Msg(long sender, string msg)
-        {
-            if (Console.instance != null) Console.instance.AddString(msg);
-            else LoggerOptions.LogMessage(msg);
-        }
+        private static void RPC_Msg(long sender, string msg) => AdminConsoleEcho.Print(msg);
 
         // ---- helpers ----
-        private static void Msg(long target, string msg)
-        {
-            try { if (ZRoutedRpc.instance != null) ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcMsg, msg); } catch { }
-        }
+        private static void Msg(long target, string msg) => AdminConsoleEcho.Send(RpcMsg, target, msg);
 
-        private static bool IsAdmin(long sender)
-        {
-            ZNetPeer peer = ZNet.instance.GetPeer(sender);
-            if (peer == null) return true;   // originated locally on the server/host — the host is admin
-            string host = peer.m_rpc?.GetSocket()?.GetHostName();
-            return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
-        }
     }
 }

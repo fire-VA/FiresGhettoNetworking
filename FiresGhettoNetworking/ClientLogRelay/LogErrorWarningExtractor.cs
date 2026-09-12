@@ -6,19 +6,14 @@ using System.Text;
 namespace VerdantsAscent.Modules.ClientLogRelay
 {
     /// <summary>
-    /// Pure, dependency-free extractor that scans a BepInEx <c>LogOutput.log</c> byte buffer
-    /// and produces a distilled "errors + warnings" report suitable for a .txt file or
-    /// Discord attachment.
-    ///
-    /// The report is structured in two sections:
-    /// <list type="number">
-    /// <item><b>Per-Source Breakdown</b> — lines grouped by the mod/source that produced them
-    /// (extracted from <c>[BracketedTags]</c> and <c>PrefixName:</c> patterns).</item>
-    /// <item><b>Full Chronological List</b> — all errors + warnings in their original order.</item>
-    /// </list>
+    /// Distills a BepInEx LogOutput.log buffer into an errors-and-warnings report: a per-source breakdown
+    /// grouped by the [BracketedTag] or PrefixName: that produced each line, followed by the full
+    /// chronological list. No dependencies beyond the framework.
     /// </summary>
     public static class LogErrorWarningExtractor
     {
+        private const string SectionRule = "# ----------------------------------------------------------";
+
         public static readonly List<string> BenignPatterns = new List<string>
         {
             "Failed to find expected binary shader data",
@@ -150,9 +145,9 @@ namespace VerdantsAscent.Modules.ClientLogRelay
             // Section 1: Per-source breakdown
             if (grouped.Count > 0)
             {
-                sb.AppendLine("# ??????????????????????????????????????????????????????????");
+                sb.AppendLine(SectionRule);
                 sb.AppendLine("#  PER-SOURCE BREAKDOWN");
-                sb.AppendLine("# ??????????????????????????????????????????????????????????");
+                sb.AppendLine(SectionRule);
                 sb.AppendLine();
 
                 foreach (var group in grouped.OrderByDescending(g => g.Errors).ThenByDescending(g => g.Warnings))
@@ -179,13 +174,13 @@ namespace VerdantsAscent.Modules.ClientLogRelay
             }
 
             // Section 2: Full chronological list
-            sb.AppendLine("# ??????????????????????????????????????????????????????????");
+            sb.AppendLine(SectionRule);
             sb.AppendLine("#  FULL CHRONOLOGICAL LIST");
-            sb.AppendLine("# ??????????????????????????????????????????????????????????");
+            sb.AppendLine(SectionRule);
             sb.AppendLine();
 
-            foreach (var l in emittedLines)
-                sb.AppendLine(l);
+            foreach (var emitted in emittedLines)
+                sb.AppendLine(emitted);
 
             result.Report = sb.ToString();
             return result;
@@ -235,7 +230,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
                     map[tag] = group;
                 }
 
-                // Trim the raw line for the grouped view — strip the BepInEx prefix to
+                // Trim the raw line for the grouped view - strip the BepInEx prefix to
                 // keep it concise. e.g.:
                 //   [Error  : Unity Log] VerdantsAscentPieces: marble...
                 // becomes:
@@ -306,7 +301,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
 
         /// <summary>
         /// Strips the BepInEx log-level prefix for the grouped view, leaving just the
-        /// message body. e.g. <c>[Error  : Unity Log] Foo: bar</c> ? <c>Foo: bar</c>.
+        /// message body. e.g. <c>[Error  : Unity Log] Foo: bar</c> -> <c>Foo: bar</c>.
         /// </summary>
         private static string TrimBepInExPrefix(string line)
         {

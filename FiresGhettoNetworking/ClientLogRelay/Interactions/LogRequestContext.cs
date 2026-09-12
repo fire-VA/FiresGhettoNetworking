@@ -3,7 +3,7 @@ using System;
 namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
 {
     /// <summary>
-    /// Snapshot of what a single Discord webhook message represents ? captured at the
+    /// Snapshot of what a single Discord webhook message represents, captured at the
     /// moment the snapshot is posted so the host mod can later resolve a reaction back to
     /// the player it came from.
     ///

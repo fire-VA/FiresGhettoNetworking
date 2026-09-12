@@ -5,24 +5,13 @@ using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
-    // TOMBSTONE: this is a verbatim port of SSS Core.cs ZDOMan_ReleaseNearbyZDOS_Patch.
-    // Three "optimisations" were tried in 2026-05-22 and ALL three froze mobs:
-    //   - selective Character+Ship transfer (instead of broad)
-    //   - sticky server ownership (instead of release-on-no-coverage)
-    //   - server-as-always-covering shortcut in IsInPeerActiveArea
-    // Keep this in SSS-exact shape. See memory/reference_bulk_transfer_guard.md for the
-    // full failure-mode analysis if tempted to deviate.
+    // Verbatim port of SSS Core.cs ZDOMan_ReleaseNearbyZDOS_Patch. Selective Character+Ship transfer, sticky
+    // server ownership and a server-always-covering shortcut were each tried and each froze mobs; keep the
+    // SSS shape (memory/reference_bulk_transfer_guard.md has the analysis).
     //
-    // ONE narrow exception lives in ApplySssOwnershipRule: when
-    // TargetPortalProtection is loaded alongside FGN, TeleportWorld prefabs are
-    // skipped. TPP patches WearNTear.RPC_Remove with a Player.m_localPlayer-based
-    // permission check; on a dedi that field is always null so the check
-    // blanket-blocks portal removals on the server, and the resulting m_instances
-    // desync NRE's CreateDestroyObjects. Leaving portals peer-owned routes the
-    // destroy logic through a client where TPP works as designed. The orphan
-    // prune in ServerAuthorityPatches still handles the same corruption from
-    // other sources — this just stops V2 from creating it in the first place
-    // for the one known case.
+    // ApplySssOwnershipRule carries one exception: with TargetPortalProtection loaded, TeleportWorld prefabs
+    // stay peer-owned. TPP's WearNTear.RPC_Remove check reads Player.m_localPlayer, which is null on a dedi,
+    // so server-owned portals can never be removed and the m_instances desync NREs CreateDestroyObjects.
     [HarmonyPatch]
     public static class ServerOwnershipPatches
     {
@@ -93,7 +82,7 @@ namespace FiresGhettoNetworkMod
 
             long serverUid = ZDOMan.GetSessionID();
             LogFirstFireOnce(serverUid);
-            ServerStatusDiagnostics.s_so_passes++;
+            ServerStatusDiagnostics.s_ownership_passes++;
 
             Vector2s zone = ZoneSystem.GetZone(refPosition);
 
@@ -105,7 +94,7 @@ namespace FiresGhettoNetworkMod
             {
                 if (zdo == null || !zdo.Persistent) continue;
                 if (_portalExclusionActive && _teleportWorldPrefabs.Contains(zdo.m_prefab)) continue;
-                ServerStatusDiagnostics.s_so_zdosProcessed++;
+                ServerStatusDiagnostics.s_ownership_zdosProcessed++;
                 ApplySssOwnershipRule(__instance, zdo, uid, serverUid);
             }
 
@@ -123,7 +112,7 @@ namespace FiresGhettoNetworkMod
                 if (!coveredByAnyPeer)
                 {
                     zdo.SetOwner(0L);
-                    ServerStatusDiagnostics.s_so_releases++;
+                    ServerStatusDiagnostics.s_ownership_releases++;
                 }
                 return;
             }
@@ -134,7 +123,7 @@ namespace FiresGhettoNetworkMod
             if (!currentOwnerCovers && coveredByAnyPeer)
             {
                 zdo.SetOwner(serverUid);
-                ServerStatusDiagnostics.s_so_transfersToServer++;
+                ServerStatusDiagnostics.s_ownership_transfersToServer++;
             }
         }
 

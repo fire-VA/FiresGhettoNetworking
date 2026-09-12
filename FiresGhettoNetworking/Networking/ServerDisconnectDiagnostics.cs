@@ -5,18 +5,10 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Always-on, server-side disconnect logger. Records when each peer drops,
-    /// how long it was connected, and — critically — how many peers dropped in a
-    /// short window. A BURST of disconnects is the fingerprint of a main-thread
-    /// stall (a long world save, a GC pause, a config-reload storm): the server
-    /// freezes long enough that every peer's Steam connection times out at once,
-    /// then they all reconnect and every ServerSync mod re-distributes its full
-    /// config simultaneously. A lone disconnect is just one client's link dying.
-    ///
-    /// This distinction is exactly what's needed to tell "the server hitched and
-    /// dropped everyone" apart from "one player rage-quit" without a structured
-    /// BepInEx log — the two read identically in vanilla output. Logged at Message
-    /// level (disconnects are low-volume) so it's always in the screenlog/console.
+    /// Logs each peer drop with how long it was connected, and counts drops inside a short window. A burst is
+    /// the fingerprint of a main-thread stall - a long save, a GC pause, a config-reload storm - where every
+    /// peer times out at once and then reconnects together; a lone drop is just one link dying. Vanilla output
+    /// reads the same either way. Message level, since disconnects are low-volume.
     /// </summary>
     [HarmonyPatch]
     public static class ServerDisconnectDiagnostics

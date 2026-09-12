@@ -1,5 +1,4 @@
 using System;
-using System;
 using System.Collections;
 using System.Collections.Generic;
 using BepInEx.Configuration;
@@ -14,61 +13,43 @@ using VerdantsAscent.Modules.ClientLogRelay.Webhook;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Wires the drop-in <see cref="ClientLogRelay"/> module into this mod using the
-    /// push-model prescribed by <c>ClientLogRelay/README.md</c>: the client sends an
-    /// unsolicited snapshot of its <c>LogOutput.log</c> + plugin list to the server
-    /// shortly after the peer-info handshake completes. There is no request/response
-    /// dance � one RPC name, one direction.
+    /// Wires the ClientLogRelay module into this mod on the push model: shortly after the peer-info
+    /// handshake the client snapshots its LogOutput.log and plugin list and sends them unprompted over one
+    /// routed RPC. The server registers the disk and Discord consumers and turns each payload into a
+    /// ClientLogArtifacts for ClientLogRelay.ReportArtifacts.
     ///
-    /// On a dedicated server:
-    ///   1. Registers the Disk + Discord consumers with <see cref="ClientLogRelay"/>.
-    ///   2. Registers a routed RPC "VAG_SubmitClientLog" that deserialises the payload,
-    ///      builds a <see cref="ClientLogArtifacts"/>, and hands it to
-    ///      <see cref="ClientLogRelay.ReportArtifacts"/>.
-    ///
-    /// On a client:
-    ///   1. After <c>ZNet.RPC_PeerInfo</c> confirms the connection, a coroutine waits a
-    ///      few seconds for BepInEx-side init to settle, then uses
-    ///      <see cref="ClientLogCollector.TryCollect"/> to snapshot
-    ///      <c>LogOutput.log</c> + <c>Chainloader.PluginInfos</c>, and pushes them to the
-    ///      server via <see cref="ZRoutedRpc.InvokeRoutedRPC(long, string, object[])"/>
-    ///      targeting <see cref="ZRoutedRpc.GetServerPeerID"/>.
-    ///
-    /// Webhook URLs and toggles are bound under the [Client Log Relay] / [Server Status]
-    /// config sections. <see cref="PrimaryWebhookUrl"/> is the server admin's Discord;
-    /// <see cref="SecondaryWebhookUrl"/> is an optional second destination (e.g. remote
-    /// diagnostics) that receives a copy of every login snapshot. Both default to empty �
-    /// no Discord traffic happens until an admin opts in.
+    /// Webhook URLs bind under [Client Log Relay] and [Server Status]. The primary is the server admin's
+    /// Discord and the secondary an optional copy for remote diagnostics; both default to empty, so nothing
+    /// reaches Discord until an admin opts in.
     /// </summary>
     [HarmonyPatch]
     internal static class ClientLogRelayIntegration
     {
         // Subfolder under {BepInEx config}/ used by ClientLogRelayPaths. The relay will
         // produce {ConfigPath}/VAGhettoNetworking/ClientLogs/{player_platform}/{files}.
-        private const string MOD_ID = "VAGhettoNetworking";
+        private const string ModId = "VAGhettoNetworking";
 
         // Short display label used in Discord embeds, file headers, and log breadcrumbs
         // in place of the generic "ClientLogRelay" string.
-        private const string PLUGIN_BRAND = "FiresGhettoNetworking";
+        private const string PluginBrand = "FiresGhettoNetworking";
 
         // Single routed RPC name. Kept short to save ZPackage bytes.
-        private const string RPC_SUBMIT = "VAG_SubmitClientLog";
-        private const string RPC_UPDATE = "VAG_UpdateClientLog";
+        private const string RpcSubmit = "VAG_SubmitClientLog";
+        private const string RpcUpdate = "VAG_UpdateClientLog";
 
-        // How long the client waits after peer-info completion before reading LogOutput.log
-        // and pushing it. Gives BepInEx / Jotunn / other mods a moment to finish their own
-        // connect-time logging so the snapshot captures as much as possible.
-        private const float CLIENT_PUSH_DELAY_SECONDS = 15f;
+        // Delay after peer-info completes before the client reads LogOutput.log, so BepInEx and the other
+        // mods have finished their own connect-time logging.
+        private const float ClientPushDelaySeconds = 15f;
 
-        // How often the client re-pushes its log to keep the server's disk copy current.
-        // This runs silently � no Discord post, just a disk overwrite.
-        private const float CLIENT_REPUSH_INTERVAL_SECONDS = 15f * 60f; // 15 minutes
+        // Silent re-push interval that keeps the server's disk copy current; no Discord post.
+        private const float ClientRepushIntervalSeconds = 15f * 60f;
 
-        // === Anti-spam debounce (server side) ===
-        private const float GLOBAL_MIN_POST_INTERVAL_SECONDS = 10f;
+        private const float GlobalMinPostIntervalSeconds = 10f;
 
-        // ====================== CONFIG ENTRIES ======================
-        private const string CFG_SECTION = "Client Log Relay";
+        // Routed RPCs cap out well below the log size, so a push is split into chunks this large.
+        private const int LogChunkSizeBytes = 400 * 1024;
+
+        private const string ConfigSection = "Client Log Relay";
 
         public static ConfigEntry<bool>   ConfigEnableLogRelay;
         public static ConfigEntry<bool>   ConfigAutoSendLog;
@@ -83,13 +64,13 @@ namespace FiresGhettoNetworkMod
         private static void BindConfigs(ConfigFile config)
         {
             ConfigEnableLogRelay = config.Bind(
-                CFG_SECTION,
+                ConfigSection,
                 "Enable Client Log Relay",
                 true,
                 "Master toggle. When disabled the server will not collect or post client logs.");
 
             ConfigAutoSendLog = config.Bind(
-                CFG_SECTION,
+                ConfigSection,
                 "Auto Send Full Log",
                 false,
                 "When true the full BepInEx log is attached to the initial Discord snapshot.\n" +
@@ -97,7 +78,7 @@ namespace FiresGhettoNetworkMod
                 "admins can click the reaction on the snapshot message to request the full log.");
 
             ConfigWebhookUrl = config.Bind(
-                CFG_SECTION,
+                ConfigSection,
                 "Discord Webhook URL",
                 string.Empty,
                 "Primary Discord webhook URL for posting client-login snapshots.\n" +
@@ -105,18 +86,18 @@ namespace FiresGhettoNetworkMod
                 "Discord posting entirely (disk capture still runs).");
 
             ConfigSecondaryWebhookUrl = config.Bind(
-                CFG_SECTION,
+                ConfigSection,
                 "Secondary Discord Webhook URL",
                 string.Empty,
                 "Optional secondary Discord webhook URL that receives a copy of every\n" +
                 "login snapshot in addition to the primary. Useful for forwarding logs\n" +
                 "to a remote diagnostics channel (e.g. the mod author's Discord) so the\n" +
                 "server owner can opt in to remote support without granting any access.\n" +
-                "Reaction-based on-demand log requests are NOT relayed here � those run\n" +
+                "Reaction-based on-demand log requests are NOT relayed here - those run\n" +
                 "against the primary channel only. Leave empty to disable.");
 
             ConfigBotToken = config.Bind(
-                CFG_SECTION,
+                ConfigSection,
                 "Discord Bot Token",
                 string.Empty,
                 "(Optional) Discord bot token. When provided, the bot will pre-react on each\n" +
@@ -171,7 +152,7 @@ namespace FiresGhettoNetworkMod
 
             if (ConfigEnableLogRelay != null && !ConfigEnableLogRelay.Value)
             {
-                LoggerOptions.LogInfo("[ClientLogRelay] Disabled by config � skipping initialisation.");
+                LoggerOptions.LogInfo("[ClientLogRelay] Disabled by config - skipping initialisation.");
                 return;
             }
 
@@ -215,13 +196,13 @@ namespace FiresGhettoNetworkMod
         /// it on first access, so we don't need to pre-create it manually.
         /// </summary>
         public static string ClientLogsRoot
-            => ClientLogRelayPaths.GetDefaultClientLogsDir(MOD_ID);
+            => ClientLogRelayPaths.GetDefaultClientLogsDir(ModId);
 
         private static void RegisterDiskConsumer()
         {
             var disk = new DiskConsumer(
                 consumerId:       "VAGhetto.Disk",
-                rootDirResolver:  () => ClientLogRelayPaths.GetDefaultClientLogsDir(MOD_ID),
+                rootDirResolver:  () => ClientLogRelayPaths.GetDefaultClientLogsDir(ModId),
                 enabledGate:      () => true);
 
             ClientLogRelay.RegisterConsumer(disk);
@@ -239,8 +220,8 @@ namespace FiresGhettoNetworkMod
                 EnabledGate              = () => ConfigEnableLogRelay.Value
                                                  && !string.IsNullOrEmpty(PrimaryWebhookUrl),
                 WebhookUrl               = () => PrimaryWebhookUrl,
-                WebhookName              = () => $"{PLUGIN_BRAND} Relay",
-                BrandLabel               = () => PLUGIN_BRAND,
+                WebhookName              = () => $"{PluginBrand} Relay",
+                BrandLabel               = () => PluginBrand,
                 AttachFullLog            = () => ConfigAutoSendLog.Value,
                 AttachModList            = () => true,
                 AttachErrorsWarnings     = () => true,
@@ -252,7 +233,7 @@ namespace FiresGhettoNetworkMod
             ClientLogRelay.RegisterConsumer(primary);
 
             // Secondary: optional remote-diagnostics destination. Receives the same
-            // login snapshot fire-and-forget � no reaction wiring (the poller can only
+            // login snapshot fire-and-forget - no reaction wiring (the poller can only
             // watch one channel) and no bot token (bot is configured for the primary's
             // guild). Silently no-ops while the secondary URL is empty.
             var secondary = new DiscordWebhookConsumer("VAGhetto.Discord.Secondary")
@@ -260,8 +241,8 @@ namespace FiresGhettoNetworkMod
                 EnabledGate              = () => ConfigEnableLogRelay.Value
                                                  && !string.IsNullOrEmpty(SecondaryWebhookUrl),
                 WebhookUrl               = () => SecondaryWebhookUrl,
-                WebhookName              = () => $"{PLUGIN_BRAND} Relay",
-                BrandLabel               = () => PLUGIN_BRAND,
+                WebhookName              = () => $"{PluginBrand} Relay",
+                BrandLabel               = () => PluginBrand,
                 AttachFullLog            = () => ConfigAutoSendLog.Value,
                 AttachModList            = () => true,
                 AttachErrorsWarnings     = () => true,
@@ -278,7 +259,7 @@ namespace FiresGhettoNetworkMod
             string token = ConfigBotToken?.Value;
             if (string.IsNullOrEmpty(token))
             {
-                LoggerOptions.LogInfo("[ClientLogRelay] No bot token configured � reaction poller disabled.");
+                LoggerOptions.LogInfo("[ClientLogRelay] No bot token configured - reaction poller disabled.");
                 return;
             }
 
@@ -292,7 +273,7 @@ namespace FiresGhettoNetworkMod
                 botTokenResolver:       () => ConfigBotToken?.Value,
                 webhookUrlResolver:     () => PrimaryWebhookUrl,
                 clientLogsRootResolver: () => ClientLogsRoot,
-                webhookNameResolver:    () => $"{PLUGIN_BRAND} Relay");
+                webhookNameResolver:    () => $"{PluginBrand} Relay");
 
             LoggerOptions.LogInfo("[ClientLogRelay] Reaction poller started \u2014 polling every 15s for log requests.");
         }
@@ -319,7 +300,7 @@ namespace FiresGhettoNetworkMod
         }
 
         // ====================================================================
-        // Harmony entry points � register server RPC once ZNet is up; on the client,
+        // Harmony entry points - register server RPC once ZNet is up; on the client,
         // reset the per-session push-dedupe flag so a reconnect can push again.
         // Both postfixes are guarded so any failure is swallowed locally and cannot
         // propagate into Valheim's ZNet code.
@@ -338,9 +319,9 @@ namespace FiresGhettoNetworkMod
 
                 if (_isServerSide)
                 {
-                    ZRoutedRpc.instance.Register<ZPackage>(RPC_SUBMIT, OnServerReceiveLog);
-                    ZRoutedRpc.instance.Register<ZPackage>(RPC_UPDATE, OnServerReceiveLogUpdate);
-                    LoggerOptions.LogInfo($"[ClientLogRelay] Registered server-side handlers for '{RPC_SUBMIT}' + '{RPC_UPDATE}'.");
+                    ZRoutedRpc.instance.Register<ZPackage>(RpcSubmit, OnServerReceiveLog);
+                    ZRoutedRpc.instance.Register<ZPackage>(RpcUpdate, OnServerReceiveLogUpdate);
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Registered server-side handlers for '{RpcSubmit}' + '{RpcUpdate}'.");
 
                     // Start periodic cleanup of timed-out chunked transfers
                     ZNet.instance.StartCoroutine(PeriodicTransferCleanup());
@@ -354,14 +335,14 @@ namespace FiresGhettoNetworkMod
                             botToken:          token,
                             statusWebhookUrl:  statusUrl,
                             channelIdOverride: ConfigStatusChannelId?.Value,
-                            webhookName:       $"{PLUGIN_BRAND} Relay",
-                            brandLabel:        PLUGIN_BRAND);
+                            webhookName:       $"{PluginBrand} Relay",
+                            brandLabel:        PluginBrand);
                         LoggerOptions.LogInfo("[ClientLogRelay] Server heartbeat + control panel started.");
                     }
                 }
                 else
                 {
-                    // Fresh ZNet session on the client � allow a new push.
+                    // Fresh ZNet session on the client - allow a new push.
                     _clientPushedThisSession = false;
                     LoggerOptions.LogInfo("[ClientLogRelay] Client-side ZNet awake \u2014 push-on-connect armed.");
                 }
@@ -390,7 +371,7 @@ namespace FiresGhettoNetworkMod
                 }
 
                 _clientPushedThisSession = true;
-                LoggerOptions.LogInfo($"[ClientLogRelay] PeerInfo handshake complete \u2014 scheduling log push in {CLIENT_PUSH_DELAY_SECONDS:F0}s.");
+                LoggerOptions.LogInfo($"[ClientLogRelay] PeerInfo handshake complete \u2014 scheduling log push in {ClientPushDelaySeconds:F0}s.");
                 __instance.StartCoroutine(DelayedClientPush());
                 __instance.StartCoroutine(PeriodicClientRepush());
             }
@@ -402,7 +383,7 @@ namespace FiresGhettoNetworkMod
 
         private static IEnumerator DelayedClientPush()
         {
-            yield return new WaitForSeconds(CLIENT_PUSH_DELAY_SECONDS);
+            yield return new WaitForSeconds(ClientPushDelaySeconds);
 
             if (ZNet.instance == null)
             {
@@ -447,22 +428,12 @@ namespace FiresGhettoNetworkMod
                 logBytes = logBytes ?? new byte[0];
                 int logSize = logBytes.Length;
 
-                // REDESIGNED CHUNKING SYSTEM:
-                // Instead of jamming everything into the first chunk, we send metadata separately.
-                // This keeps ALL chunks under the 512KB Steam limit.
-                //
-                // Protocol:
-                // 1. Send metadata message (mod list, steam ID, total chunks)
-                // 2. Send N pure data chunks (ONLY log bytes, no metadata)
-                //
-                // Benefits:
-                // - No chunk needs to carry heavy metadata
-                // - All chunks can be same size (simpler logic)
-                // - Much safer margins (no 200KB mod list overhead)
+                // Metadata (mod list, platform id, chunk count) goes in its own message, then N pure data
+                // chunks follow. Keeping the mod list out of the chunks is what holds every one of them
+                // under the Steam message limit at a single uniform size.
 
-                const int CHUNK_SIZE = 400 * 1024;  // 400KB per chunk
 
-                int totalChunks = logSize == 0 ? 1 : (logSize + CHUNK_SIZE - 1) / CHUNK_SIZE;
+                int totalChunks = logSize == 0 ? 1 : (logSize + LogChunkSizeBytes - 1) / LogChunkSizeBytes;
 
                 LoggerOptions.LogInfo($"[ClientLogRelay] Pushing log to server: {logSize}B in {totalChunks} chunk(s) + metadata, mods={modList.Count}");
 
@@ -485,8 +456,8 @@ namespace FiresGhettoNetworkMod
                         LoggerOptions.LogWarning($"[ClientLogRelay] ?? Metadata ZPackage is {metaData.Length}B - very large mod list!");
                     }
 
-                    ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RPC_SUBMIT, metaPayload);
-                    LoggerOptions.LogInfo($"[ClientLogRelay]  ? Sent metadata ({metaData?.Length ?? 0}B total, {modList.Count} mods)");
+                    ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RpcSubmit, metaPayload);
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Sent metadata ({metaData?.Length ?? 0}B total, {modList.Count} mods)");
                 }
 
                 // STEP 2: Send pure data chunks (NO metadata, just log bytes)
@@ -496,8 +467,8 @@ namespace FiresGhettoNetworkMod
                     payload.Write(chunkIndex);
                     payload.Write(totalChunks);
 
-                    int offset = chunkIndex * CHUNK_SIZE;
-                    int size = Math.Min(CHUNK_SIZE, logSize - offset);
+                    int offset = chunkIndex * LogChunkSizeBytes;
+                    int size = Math.Min(LogChunkSizeBytes, logSize - offset);
                     byte[] chunk = new byte[size];
                     if (size > 0)
                     {
@@ -512,15 +483,15 @@ namespace FiresGhettoNetworkMod
                         LoggerOptions.LogWarning($"[ClientLogRelay] ?? CRITICAL: Chunk {chunkIndex + 1} ZPackage is {packageData.Length}B!");
                     }
 
-                    ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RPC_SUBMIT, payload);
+                    ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RpcSubmit, payload);
 
                     if (totalChunks > 1)
                     {
-                        LoggerOptions.LogInfo($"[ClientLogRelay]  ? Sent chunk {chunkIndex + 1}/{totalChunks} ({size}B data, {packageData?.Length ?? 0}B total)");
+                        LoggerOptions.LogInfo($"[ClientLogRelay] Sent chunk {chunkIndex + 1}/{totalChunks} ({size}B data, {packageData?.Length ?? 0}B total)");
                     }
                 }
 
-                LoggerOptions.LogInfo($"[ClientLogRelay] ? Push complete: {logSize}B in {totalChunks} chunk(s)");
+                LoggerOptions.LogInfo($"[ClientLogRelay] Push complete: {logSize}B in {totalChunks} chunk(s)");
             }
             catch (Exception ex)
             {
@@ -529,27 +500,27 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>
-        /// Coroutine that re-pushes the client log every 15 minutes via <see cref="RPC_UPDATE"/>
+        /// Coroutine that re-pushes the client log every 15 minutes via <see cref="RpcUpdate"/>
         /// so the server's cached disk copy stays current throughout the session.
         /// </summary>
         private static IEnumerator PeriodicClientRepush()
         {
             while (true)
             {
-                yield return new WaitForSeconds(CLIENT_REPUSH_INTERVAL_SECONDS);
+                yield return new WaitForSeconds(ClientRepushIntervalSeconds);
 
                 // Skip this iteration if not connected, but keep trying
                 if (ZNet.instance == null || ZRoutedRpc.instance == null)
                 {
                     LoggerOptions.LogInfo("[ClientLogRelay] Repush skipped: ZNet or ZRoutedRpc is null (will retry next interval)");
-                    continue;  // ? Skip this iteration, keep looping
+                    continue;
                 }
 
                 long serverId = ZRoutedRpc.instance.GetServerPeerID();
                 if (serverId == 0L)
                 {
                     LoggerOptions.LogInfo("[ClientLogRelay] Repush skipped: not connected to server (will retry next interval)");
-                    continue;  // ? Skip this iteration, keep looping
+                    continue;
                 }
 
                 RepushLogToServer(serverId);
@@ -594,15 +565,14 @@ namespace FiresGhettoNetworkMod
                     payload.Write(logBytes);
                     payload.Write(steamId);
 
-                    ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RPC_UPDATE, payload);
-                    LoggerOptions.LogInfo($"[ClientLogRelay] ? Re-pushed '{RPC_UPDATE}' to server: {logSize}B (single message)");
+                    ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RpcUpdate, payload);
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Re-pushed '{RpcUpdate}' to server: {logSize}B (single message)");
                 }
                 else
                 {
-                    // Large log - use chunking (same as initial upload but to RPC_UPDATE)
+                    // Large log - use chunking (same as initial upload but to RpcUpdate)
                     // NOTE: We don't send mod list in repush (server already has it from initial upload)
-                    const int CHUNK_SIZE = 400 * 1024;
-                    int totalChunks = (logSize + CHUNK_SIZE - 1) / CHUNK_SIZE;
+                    int totalChunks = (logSize + LogChunkSizeBytes - 1) / LogChunkSizeBytes;
 
                     LoggerOptions.LogInfo($"[ClientLogRelay] Re-pushing large log to server: {logSize}B in {totalChunks} chunk(s)");
 
@@ -612,8 +582,8 @@ namespace FiresGhettoNetworkMod
                         payload.Write(chunkIndex);
                         payload.Write(totalChunks);
 
-                        int offset = chunkIndex * CHUNK_SIZE;
-                        int size = Math.Min(CHUNK_SIZE, logSize - offset);
+                        int offset = chunkIndex * LogChunkSizeBytes;
+                        int size = Math.Min(LogChunkSizeBytes, logSize - offset);
                         byte[] chunk = new byte[size];
                         if (size > 0)
                         {
@@ -622,15 +592,15 @@ namespace FiresGhettoNetworkMod
                         payload.Write(chunk);
                         payload.Write(steamId);
 
-                        ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RPC_UPDATE, payload);
+                        ZRoutedRpc.instance.InvokeRoutedRPC(serverId, RpcUpdate, payload);
 
                         if (totalChunks > 1)
                         {
-                            LoggerOptions.LogInfo($"[ClientLogRelay]  ? Re-pushed chunk {chunkIndex + 1}/{totalChunks} ({size}B)");
+                            LoggerOptions.LogInfo($"[ClientLogRelay] Re-pushed chunk {chunkIndex + 1}/{totalChunks} ({size}B)");
                         }
                     }
 
-                    LoggerOptions.LogInfo($"[ClientLogRelay] ? Re-push complete: {logSize}B in {totalChunks} chunk(s)");
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Re-push complete: {logSize}B in {totalChunks} chunk(s)");
                 }
             }
             catch (Exception ex)
@@ -647,10 +617,10 @@ namespace FiresGhettoNetworkMod
         {
             lock (_debounceLock)
             {
-                int p = _postedPeers.Count;
+                int postedCount = _postedPeers.Count;
                 _postedPeers.Clear();
                 _lastPostUtc = DateTime.MinValue;
-                LoggerOptions.LogInfo($"[ClientLogRelay] Debounce reset (cleared {p} posted peers).");
+                LoggerOptions.LogInfo($"[ClientLogRelay] Debounce reset (cleared {postedCount} posted peers).");
             }
         }
 
@@ -690,14 +660,14 @@ namespace FiresGhettoNetworkMod
                     // Store metadata for this peer (will be used when chunks arrive)
                     ClientLogChunkedTransfer.StoreMetadata(sender, totalChunks, metaModList, metaSteamId);
 
-                    LoggerOptions.LogInfo($"[ClientLogRelay] ? Received metadata from peer {sender}: {metaModList.Count} mods, expecting {totalChunks} chunk(s)");
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Received metadata from peer {sender}: {metaModList.Count} mods, expecting {totalChunks} chunk(s)");
                     return;
                 }
 
                 // This is a regular data chunk
                 byte[] chunkData = pkg.ReadByteArray();
 
-                LoggerOptions.LogInfo($"[ClientLogRelay] ? Received chunk {chunkIndex + 1}/{totalChunks} from peer {sender} ({chunkData.Length}B)");
+                LoggerOptions.LogInfo($"[ClientLogRelay] Received chunk {chunkIndex + 1}/{totalChunks} from peer {sender} ({chunkData.Length}B)");
 
                 // Process chunk through chunked transfer system (no metadata in chunks anymore)
                 var result = ClientLogChunkedTransfer.ReceiveChunk(
@@ -715,7 +685,7 @@ namespace FiresGhettoNetworkMod
                 string reportedSteamId = result.SteamId;
                 if (modList == null) modList = new Dictionary<string, string>(0, StringComparer.OrdinalIgnoreCase);
 
-                LoggerOptions.LogInfo($"[ClientLogRelay] ? Complete log received from peer {sender}: {fullLog.Length}B, {modList.Count} mods");
+                LoggerOptions.LogInfo($"[ClientLogRelay] Complete log received from peer {sender}: {fullLog.Length}B, {modList.Count} mods");
 
                 string playerName = GetPeerPlayerName(sender);
                 string platformId = !string.IsNullOrEmpty(reportedSteamId)
@@ -733,11 +703,11 @@ namespace FiresGhettoNetworkMod
 
                     // Debounce layer 2: global minimum interval between any two posts.
                     TimeSpan sinceLast = DateTime.UtcNow - _lastPostUtc;
-                    if (sinceLast.TotalSeconds < GLOBAL_MIN_POST_INTERVAL_SECONDS)
+                    if (sinceLast.TotalSeconds < GlobalMinPostIntervalSeconds)
                     {
                         // Re-allow this peer so a later, non-throttled submission isn't swallowed.
                         _postedPeers.Remove(sender);
-                        LoggerOptions.LogInfo($"[ClientLogRelay] Rate-limiting post from '{playerName}' ({platformId}); {sinceLast.TotalSeconds:F1}s since last post (floor {GLOBAL_MIN_POST_INTERVAL_SECONDS:F0}s).");
+                        LoggerOptions.LogInfo($"[ClientLogRelay] Rate-limiting post from '{playerName}' ({platformId}); {sinceLast.TotalSeconds:F1}s since last post (floor {GlobalMinPostIntervalSeconds:F0}s).");
                         return;
                     }
 
@@ -746,7 +716,7 @@ namespace FiresGhettoNetworkMod
 
                 // Snapshot the server's own plugin list so the consumer can produce a
                 // client-vs-server diff alongside the per-player mod list. Safe on the
-                // dedicated server � ClientLogCollector just walks Chainloader.PluginInfos.
+                // dedicated server - ClientLogCollector just walks Chainloader.PluginInfos.
                 Dictionary<string, string> serverMods = null;
                 try { serverMods = ClientLogCollector.BuildLocalModList(); }
                 catch (Exception ex)
@@ -756,7 +726,7 @@ namespace FiresGhettoNetworkMod
 
                 var artifacts = new ClientLogArtifacts(
                     platformId, playerName, fullLog, modList,
-                    serverMods, PLUGIN_BRAND);
+                    serverMods, PluginBrand);
                 ClientLogRelay.ReportArtifacts(artifacts);
 
                 // Track peer?identity for disconnect hook.
@@ -808,7 +778,7 @@ namespace FiresGhettoNetworkMod
                     byte[] chunkData = pkg.ReadByteArray();
                     try { reportedSteamId = pkg.ReadString(); } catch { }
 
-                    LoggerOptions.LogInfo($"[ClientLogRelay] ? Received update chunk {chunkIndex + 1}/{totalChunks} from peer {sender} ({chunkData.Length}B)");
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Received update chunk {chunkIndex + 1}/{totalChunks} from peer {sender} ({chunkData.Length}B)");
 
                     // Use chunked transfer system for updates too
                     var result = ClientLogChunkedTransfer.ReceiveUpdateChunk(
@@ -822,7 +792,7 @@ namespace FiresGhettoNetworkMod
 
                     log = result.LogBytes;
                     reportedSteamId = result.SteamId;
-                    LoggerOptions.LogInfo($"[ClientLogRelay] ? Complete update received from peer {sender}: {log.Length}B");
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Complete update received from peer {sender}: {log.Length}B");
                 }
                 else
                 {
@@ -838,7 +808,7 @@ namespace FiresGhettoNetworkMod
 
                 if (log == null || log.Length == 0)
                 {
-                    LoggerOptions.LogInfo($"[ClientLogRelay] Update from '{playerName}' ({platformId}) had empty log � skipping.");
+                    LoggerOptions.LogInfo($"[ClientLogRelay] Update from '{playerName}' ({platformId}) had empty log - skipping.");
                     return;
                 }
 
@@ -860,9 +830,9 @@ namespace FiresGhettoNetworkMod
                             foreach (var line in System.IO.File.ReadAllLines(existingModListPath))
                             {
                                 if (string.IsNullOrEmpty(line) || line.StartsWith("#")) continue;
-                                int eq = line.IndexOf('=');
-                                if (eq > 0)
-                                    modList[line.Substring(0, eq)] = line.Substring(eq + 1);
+                                int separator = line.IndexOf('=');
+                                if (separator > 0)
+                                    modList[line.Substring(0, separator)] = line.Substring(separator + 1);
                             }
                         }
                         catch { /* best-effort */ }
@@ -875,7 +845,7 @@ namespace FiresGhettoNetworkMod
 
                     var artifacts = new ClientLogArtifacts(
                         platformId, playerName, log, modList,
-                        serverMods, PLUGIN_BRAND);
+                        serverMods, PluginBrand);
 
                     // Run the extraction so errors/warnings report is populated.
                     try
@@ -894,7 +864,7 @@ namespace FiresGhettoNetworkMod
                         {
                             artifacts.ModDiff = ModListDiff.Compute(
                                 modList, serverMods, playerName, platformId,
-                                PLUGIN_BRAND, artifacts.CapturedUtc);
+                                PluginBrand, artifacts.CapturedUtc);
                         }
                         catch { /* non-fatal */ }
                     }
@@ -903,7 +873,7 @@ namespace FiresGhettoNetworkMod
                     ClientLogArtifactWriter.Write(logsRoot, artifacts);
                 }
 
-                // Track the mapping from peer UID ? platformId for disconnect lookup.
+                // Track the mapping from peer UID -> platformId for disconnect lookup.
                 lock (_debounceLock)
                 {
                     _peerToPlatformId[sender] = platformId;
@@ -918,7 +888,7 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        // Peer UID ? platformId mapping so the disconnect hook knows who just left.
+        // Peer UID -> platformId mapping so the disconnect hook knows who just left.
         // Populated by both OnServerReceiveLog and OnServerReceiveLogUpdate.
         private static readonly Dictionary<long, string> _peerToPlatformId
             = new Dictionary<long, string>();
@@ -958,7 +928,7 @@ namespace FiresGhettoNetworkMod
                 var entry = DisconnectLogRegistry.TakeIfRegistered(platformId);
                 if (entry == null) return;
 
-                LoggerOptions.LogInfo($"[ClientLogRelay] Player '{playerName}' ({platformId}) disconnected � posting session log (requested by {entry.RequestedByName}).");
+                LoggerOptions.LogInfo($"[ClientLogRelay] Player '{playerName}' ({platformId}) disconnected - posting session log (requested by {entry.RequestedByName}).");
 
                 // CRITICAL: Don't block the disconnect process with file I/O and HTTP requests!
                 // Schedule the log posting as a coroutine to run after disconnect completes.
@@ -1028,19 +998,17 @@ namespace FiresGhettoNetworkMod
                     .SetColor(3066993) // green
                     .AddField("\uD83D\uDC64 Player",   playerName,        true)
                     .AddField("\uD83D\uDD94 Steam ID", platformId ?? "?", true)
-                    .AddField("\uD83D\uDCC4 Log Size", FormatBytes(logBytes.Length), true)
+                    .AddField("\uD83D\uDCC4 Log Size", DiscordPayload.FormatBytes(logBytes.Length), true)
                     .SetFooter($"Requested by {requestedByName}");
 
-                // Chunk if large (same 8 MB limit as the reaction poller)
-                const int MAX_BYTES = 8 * 1024 * 1024 - 64 * 1024;
-                if (logBytes.Length <= MAX_BYTES)
+                if (logBytes.Length <= DiscordPayload.MaxAttachmentBytes)
                 {
                     var files = new System.Collections.Generic.List<MinimalWebhookPoster.Attachment>
                     {
                         new MinimalWebhookPoster.Attachment($"session_log_{safePid}_{stamp}.log", logBytes, "text/plain")
                     };
                     foreach (var url in targetUrls)
-                        MinimalWebhookPoster.Post(url, embed, files, $"{PLUGIN_BRAND} Relay", null);
+                        MinimalWebhookPoster.Post(url, embed, files, $"{PluginBrand} Relay", null);
                 }
                 else
                 {
@@ -1049,17 +1017,17 @@ namespace FiresGhettoNetworkMod
                     while (offset < logBytes.Length)
                     {
                         partNum++;
-                        int len = Math.Min(MAX_BYTES, logBytes.Length - offset);
+                        int len = Math.Min(DiscordPayload.MaxAttachmentBytes, logBytes.Length - offset);
                         var chunk = new byte[len];
                         Buffer.BlockCopy(logBytes, offset, chunk, 0, len);
                         offset += len;
 
-                        int totalParts = (logBytes.Length + MAX_BYTES - 1) / MAX_BYTES;
+                        int totalParts = (logBytes.Length + DiscordPayload.MaxAttachmentBytes - 1) / DiscordPayload.MaxAttachmentBytes;
                         var partEmbed = new MinimalWebhookPoster.Embed()
                             .SetTitle($"\u267B\uFE0F Session Log \u2014 Part {partNum}/{totalParts}")
                             .SetColor(3066993)
                             .AddField("\uD83D\uDC64 Player", playerName, true)
-                            .AddField("\uD83D\uDCC4 Size", FormatBytes(chunk.Length), true)
+                            .AddField("\uD83D\uDCC4 Size", DiscordPayload.FormatBytes(chunk.Length), true)
                             .SetFooter($"Requested by {requestedByName}");
 
                         var files = new System.Collections.Generic.List<MinimalWebhookPoster.Attachment>
@@ -1067,7 +1035,7 @@ namespace FiresGhettoNetworkMod
                             new MinimalWebhookPoster.Attachment($"session_log_{safePid}_{stamp}_part{partNum}.log", chunk, "text/plain")
                         };
                         foreach (var url in targetUrls)
-                            MinimalWebhookPoster.Post(url, partEmbed, files, $"{PLUGIN_BRAND} Relay", null);
+                            MinimalWebhookPoster.Post(url, partEmbed, files, $"{PluginBrand} Relay", null);
                     }
                 }
 
@@ -1077,16 +1045,6 @@ namespace FiresGhettoNetworkMod
             {
                 LoggerOptions.LogWarning($"[ClientLogRelay] Failed to post disconnect log: {ex.Message}");
             }
-        }
-
-        private static string FormatBytes(long bytes)
-        {
-            if (bytes <= 0) return "0 B";
-            string[] units = { "B", "KB", "MB", "GB" };
-            double v = bytes;
-            int u = 0;
-            while (v >= 1024 && u < units.Length - 1) { v /= 1024; u++; }
-            return $"{v:0.##} {units[u]}";
         }
 
         // ====================================================================

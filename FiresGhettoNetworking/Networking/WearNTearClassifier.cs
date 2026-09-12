@@ -3,30 +3,9 @@ using HarmonyLib;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Shared invulnerability classifier for WearNTear pieces.
-    ///
-    /// "Fully invulnerable" = every damage-type modifier on the piece's
-    /// <c>HitData.DamageModifiers</c> is either <c>Immune</c> or <c>Ignore</c>
-    /// — both produce zero damage in <see cref="HitData.ApplyResistance"/>:
-    ///   - <c>Ignore</c>: short-circuits to <c>return 0</c> at the top of
-    ///     <c>ApplyModifier</c>.
-    ///   - <c>Immune</c>: enters the switch with <c>mod - 1 == Weak</c> case
-    ///     which sets the per-type damage to 0.
-    /// Any other modifier (Normal, Resistant, Weak, VeryResistant, VeryWeak,
-    /// SlightlyResistant, SlightlyWeak) leaves at least one damage type
-    /// reachable and the piece is treated as mortal — even if functionally
-    /// near-invulnerable, the support graph and wear ticks should keep running.
-    ///
-    /// Used by both the server-side wear-skip (E.3) and the client-side
-    /// support-skip (E.1) so a single primitive defines what "invulnerable"
-    /// means for the whole perf system. Cheap (10 enum compares, no allocation,
-    /// no reflection) so safe to call per-piece per-tick.
-    ///
-    /// We accept a small false-negative on Ashlands pieces with `m_ashDamageImmune`
-    /// — those are immune to ash but still hit-mortal, so they correctly fail
-    /// this classifier. Tightening the predicate further (e.g. include ash-immune
-    /// stone) would re-enter Ashlands tick logic which the existing
-    /// WearNTearServerPatches predicate handles separately.
+    /// The single definition of "fully invulnerable" for the WearNTear skips: every damage modifier is Immune
+    /// or Ignore, the two that HitData.ApplyResistance reduces to zero. Anything else stays mortal so support
+    /// and wear keep ticking. Cheap enough to call per piece per tick.
     /// </summary>
     public static class WearNTearClassifier
     {

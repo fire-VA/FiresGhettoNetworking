@@ -7,34 +7,8 @@ using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
-    // VAGhettoBanner — ported from FAP's VAFapBanner. Emits two banners
-    // at different load phases:
-    //
-    //   PrintBig()  → BIG ASCII radio tower with sparks. Fires at the
-    //                 very start of Awake as the load announcement.
-    //                 Multi-color per-line for electric / metal /
-    //                 signal effect.
-    //
-    //   Print()     → Compact antenna + signal-strength bar. Fires at
-    //                 the end of load (after RPC + autotune init done)
-    //                 as the "ready" confirmation.
-    //
-    // Both use direct console writes (via BepInEx.ConsoleManager
-    // reflection) instead of Debug.Log so each line gets its own
-    // color. Plain fallback path emits via Debug.Log if reflection
-    // fails — the shape renders, just uncolored.
-    //
-    // Color philosophy for the radio tower:
-    //   The art depicts a radio tower with sparks shooting off the
-    //   top. Color zones map to physical regions:
-    //     - Sky / upper sparks: Yellow / White / Cyan (electric arcs)
-    //     - Antenna tip:        Yellow (hot spark point)
-    //     - Tower steel:        DarkGray / Gray alternating (shimmer)
-    //     - Signal / wiring:    DarkCyan / Cyan (networking theme)
-    //     - Equipment panels:   Cyan / DarkCyan
-    //     - Base / grounding:   DarkGray
-    //   Lines vary per-row so no two consecutive lines share a color
-    //   in the spark zone — gives the banner a flickery, alive feel.
+    // Two console banners: PrintBig at the start of Awake, Print (compact antenna and signal bar) once the
+    // load finishes. Direct console writes give per-line colour; the plain fallback logs the same shape.
     public static class VAGhettoBanner
     {
         private readonly struct Segment
@@ -45,9 +19,6 @@ namespace FiresGhettoNetworkMod
         }
 
         // Reflection cache for direct console writes.
-        private static bool s_reflectionResolved;
-        private static Func<object> s_consoleStreamGetter;
-        private static Action<ConsoleColor> s_setConsoleColor;
 
         // Color aliases used by the compact banner.
         private const ConsoleColor Spark   = ConsoleColor.Yellow;
@@ -292,22 +263,18 @@ namespace FiresGhettoNetworkMod
         // Multi-segment per-line write path (used by the compact banner).
         private static bool TryWriteSegmented(Segment[][] lines)
         {
-            EnsureReflection();
-            if (s_consoleStreamGetter == null || s_setConsoleColor == null)
-                return false;
-
-            var stream = s_consoleStreamGetter() as TextWriter;
+            var stream = BepInExConsole.Stream;
             if (stream == null) return false;
 
             try
             {
-                s_setConsoleColor(ConsoleColor.Gray);
+                BepInExConsole.SetColor(ConsoleColor.Gray);
                 stream.WriteLine();
                 foreach (var line in lines)
                 {
                     foreach (var seg in line)
                     {
-                        s_setConsoleColor(seg.Color);
+                        BepInExConsole.SetColor(seg.Color);
                         stream.Write(seg.Text);
                     }
                     stream.WriteLine();
@@ -315,7 +282,7 @@ namespace FiresGhettoNetworkMod
             }
             finally
             {
-                try { s_setConsoleColor(ConsoleColor.Gray); } catch { }
+                try { BepInExConsole.SetColor(ConsoleColor.Gray); } catch { }
             }
             return true;
         }
@@ -338,26 +305,22 @@ namespace FiresGhettoNetworkMod
         // Single-color-per-line write path (used by the big banner).
         private static bool TryWriteColoredBig()
         {
-            EnsureReflection();
-            if (s_consoleStreamGetter == null || s_setConsoleColor == null)
-                return false;
-
-            var stream = s_consoleStreamGetter() as TextWriter;
+            var stream = BepInExConsole.Stream;
             if (stream == null) return false;
 
             try
             {
-                s_setConsoleColor(ConsoleColor.Gray);
+                BepInExConsole.SetColor(ConsoleColor.Gray);
                 stream.WriteLine();
                 foreach (var line in s_bigLines)
                 {
-                    s_setConsoleColor(line.color);
+                    BepInExConsole.SetColor(line.color);
                     stream.WriteLine(line.text);
                 }
             }
             finally
             {
-                try { s_setConsoleColor(ConsoleColor.Gray); } catch { }
+                try { BepInExConsole.SetColor(ConsoleColor.Gray); } catch { }
             }
             return true;
         }
@@ -375,40 +338,5 @@ namespace FiresGhettoNetworkMod
         // Resolves BepInEx.ConsoleManager via reflection. Identical to
         // VAFapBanner's resolver — see that class for the rationale on
         // why we go through reflection instead of typed access.
-        private static void EnsureReflection()
-        {
-            if (s_reflectionResolved) return;
-            s_reflectionResolved = true;
-            try
-            {
-                var asm = typeof(BepInEx.Logging.ConsoleLogListener).Assembly;
-                var consoleManagerType = asm.GetType("BepInEx.ConsoleManager", throwOnError: false);
-                if (consoleManagerType == null) return;
-
-                var streamProp = consoleManagerType.GetProperty("ConsoleStream",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                if (streamProp != null)
-                {
-                    var getMethod = streamProp.GetGetMethod(nonPublic: true);
-                    if (getMethod != null)
-                    {
-                        s_consoleStreamGetter = (Func<object>)Delegate.CreateDelegate(
-                            typeof(Func<object>), getMethod);
-                    }
-                }
-
-                var setColorMethod = consoleManagerType.GetMethod("SetConsoleColor",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
-                    binder: null,
-                    types: new[] { typeof(ConsoleColor) },
-                    modifiers: null);
-                if (setColorMethod != null)
-                {
-                    s_setConsoleColor = (Action<ConsoleColor>)Delegate.CreateDelegate(
-                        typeof(Action<ConsoleColor>), setColorMethod);
-                }
-            }
-            catch { /* leave delegates null — caller falls back */ }
-        }
     }
 }

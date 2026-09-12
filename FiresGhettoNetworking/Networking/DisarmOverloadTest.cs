@@ -5,21 +5,16 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Admin console test + control for the ServerSync / ServerCharacters 30-second
-    /// self-disconnect disarm (see BulkTransferGatePatches).
+    /// Admin console exercise for the ServerSync / ServerCharacters disconnect disarm in
+    /// BulkTransferGatePatches.
     ///
-    ///   fgn_overload [seconds]       — disarmed run: force every send queue above the 20 KB
-    ///                                  gate for N seconds (default 60). Reconnect a client; it
-    ///                                  should ride out the window (the send waits). Expect PASS.
-    ///   fgn_overload [seconds] arm   — CONTROL: momentarily restores ServerSync's real 30 s
-    ///                                  timeout, so a client reconnecting during the window SHOULD
-    ///                                  be dropped at ~30 s. A drop here proves the test path is
-    ///                                  live (the force reaches waitForQueue and the disconnect
-    ///                                  fires); the timeout is restored afterward.
+    ///   fgn_overload [seconds]         forces every send queue above the gate for the window; a client
+    ///                                  reconnecting through it should ride it out.
+    ///   fgn_overload [seconds] arm     control run with the real 30 s timeout restored, so the same client
+    ///                                  should be dropped. A drop proves the force reaches waitForQueue.
     ///
-    /// Each run also reports how many GetSendQueueSize reads it forced high — proof the force is
-    /// actually active rather than the test quietly doing nothing. Admin only; relays to the
-    /// server over a routed RPC and echoes the result back to the caller's console.
+    /// Each run reports how many GetSendQueueSize reads it forced high, so a silent no-op is visible.
+    /// Admin only; relays to the server and echoes back to the caller's console.
     /// </summary>
     [HarmonyPatch]
     public static class DisarmOverloadTest
@@ -164,11 +159,7 @@ namespace FiresGhettoNetworkMod
         }
 
         // Client side: echo a server message into the local console.
-        private static void RPC_Result(long sender, string msg)
-        {
-            if (Console.instance != null) Console.instance.AddString(msg);
-            else LoggerOptions.LogMessage(msg);
-        }
+        private static void RPC_Result(long sender, string msg) => AdminConsoleEcho.Print(msg);
 
         private static void Reply(long target, string msg)
         {

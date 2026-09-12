@@ -4,19 +4,11 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Server-side routed-RPC manager.
-    ///
-    /// Replaces vanilla ZRoutedRpc.RPC_RoutedRPC on the server with a path that
-    /// (1) runs each registered handler — handlers can mutate the package, drop
-    /// the RPC entirely, or set an AoI position hint — and (2) routes the
-    /// surviving RPC, optionally restricting the broadcast to peers within a
-    /// configurable radius of the target ZDO (or hinted position).
-    ///
-    /// Vanilla RPC_RoutedRPC semantics this MUST preserve:
-    ///   - if target == server's own id → handle locally, DO NOT forward.
-    ///   - if target == 0 (broadcast)    → handle locally AND forward.
-    ///   - otherwise                     → forward only.
-    /// See assembly_valheim/ZRoutedRpc.cs:123 RPC_RoutedRPC for the reference.
+    /// Server-side replacement for ZRoutedRpc.RPC_RoutedRPC. Each registered handler gets a look at the RPC
+    /// first (it can rewrite the package, drop the call, or set a position hint), then the survivor is routed,
+    /// optionally only to peers within a radius of the target ZDO or that hint. Vanilla's dispatch rules are
+    /// preserved exactly: our own id handles locally and stops, target 0 handles locally and forwards,
+    /// anything else forwards only.
     /// </summary>
     public static class RoutedRpcManager
     {
@@ -34,10 +26,21 @@ namespace FiresGhettoNetworkMod
         // consumed by ProcessRoutedRPC on the same call. -1 = use config radius.
         private static float _aoiRadiusOverride = -1f;
 
+        /// <summary>World-wide RPCs that must never be narrowed to a radius. "Say" is deliberately absent: its range is filtered on purpose.</summary>
+        private static readonly HashSet<int> _aoiExemptMethodHashes = new HashSet<int>
+        {
+            "SleepStart".GetStableHashCode(),
+            "SleepStop".GetStableHashCode(),
+        };
+
         public static void SetAoIRadiusOverride(float radius)
         {
             _aoiRadiusOverride = radius;
         }
+
+        public static int HandlerCount => _rpcMethodHandlers.Count;
+
+        public static IEnumerable<string> HandlerMethodNames => HashCodeToMethodNameCache.Values;
 
         public static void AddHandler(string methodName, RpcMethodHandler handler)
         {
@@ -100,7 +103,7 @@ namespace FiresGhettoNetworkMod
             bool aoiEnabled = FiresGhettoNetworkMod.ConfigEnableRpcAoI != null
                               && FiresGhettoNetworkMod.ConfigEnableRpcAoI.Value;
 
-            if (!isBroadcast || !aoiEnabled)
+            if (!isBroadcast || !aoiEnabled || _aoiExemptMethodHashes.Contains(_routedRpcData.m_methodHash))
             {
                 routedRpc.RouteRPC(_routedRpcData);
                 return;

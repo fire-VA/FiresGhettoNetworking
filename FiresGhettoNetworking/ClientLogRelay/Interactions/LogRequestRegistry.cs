@@ -31,28 +31,28 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
 
         /// <summary>
         /// Remember a newly-posted snapshot message so a later reaction on it can be
-        /// resolved back to the player. No-ops if <paramref name="ctx"/> or its message id
+        /// resolved back to the player. No-ops if <paramref name="context"/> or its message id
         /// is null/empty.
         /// </summary>
-        public static void Register(LogRequestContext ctx, TimeSpan? ttl = null)
+        public static void Register(LogRequestContext context, TimeSpan? ttl = null)
         {
-            if (ctx == null || string.IsNullOrEmpty(ctx.MessageId)) return;
+            if (context == null || string.IsNullOrEmpty(context.MessageId)) return;
             var expires = DateTime.UtcNow + (ttl ?? DefaultTtl);
 
             lock (_lock)
             {
-                _entries[ctx.MessageId] = new Entry { Context = ctx, ExpiresUtc = expires };
+                _entries[context.MessageId] = new Entry { Context = context, ExpiresUtc = expires };
                 RunJanitorIfDue();
             }
         }
 
         /// <summary>
         /// Resolve a message id back to its <see cref="LogRequestContext"/>. Expired or
-        /// unknown ids return <c>false</c> with <paramref name="ctx"/> set to null.
+        /// unknown ids return <c>false</c> with <paramref name="context"/> set to null.
         /// </summary>
-        public static bool TryGet(string messageId, out LogRequestContext ctx)
+        public static bool TryGet(string messageId, out LogRequestContext context)
         {
-            ctx = null;
+            context = null;
             if (string.IsNullOrEmpty(messageId)) return false;
 
             lock (_lock)
@@ -63,7 +63,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                     _entries.Remove(messageId);
                     return false;
                 }
-                ctx = entry.Context;
+                context = entry.Context;
                 return true;
             }
         }
@@ -89,7 +89,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
 
         /// <summary>
         /// Non-expired snapshot of every currently-registered context. The returned array
-        /// is a copy ? callers can iterate freely without holding the lock. Used by host
+        /// is a copy, so callers can iterate freely without holding the lock. Used by host
         /// bot listeners to decide which message ids to poll for reactions.
         /// </summary>
         public static LogRequestContext[] Snapshot()

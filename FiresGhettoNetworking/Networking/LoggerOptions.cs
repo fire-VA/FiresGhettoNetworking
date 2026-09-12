@@ -29,6 +29,9 @@ namespace FiresGhettoNetworkMod
                 logger.LogMessage(data);
         }
 
+        public static bool VerboseEnabled =>
+            FiresGhettoNetworkMod.ConfigLogLevel != null && FiresGhettoNetworkMod.ConfigLogLevel.Value >= LogLevel.Info;
+
         public static void LogInfo(object data)
         {
             if (logger != null && FiresGhettoNetworkMod.ConfigLogLevel != null && FiresGhettoNetworkMod.ConfigLogLevel.Value >= LogLevel.Info)

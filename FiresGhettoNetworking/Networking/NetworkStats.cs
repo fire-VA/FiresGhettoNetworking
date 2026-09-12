@@ -7,25 +7,11 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Public, version-stable network telemetry surface for other mods to read.
-    ///
-    /// FGN already owns the network picture on the server — it patches the send path
-    /// and tracks per-peer send queues through <see cref="SendCongestion"/>. That makes
-    /// it the right place to read the real per-peer figures ONCE, from the stable public
-    /// accessors, and hand them out — instead of every consumer reflecting blindly at
-    /// vanilla internals whose field names drift between game patches.
-    ///
-    /// Every value here comes from a public interface method or public API:
-    ///   ISocket.GetSendQueueSize()      per-peer send-queue bytes
-    ///   ISocket.GetConnectionQuality()  per-peer ping + Tx/Rx bytes/sec (no reset side-effect)
-    ///   ZDOMan.GetSentZDOs/GetRecvZDOs  aggregate ZDO throughput per second
-    ///   SendCongestion                  FGN's own cap + congestion model
-    ///   ZNet.ServerPlayerLimit          configured player slots
-    /// No private-field reflection, nothing that breaks on a vanilla update.
-    ///
-    /// Server-side only — off-server every accessor returns 0 / false. Read at any
-    /// cadence; a short-lived snapshot is cached so a caller pulling every figure in
-    /// one pass only walks the peer list once.
+    /// Version-stable per-peer network telemetry for other mods, read once from public accessors
+    /// (ISocket.GetSendQueueSize / GetConnectionQuality, ZDOMan.GetSentZDOs / GetRecvZDOs, SendCongestion,
+    /// ZNet.ServerPlayerLimit) so consumers never reflect at vanilla internals. Server-side only; every
+    /// accessor returns zero elsewhere. A short-lived snapshot means a caller pulling the full set walks the
+    /// peer list once.
     /// </summary>
     public static class NetworkStats
     {

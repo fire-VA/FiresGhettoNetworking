@@ -1,83 +1,64 @@
-﻿using BepInEx.Configuration;
+using BepInEx.Configuration;
 using HarmonyLib;
 using System.Collections.Generic;
-using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
+    /// <summary>
+    /// Client-side safety valve for long exploration sessions: once the ZDO pool passes the configured
+    /// cap, run vanilla's orphan cleanup and reclaim. Dedicated servers are never pruned this way.
+    /// </summary>
     [HarmonyPatch]
     public static class ZDOMemoryManager
     {
+        private const float StartupGraceSeconds = 600f;
+
         public static ConfigEntry<int> ConfigMaxZDOs;
 
-        private static float startupTimer = 0f;
-        private static bool startupComplete = false;
-        private static bool warningShown = false; // One-time warning per session
-
-        private const float STARTUP_GRACE_PERIOD = 600f; // 10 minutes
-
-        public static void Init(ConfigFile config)
-        {
-            ConfigMaxZDOs = config.Bind(
-                "12 - Advanced",
-                "Max Active ZDOs",
-                10000000,
-                new ConfigDescription(
-                    "Force ZDO cleanup if active ZDOs exceed this after startup (0 = disabled).\n" +
-                    "Startup grace period (10 min) prevents spam during world load.\n" +
-                    "This feature is CLIENT-ONLY and will not run on dedicated servers.",
-                    new AcceptableValueRange<int>(0, 2000000)));
-        }
+        private static float _sessionElapsedSeconds;
+        private static bool _graceExpired;
+        private static bool _capWarningLogged;
 
         [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.Update))]
         [HarmonyPostfix]
-        static void CleanupIfTooBig(ZDOMan __instance, float dt)
+        static void PruneOrphanZdosWhenOverCap(ZDOMan __instance, float dt)
         {
-            // Completely disabled on dedicated servers — servers should never clean up ZDOs aggressively
-            if (ZNet.instance && ZNet.instance.IsServer())
-                return;
-
-            // Disabled via config
+            if (ZNet.instance && ZNet.instance.IsServer()) return;
             if (ConfigMaxZDOs.Value <= 0) return;
 
-            // Grace period: no cleanup during first 10 minutes of play
-            if (!startupComplete)
+            if (!_graceExpired)
             {
-                startupTimer += dt;
-                if (startupTimer >= STARTUP_GRACE_PERIOD)
+                _sessionElapsedSeconds += dt;
+                if (_sessionElapsedSeconds >= StartupGraceSeconds)
                 {
-                    startupComplete = true;
+                    _graceExpired = true;
                     LoggerOptions.LogInfo("ZDO cleanup grace period ended — normal monitoring enabled.");
                 }
                 return;
             }
 
-            var dictField = AccessTools.Field(typeof(ZDOMan), "m_objectsByID");
-            if (dictField == null) return;
+            var zdosById = AccessTools.Field(typeof(ZDOMan), "m_objectsByID");
+            if (zdosById == null) return;
 
-            var dict = (Dictionary<ZDOID, ZDO>)dictField.GetValue(__instance);
-            if (dict == null || dict.Count <= ConfigMaxZDOs.Value) return;
+            var zdos = (Dictionary<ZDOID, ZDO>)zdosById.GetValue(__instance);
+            if (zdos == null || zdos.Count <= ConfigMaxZDOs.Value) return;
 
-            // Show warning only once per session
-            if (!warningShown)
+            if (!_capWarningLogged)
             {
-                LoggerOptions.LogWarning($"ZDO pool too big ({dict.Count} > {ConfigMaxZDOs.Value}) — forcing cleanup...");
+                LoggerOptions.LogWarning($"ZDO pool too big ({zdos.Count} > {ConfigMaxZDOs.Value}) — forcing cleanup...");
                 LoggerOptions.LogWarning("You have been Exploring a LOT. You should log out to free up RAM.");
-                warningShown = true;
+                _capWarningLogged = true;
             }
 
-            int before = dict.Count;
-
-            // Vanilla orphan cleanup
+            int countBeforePrune = zdos.Count;
             AccessTools.Method(typeof(ZDOMan), "RemoveOrphanNonPersistentZDOS").Invoke(__instance, null);
 
-            // Force GC
             System.GC.Collect();
             System.GC.WaitForPendingFinalizers();
             System.GC.Collect();
 
-            dict = (Dictionary<ZDOID, ZDO>)dictField.GetValue(__instance);
-            LoggerOptions.LogInfo($"Cleanup complete: {before} → {dict?.Count ?? 0} ZDOs");
+            zdos = (Dictionary<ZDOID, ZDO>)zdosById.GetValue(__instance);
+            LoggerOptions.LogInfo($"Cleanup complete: {countBeforePrune} → {zdos?.Count ?? 0} ZDOs");
         }
     }
 }

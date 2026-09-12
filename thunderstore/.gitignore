@@ -13,3 +13,5 @@ packages/
 # OS noise
 Thumbs.db
 desktop.ini
+# Thunderstore zips live outside git
+*.zip

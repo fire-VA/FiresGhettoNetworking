@@ -14,33 +14,18 @@ using VerdantsAscent.Modules.ClientLogRelay.Webhook;
 namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
 {
     /// <summary>
-    /// Periodically polls Discord for new reactions on registered snapshot messages and
-    /// posts the requested artifact(s) to the webhook.
-    ///
-    /// Three reaction types are supported:
-    /// <list type="bullet">
-    /// <item>?? (<see cref="DiscordWebhookConsumer.EMOJI_LOG"/>)    — full BepInEx log</item>
-    /// <item>? (<see cref="DiscordWebhookConsumer.EMOJI_ERRORS"/>) — errors + warnings report</item>
-    /// <item>?? (<see cref="DiscordWebhookConsumer.EMOJI_MODS"/>)   — client mod list + diff</item>
-    /// </list>
-    ///
-    /// Large files (&gt; 8 MB) are automatically split into sequential chunks so they stay
-    /// within Discord's webhook upload limit for non-boosted servers.
+    /// Polls Discord for reactions on posted snapshot messages and uploads what was asked for: the full
+    /// BepInEx log (EmojiLog), the errors and warnings report (EmojiErrors), or the client mod list and its
+    /// diff against the server (EmojiMods). Anything over the webhook attachment limit is split into
+    /// sequential parts.
     /// </summary>
     public sealed class ReactionPoller : MonoBehaviour
     {
-        private const float POLL_INTERVAL_SECONDS = 30f; // Reduced from 15s to avoid rate limits
-        private const float RATE_LIMIT_BACKOFF_SECONDS = 120f; // Increased to 2 minutes
+        private const float PollIntervalSeconds = 30f;
+        private const float RateLimitBackoffSeconds = 120f;
 
         private static int _consecutiveRateLimits = 0;
         private static float _lastRateLimitTime = 0f;
-
-        /// <summary>
-        /// Discord webhook file-size ceiling. Non-boosted servers cap at 8 MB; level-2
-        /// boost raises it to 50 MB. We use 8 MB minus a small margin for the multipart
-        /// envelope so the upload never fails on a vanilla Discord server.
-        /// </summary>
-        private const int MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024 - 64 * 1024; // ~7.94 MB
 
         private Func<string> _botTokenResolver;
         private Func<string> _webhookUrlResolver;
@@ -54,10 +39,10 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
 
         // The three emoji we poll for, pre-encoded for the REST URL.
         private static readonly string[] _emojiRaw = {
-            DiscordWebhookConsumer.EMOJI_LOG,
-            DiscordWebhookConsumer.EMOJI_ERRORS,
-            DiscordWebhookConsumer.EMOJI_MODS,
-            DiscordWebhookConsumer.EMOJI_DISCONNECT,
+            DiscordWebhookConsumer.EmojiLog,
+            DiscordWebhookConsumer.EmojiErrors,
+            DiscordWebhookConsumer.EmojiMods,
+            DiscordWebhookConsumer.EmojiDisconnect,
         };
         private static readonly string[] _emojiEncoded = _emojiRaw
             .Select(e => Uri.EscapeDataString(e)).ToArray();
@@ -68,9 +53,9 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             Func<string> clientLogsRootResolver,
             Func<string> webhookNameResolver = null)
         {
-            var go = new GameObject("ClientLogRelay_ReactionPoller");
-            DontDestroyOnLoad(go);
-            var poller = go.AddComponent<ReactionPoller>();
+            var host = new GameObject("ClientLogRelay_ReactionPoller");
+            DontDestroyOnLoad(host);
+            var poller = host.AddComponent<ReactionPoller>();
             poller._botTokenResolver = botTokenResolver;
             poller._webhookUrlResolver = webhookUrlResolver;
             poller._clientLogsRootResolver = clientLogsRootResolver;
@@ -96,15 +81,15 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 if (_consecutiveRateLimits > 0)
                 {
                     float timeSinceLimit = Time.realtimeSinceStartup - _lastRateLimitTime;
-                    if (timeSinceLimit < RATE_LIMIT_BACKOFF_SECONDS)
+                    if (timeSinceLimit < RateLimitBackoffSeconds)
                     {
-                        float waitTime = RATE_LIMIT_BACKOFF_SECONDS - timeSinceLimit;
+                        float waitTime = RateLimitBackoffSeconds - timeSinceLimit;
                         Debug.Log($"[ClientLogRelay] ReactionPoller: Rate limited, backing off for {waitTime:F0}s (attempt {_consecutiveRateLimits})");
                         yield return new WaitForSeconds(waitTime);
                     }
                 }
 
-                yield return new WaitForSeconds(POLL_INTERVAL_SECONDS);
+                yield return new WaitForSeconds(PollIntervalSeconds);
 
                 string botToken = _botTokenResolver?.Invoke();
                 if (string.IsNullOrEmpty(botToken))
@@ -125,9 +110,9 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 // 10 messages = ~20 seconds to poll all (within 30s cycle)
                 int polledCount = 0;
 
-                foreach (var ctx in contexts)
+                foreach (var context in contexts)
                 {
-                    if (string.IsNullOrEmpty(ctx.ChannelId) || string.IsNullOrEmpty(ctx.MessageId))
+                    if (string.IsNullOrEmpty(context.ChannelId) || string.IsNullOrEmpty(context.MessageId))
                         continue;
 
                     // Poll each emoji independently with delays between requests
@@ -135,7 +120,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                     for (int i = 0; i < _emojiRaw.Length; i++)
                     {
                         bool wasRateLimited = false;
-                        yield return PollReaction(botToken, ctx, _emojiRaw[i], _emojiEncoded[i], (limited) => wasRateLimited = limited);
+                        yield return PollReaction(botToken, context, _emojiRaw[i], _emojiEncoded[i], (limited) => wasRateLimited = limited);
 
                         if (wasRateLimited)
                         {
@@ -179,12 +164,8 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 req.timeout = 15;
                 yield return req.SendWebRequest();
 
-#if UNITY_2020_1_OR_NEWER
-                bool ok = req.result == UnityWebRequest.Result.Success;
-#else
-                bool ok = !req.isNetworkError && !req.isHttpError;
-#endif
-                if (ok && req.downloadHandler != null)
+                bool succeeded = req.result == UnityWebRequest.Result.Success;
+                if (succeeded && req.downloadHandler != null)
                 {
                     try
                     {
@@ -210,21 +191,17 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
         // ================================================================
         //  Poll a single emoji on a single message
         // ================================================================
-        private IEnumerator PollReaction(string botToken, LogRequestContext ctx, string emojiRaw, string emojiEncoded, System.Action<bool> rateLimitCallback = null)
+        private IEnumerator PollReaction(string botToken, LogRequestContext context, string emojiRaw, string emojiEncoded, System.Action<bool> rateLimitCallback = null)
         {
-            string url = $"https://discord.com/api/v10/channels/{ctx.ChannelId}/messages/{ctx.MessageId}/reactions/{emojiEncoded}";
+            string url = $"https://discord.com/api/v10/channels/{context.ChannelId}/messages/{context.MessageId}/reactions/{emojiEncoded}";
             using (var req = UnityWebRequest.Get(url))
             {
                 req.SetRequestHeader("Authorization", $"Bot {botToken}");
                 req.timeout = 15;
                 yield return req.SendWebRequest();
 
-#if UNITY_2020_1_OR_NEWER
-                bool ok = req.result == UnityWebRequest.Result.Success;
-#else
-                bool ok = !req.isNetworkError && !req.isHttpError;
-#endif
-                if (!ok)
+                bool succeeded = req.result == UnityWebRequest.Result.Success;
+                if (!succeeded)
                 {
                     if (req.responseCode == 429)
                     {
@@ -268,15 +245,15 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
 
                     // Unique key per message + user + emoji so clicking two different
                     // reactions on the same message both get fulfilled.
-                    string key = $"{ctx.MessageId}:{userId}:{emojiRaw}";
+                    string key = $"{context.MessageId}:{userId}:{emojiRaw}";
                     if (_fulfilled.Contains(key))
                         continue;
 
                     _fulfilled.Add(key);
                     string userName = userToken["username"]?.ToString() ?? userId;
-                    Debug.Log($"[ClientLogRelay] ReactionPoller: '{userName}' reacted {emojiRaw} on {ctx.PlayerName} ({ctx.PlatformId})");
+                    Debug.Log($"[ClientLogRelay] ReactionPoller: '{userName}' reacted {emojiRaw} on {context.PlayerName} ({context.PlatformId})");
 
-                    yield return Fulfill(ctx, emojiRaw, userName, userId);
+                    yield return Fulfill(context, emojiRaw, userName, userId);
                 }
             }
         }
@@ -284,41 +261,41 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
         // ================================================================
         //  Dispatch by emoji
         // ================================================================
-        private IEnumerator Fulfill(LogRequestContext ctx, string emoji, string reqByName, string reqById)
+        private IEnumerator Fulfill(LogRequestContext context, string emoji, string requestedByName, string requestedById)
         {
             string logsRoot = _clientLogsRootResolver?.Invoke();
             if (string.IsNullOrEmpty(logsRoot)) yield break;
 
-            string folder = BuildPlayerFolder(logsRoot, ctx);
+            string folder = BuildPlayerFolder(logsRoot, context);
 
-            if (emoji == DiscordWebhookConsumer.EMOJI_LOG)
-                yield return FulfillFullLog(ctx, folder, reqByName);
-            else if (emoji == DiscordWebhookConsumer.EMOJI_ERRORS)
-                yield return FulfillErrorsWarnings(ctx, folder, reqByName);
-            else if (emoji == DiscordWebhookConsumer.EMOJI_MODS)
-                yield return FulfillMods(ctx, folder, reqByName);
-            else if (emoji == DiscordWebhookConsumer.EMOJI_DISCONNECT)
-                FulfillDisconnect(ctx, reqByName);
+            if (emoji == DiscordWebhookConsumer.EmojiLog)
+                yield return FulfillFullLog(context, folder, requestedByName);
+            else if (emoji == DiscordWebhookConsumer.EmojiErrors)
+                yield return FulfillErrorsWarnings(context, folder, requestedByName);
+            else if (emoji == DiscordWebhookConsumer.EmojiMods)
+                yield return FulfillMods(context, folder, requestedByName);
+            else if (emoji == DiscordWebhookConsumer.EmojiDisconnect)
+                FulfillDisconnect(context, requestedByName);
         }
 
         // ================================================================
         //  ??  Full log
         // ================================================================
-        private IEnumerator FulfillFullLog(LogRequestContext ctx, string folder, string reqByName)
+        private IEnumerator FulfillFullLog(LogRequestContext context, string folder, string requestedByName)
         {
             string logPath = Path.Combine(folder, "LogOutput.log");
             byte[] logBytes = SafeReadFile(logPath);
             if (logBytes == null || logBytes.Length == 0)
             {
-                Debug.LogWarning($"[ClientLogRelay] ReactionPoller: no cached log for {ctx.PlatformId} at '{logPath}'");
+                Debug.LogWarning($"[ClientLogRelay] ReactionPoller: no cached log for {context.PlatformId} at '{logPath}'");
                 yield break;
             }
 
-            string stamp = ctx.CapturedUtc.ToString("yyyyMMdd_HHmmss");
-            string safeId = SafePlatformId(ctx);
+            string stamp = context.CapturedUtc.ToString("yyyyMMdd_HHmmss");
+            string safeId = SafePlatformId(context);
 
             // Chunk if necessary.
-            var chunks = ChunkBytes(logBytes, MAX_ATTACHMENT_BYTES);
+            var chunks = ChunkBytes(logBytes, DiscordPayload.MaxAttachmentBytes);
             for (int i = 0; i < chunks.Count; i++)
             {
                 string suffix = chunks.Count == 1 ? "" : $"_part{i + 1}of{chunks.Count}";
@@ -330,10 +307,10 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 var embed = new MinimalWebhookPoster.Embed()
                     .SetTitle(title)
                     .SetColor(3447003)
-                    .AddField("\uD83D\uDC64 Player",   ctx.PlayerName,           true)
-                    .AddField("\uD83D\uDD94 Steam ID", ctx.PlatformId ?? "?",    true)
-                    .AddField("\uD83D\uDCC4 Size",     FormatBytes(chunks[i].Length), true)
-                    .SetFooter($"Requested by {reqByName}");
+                    .AddField("\uD83D\uDC64 Player",   context.PlayerName,           true)
+                    .AddField("\uD83D\uDD94 Steam ID", context.PlatformId ?? "?",    true)
+                    .AddField("\uD83D\uDCC4 Size",     DiscordPayload.FormatBytes(chunks[i].Length), true)
+                    .SetFooter($"Requested by {requestedByName}");
 
                 var files = new List<MinimalWebhookPoster.Attachment>
                 {
@@ -343,33 +320,30 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 yield return PostAndWait(embed, files);
             }
 
-            Debug.Log($"[ClientLogRelay] ReactionPoller: posted full log for {ctx.PlatformId} " +
-                      $"({logBytes.Length} bytes, {chunks.Count} part(s)), requested by {reqByName}");
+            Debug.Log($"[ClientLogRelay] ReactionPoller: posted full log for {context.PlatformId} " +
+                      $"({logBytes.Length} bytes, {chunks.Count} part(s)), requested by {requestedByName}");
         }
 
-        // ================================================================
-        //  ?  Errors + warnings
-        // ================================================================
-        private IEnumerator FulfillErrorsWarnings(LogRequestContext ctx, string folder, string reqByName)
+        private IEnumerator FulfillErrorsWarnings(LogRequestContext context, string folder, string requestedByName)
         {
             string path = Path.Combine(folder, "errors_warnings.txt");
             byte[] bytes = SafeReadFile(path);
             if (bytes == null || bytes.Length == 0)
             {
-                Debug.LogWarning($"[ClientLogRelay] ReactionPoller: no errors_warnings.txt for {ctx.PlatformId}");
+                Debug.LogWarning($"[ClientLogRelay] ReactionPoller: no errors_warnings.txt for {context.PlatformId}");
                 yield break;
             }
 
-            string stamp = ctx.CapturedUtc.ToString("yyyyMMdd_HHmmss");
-            string safeId = SafePlatformId(ctx);
+            string stamp = context.CapturedUtc.ToString("yyyyMMdd_HHmmss");
+            string safeId = SafePlatformId(context);
 
             var embed = new MinimalWebhookPoster.Embed()
                 .SetTitle("\u26D4 Errors + Warnings \u2014 Requested")
                 .SetColor(15548997)
-                .AddField("\uD83D\uDC64 Player",   ctx.PlayerName,        true)
-                .AddField("\uD83D\uDD94 Steam ID", ctx.PlatformId ?? "?", true)
-                .AddField("\uD83D\uDCC4 Size",     FormatBytes(bytes.Length), true)
-                .SetFooter($"Requested by {reqByName}");
+                .AddField("\uD83D\uDC64 Player",   context.PlayerName,        true)
+                .AddField("\uD83D\uDD94 Steam ID", context.PlatformId ?? "?", true)
+                .AddField("\uD83D\uDCC4 Size",     DiscordPayload.FormatBytes(bytes.Length), true)
+                .SetFooter($"Requested by {requestedByName}");
 
             var files = new List<MinimalWebhookPoster.Attachment>
             {
@@ -377,16 +351,16 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             };
 
             yield return PostAndWait(embed, files);
-            Debug.Log($"[ClientLogRelay] ReactionPoller: posted errors/warnings for {ctx.PlatformId}, requested by {reqByName}");
+            Debug.Log($"[ClientLogRelay] ReactionPoller: posted errors/warnings for {context.PlatformId}, requested by {requestedByName}");
         }
 
         // ================================================================
         //  ??  Mod list + diff
         // ================================================================
-        private IEnumerator FulfillMods(LogRequestContext ctx, string folder, string reqByName)
+        private IEnumerator FulfillMods(LogRequestContext context, string folder, string requestedByName)
         {
-            string stamp = ctx.CapturedUtc.ToString("yyyyMMdd_HHmmss");
-            string safeId = SafePlatformId(ctx);
+            string stamp = context.CapturedUtc.ToString("yyyyMMdd_HHmmss");
+            string safeId = SafePlatformId(context);
 
             byte[] modListBytes = SafeReadFile(Path.Combine(folder, "modlist.txt"));
             byte[] modDiffBytes = SafeReadFile(Path.Combine(folder, "mod_diff.txt"));
@@ -395,16 +369,16 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             bool hasDiff = modDiffBytes != null && modDiffBytes.Length > 0;
             if (!hasModList && !hasDiff)
             {
-                Debug.LogWarning($"[ClientLogRelay] ReactionPoller: no mod artifacts for {ctx.PlatformId}");
+                Debug.LogWarning($"[ClientLogRelay] ReactionPoller: no mod artifacts for {context.PlatformId}");
                 yield break;
             }
 
             var embed = new MinimalWebhookPoster.Embed()
                 .SetTitle("\uD83E\uDDE9 Mod Lists \u2014 Requested")
                 .SetColor(5763719)
-                .AddField("\uD83D\uDC64 Player",   ctx.PlayerName,        true)
-                .AddField("\uD83D\uDD94 Steam ID", ctx.PlatformId ?? "?", true)
-                .SetFooter($"Requested by {reqByName}");
+                .AddField("\uD83D\uDC64 Player",   context.PlayerName,        true)
+                .AddField("\uD83D\uDD94 Steam ID", context.PlatformId ?? "?", true)
+                .SetFooter($"Requested by {requestedByName}");
 
             var files = new List<MinimalWebhookPoster.Attachment>();
             if (hasModList)
@@ -413,17 +387,17 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 files.Add(new MinimalWebhookPoster.Attachment($"mod_diff_{safeId}_{stamp}.txt", modDiffBytes, "text/plain"));
 
             yield return PostAndWait(embed, files);
-            Debug.Log($"[ClientLogRelay] ReactionPoller: posted mod artifacts for {ctx.PlatformId}, requested by {reqByName}");
+            Debug.Log($"[ClientLogRelay] ReactionPoller: posted mod artifacts for {context.PlatformId}, requested by {requestedByName}");
         }
 
         // ================================================================
         //  ??  Disconnect capture
         // ================================================================
-        private void FulfillDisconnect(LogRequestContext ctx, string reqByName)
+        private void FulfillDisconnect(LogRequestContext context, string requestedByName)
         {
-            // Just register the player — the actual log post happens when they disconnect
+            // Just register the player - the actual log post happens when they disconnect
             // (handled by the Harmony patch in ClientLogRelayIntegration).
-            DisconnectLogRegistry.Register(ctx.PlatformId, ctx.PlayerName, reqByName);
+            DisconnectLogRegistry.Register(context.PlatformId, context.PlayerName, requestedByName);
         }
 
         // ================================================================
@@ -443,10 +417,10 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             yield return new WaitForSeconds(1.5f);
         }
 
-        private static string BuildPlayerFolder(string logsRoot, LogRequestContext ctx)
+        private static string BuildPlayerFolder(string logsRoot, LogRequestContext context)
         {
-            string safePid = (ctx.PlatformId ?? "unknown").Replace(":", "_").Replace("/", "_").Replace("\\", "_");
-            string safeName = ctx.PlayerName ?? "unknown";
+            string safePid = (context.PlatformId ?? "unknown").Replace(":", "_").Replace("/", "_").Replace("\\", "_");
+            string safeName = context.PlayerName ?? "unknown";
             if (!string.IsNullOrEmpty(safeName))
             {
                 var invalid = Path.GetInvalidFileNameChars();
@@ -455,8 +429,8 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             return Path.Combine(logsRoot, $"{safeName}_{safePid}");
         }
 
-        private static string SafePlatformId(LogRequestContext ctx)
-            => (ctx.PlatformId ?? "unknown").Replace(":", "_").Replace("/", "_").Replace("\\", "_");
+        private static string SafePlatformId(LogRequestContext context)
+            => (context.PlatformId ?? "unknown").Replace(":", "_").Replace("/", "_").Replace("\\", "_");
 
         private static byte[] SafeReadFile(string path)
         {
@@ -495,16 +469,6 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 offset += len;
             }
             return chunks;
-        }
-
-        private static string FormatBytes(long bytes)
-        {
-            if (bytes <= 0) return "0 B";
-            string[] units = { "B", "KB", "MB", "GB" };
-            double v = bytes;
-            int u = 0;
-            while (v >= 1024 && u < units.Length - 1) { v /= 1024; u++; }
-            return $"{v:0.##} {units[u]}";
         }
     }
 }

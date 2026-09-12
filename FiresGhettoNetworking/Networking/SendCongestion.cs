@@ -3,16 +3,9 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Shared send-queue congestion signal.
-    ///
-    /// FGN's send-side reordering (distant-ZDO penalty, player-position boost) and
-    /// AI-LOD throttling only earn their keep when a peer's Steam send queue is
-    /// actually backing up. On a server with bandwidth to spare the queues sit
-    /// near-empty, every queued ZDO ships the same tick, and any reordering only
-    /// burns CPU and can ADD latency by deferring what would otherwise have gone
-    /// out immediately. This gate lets those systems engage under real congestion
-    /// and otherwise stay completely out of the way — the lean behaviour that made
-    /// older builds feel smoother on healthy, well-provisioned servers.
+    /// Shared "is this peer's send queue backing up" signal. The send-side reordering and AI-LOD throttling
+    /// only pay for themselves under real congestion; with bandwidth to spare every queued ZDO ships the same
+    /// tick anyway, so reordering just burns CPU and defers updates that would already have gone out.
     /// </summary>
     public static class SendCongestion
     {
@@ -20,17 +13,9 @@ namespace FiresGhettoNetworkMod
         /// Effective per-peer send-queue cap, mirrored from the same source the
         /// NetworkingRatesGroup transpiler used (it can't be read back from the IL).
         /// </summary>
-        public static int EffectiveCapBytes()
-        {
-            switch (AutoTune.EffectiveConfig.QueueSize())
-            {
-                case QueueSizeOptions._80KB: return 80 * 1024;
-                case QueueSizeOptions._64KB: return 64 * 1024;
-                case QueueSizeOptions._48KB: return 48 * 1024;
-                case QueueSizeOptions._32KB: return 32 * 1024;
-                default:                     return 102400; // _vanilla (preloader-raised)
-            }
-        }
+        private const int PatcherRaisedQueueCapBytes = 102400;
+
+        public static int EffectiveCapBytes() => AutoTune.EffectiveConfig.QueueSizeBytes(PatcherRaisedQueueCapBytes);
 
         private static float ThresholdFraction()
         {
@@ -57,9 +42,9 @@ namespace FiresGhettoNetworkMod
         /// <summary>True when this peer's send queue has backed up past the threshold.</summary>
         public static bool IsPeerCongested(ZDOMan.ZDOPeer peer)
         {
-            int q = GetQueueSize(peer);
-            if (q < 0) return false;
-            return q >= EffectiveCapBytes() * ThresholdFraction();
+            int queueBytes = GetQueueSize(peer);
+            if (queueBytes < 0) return false;
+            return queueBytes >= EffectiveCapBytes() * ThresholdFraction();
         }
 
         // Global "is ANY peer congested" signal for subsystems that don't hold a peer
@@ -80,13 +65,13 @@ namespace FiresGhettoNetworkMod
             if (ZNet.instance == null) return false;
 
             float thresholdBytes = EffectiveCapBytes() * ThresholdFraction();
-            foreach (ZNetPeer p in ZNet.instance.GetPeers())
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
             {
-                if (p == null || p.m_socket == null) continue;
-                int q;
-                try { q = p.m_socket.GetSendQueueSize(); }
+                if (peer == null || peer.m_socket == null) continue;
+                int queueBytes;
+                try { queueBytes = peer.m_socket.GetSendQueueSize(); }
                 catch { continue; }
-                if (q >= thresholdBytes) { s_cached = true; break; }
+                if (queueBytes >= thresholdBytes) { s_cached = true; break; }
             }
             return s_cached;
         }

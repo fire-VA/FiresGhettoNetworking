@@ -6,37 +6,9 @@ using BepInEx;
 namespace FiresGhettoNetworkMod.AutoTune
 {
     /// <summary>
-    /// Per-server probe-result cache, persisted to disk. Keyed by server endpoint string
-    /// (Steam SteamID host or IP:port) so each server keeps its own tier. Default TTL 7 days
-    /// — after that we re-probe to catch ISP/route weather changes.
-    ///
-    /// File lives next to the BepInEx config:
-    /// <c>BepInEx/config/com.Fire.FiresGhettoNetworkMod_autotune.bin</c>.
-    ///
-    /// Format (little-endian, BinaryReader/Writer defaults):
-    /// <code>
-    ///   int32  magic           = 0x46474E41  // 'FGNA' bytes — file fingerprint
-    ///   int32  schemaVersion   = SchemaVersion
-    ///   int32  entryCount
-    ///   foreach entry:
-    ///     string serverKey               // 7-bit-encoded-length prefixed
-    ///     int32  tier                    // enum int value
-    ///     int32  pingMedianMs
-    ///     int64  timestampUtc.Ticks
-    ///     string hwHash                  // 7-bit-encoded-length prefixed
-    /// </code>
-    ///
-    /// Hand-rolled binary instead of JSON so the cache has zero external dependencies —
-    /// no Newtonsoft.Json or BepInEx-bundled SimpleJson reach. Previous JSON version
-    /// would crash the probe coroutine with FileNotFoundException at JIT time if the
-    /// user's modset didn't bring Newtonsoft.Json in (Jotunn ships it; minimal modsets
-    /// don't). Binary keeps the file tiny (~30 bytes per entry) and the parser fits
-    /// in a few lines.
-    ///
-    /// All disk failures are non-fatal — a bad/missing cache just means we re-probe.
-    /// On upgrade from the old .json cache the .json file is ignored (sits harmlessly
-    /// on disk next to the new .bin); next probe writes the new .bin and the user
-    /// is back to cached-tier fast path within one session.
+    /// Per-server probe-result cache on disk (BepInEx/config/com.Fire.FiresGhettoNetworkMod_autotune.bin),
+    /// keyed by server endpoint with a TTL. Hand-rolled binary, so the probe never depends on a JSON library
+    /// the modset may not carry; any disk failure simply means a re-probe.
     /// </summary>
     public static class AutoTuneCache
     {

@@ -1,3 +1,11 @@
+* v1.4.11 - hotfix updates
+  - graves, dropped items and tames no longer sink through floors when an area loads
+  - waking up after sleeping on a dedicated server is quick again
+  - crossplay servers show the correct player limit in the server list
+  - less error spam on dedicated servers
+
+* v1.4.2 - fixed players staying frozen on other players' screens after going through a portal (a Valheim 1.0 bug)
+
 * v1.4.1 - fixed a compatibility issue with ValheimCommunityPatch
 
 * v1.4.0 - updated for Valheim 1.0

@@ -8,25 +8,9 @@ using FiresGhettoNetworkMod.AutoTune;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Per-peer adaptive send-rate controller (AIMD). Replaces Steam's own send-rate adapter — which has a
-    /// documented sticky-down quirk that parks peers near SendRateMin — with a closed loop driven by the
-    /// real per-connection signals: outbound send-queue depth + measured delivered throughput.
-    ///
-    /// Per peer, each tick:
-    ///   * delivering >= 65% of the cap -> RAISE: fast (x2 slow-start) until the first overshoot, then fine
-    ///     (x1.1 congestion-avoidance). Biased to push HIGH — over-pinning just runs the link at its real rate.
-    ///   * delivering < 40% of the cap for SustainTicks -> EASE DOWN to 1.1x the real delivered rate (never
-    ///     below it). The trigger is the DELIVERED rate, never the queue: a saturating transfer fills the queue
-    ///     on any link, so queue depth can't tell a healthy fast link from an overwhelmed slow one — only
-    ///     delivered can. Overshoot is safe (~30s transport grace; the ease-down is a few ticks).
-    ///   * otherwise hold (over-pinning is harmless — the link just runs at its real rate).
-    ///
-    /// The rate is PINNED (SendRateMin == SendRateMax) per connection so Steam has no window to drift inside;
-    /// this loop is the sole authority. The pin STARTS at the Auto-Tune/manual send rate (the tier baseline)
-    /// and that baseline is ALSO the hard floor — the controller only ever ramps UP from it toward the ceiling
-    /// and NEVER eases below it, so a peer is never throttled under the configured baseline (idle or otherwise).
-    /// Ceiling = the HYPERBOOST rate. SERVER-SIDE only; defers to HYPERBOOST (already pinned to the API ceiling)
-    /// and to the socket stress tests, and skips PlayFab/crossplay peers.
+    /// Per-peer AIMD send-rate controller, server-side. The rate is pinned (min == max) so Steam cannot
+    /// drift inside it, climbs from the configured baseline toward the HYPERBOOST ceiling, and eases down
+    /// only while a peer's ping stays overdue for SustainTicks. It never eases below the baseline.
     /// </summary>
     [HarmonyPatch]
     public static class AdaptiveSendRate
@@ -38,6 +22,7 @@ namespace FiresGhettoNetworkMod
         // controller doesn't fight their override mid-test.
         public static bool Suspend;
 
+        private const int   BytesPerMegabyte  = 1024 * 1024;
         private const float TickSeconds       = 1.5f;
         private const float HighWaterFraction = 0.70f;   // queue vs send-buffer ratio — logged only, NOT a trigger
         private const int   SustainTicks      = 3;       // ticks the bad-connection warning must persist before we back off
@@ -161,8 +146,8 @@ namespace FiresGhettoNetworkMod
             if (!s_loggedConfig && ConfigLog != null && ConfigLog.Value)
             {
                 s_loggedConfig = true;
-                LoggerOptions.LogMessage($"[AdaptiveRate] effective: start={baseline / 1048576}MB floor={minRate / 1048576}MB "
-                    + $"ceiling={ceiling / 1048576L}MB sendBuf={buffer / 1048576}MB highWater={highWater / 1048576}MB "
+                LoggerOptions.LogMessage($"[AdaptiveRate] effective: start={baseline / BytesPerMegabyte}MB floor={minRate / BytesPerMegabyte}MB "
+                    + $"ceiling={ceiling / (long)BytesPerMegabyte}MB sendBuf={buffer / BytesPerMegabyte}MB highWater={highWater / BytesPerMegabyte}MB "
                     + $"(up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, back off x{BackoffStep:F1} after badconn>{BadConnectionSecs:F0}s x{SustainTicks})");
             }
 
@@ -172,26 +157,26 @@ namespace FiresGhettoNetworkMod
                 var peer = peers[i];
                 if (peer == null || peer.m_socket == null) continue;
 
-                PeerState st;
-                if (!s_state.TryGetValue(peer.m_uid, out st))
+                PeerState peerState;
+                if (!s_state.TryGetValue(peer.m_uid, out peerState))
                 {
-                    uint h = NetworkingRatesGroup.GetConnectionHandle(peer);
-                    if (h == 0u) continue;   // PlayFab / crossplay — no per-connection control
-                    st = new PeerState { Conn = h, Target = baseline, SlowStart = true };
-                    s_state[peer.m_uid] = st;
+                    uint connection = NetworkingRatesGroup.GetConnectionHandle(peer);
+                    if (connection == 0u) continue;   // PlayFab / crossplay — no per-connection control
+                    peerState = new PeerState { Conn = connection, Target = baseline, SlowStart = true };
+                    s_state[peer.m_uid] = peerState;
                     s_seen.Add(peer.m_uid);
-                    NetworkingRatesGroup.SetConnectionRatePinned(h, st.Target, raising: true);
+                    NetworkingRatesGroup.SetConnectionRatePinned(connection, peerState.Target, raising: true);
                     continue;
                 }
                 s_seen.Add(peer.m_uid);
 
-                if (st.Target < minRate) st.Target = minRate;   // floor at the link-safe minimum, NOT the baseline
+                if (peerState.Target < minRate) peerState.Target = minRate;   // floor at the link-safe minimum, NOT the baseline
 
                 int queue = peer.m_socket.GetSendQueueSize();
                 if (queue < 0) continue;
 
                 float delivered = NetworkStats.PeerSendBytesPerSec(peer.m_socket);
-                int oldTarget = st.Target;
+                int oldTarget = peerState.Target;
                 string branch;
                 bool? pinned = null;
 
@@ -206,16 +191,16 @@ namespace FiresGhettoNetworkMod
 
                 if (badConn)
                 {
-                    branch = $"BADCONN {st.PressureTicks + 1}/{SustainTicks}";
-                    if (++st.PressureTicks >= SustainTicks)
+                    branch = $"BADCONN {peerState.PressureTicks + 1}/{SustainTicks}";
+                    if (++peerState.PressureTicks >= SustainTicks)
                     {
-                        st.PressureTicks = 0;
-                        st.SlowStart = false;
-                        int next = Mathf.Max(minRate, (int)(st.Target * BackoffStep));
-                        if (next < st.Target)
+                        peerState.PressureTicks = 0;
+                        peerState.SlowStart = false;
+                        int next = Mathf.Max(minRate, (int)(peerState.Target * BackoffStep));
+                        if (next < peerState.Target)
                         {
-                            st.Target = next;
-                            pinned = NetworkingRatesGroup.SetConnectionRatePinned(st.Conn, st.Target, raising: false);
+                            peerState.Target = next;
+                            pinned = NetworkingRatesGroup.SetConnectionRatePinned(peerState.Conn, peerState.Target, raising: false);
                             branch = "BACKOFF";
                         }
                         else branch = "BACKOFF-floored";
@@ -223,23 +208,23 @@ namespace FiresGhettoNetworkMod
                 }
                 else
                 {
-                    st.PressureTicks = 0;
-                    if (st.Target < ceiling)
+                    peerState.PressureTicks = 0;
+                    if (peerState.Target < ceiling)
                     {
-                        long next = (long)(st.Target * (st.SlowStart ? SlowStartFactor : CongAvoidFactor));
-                        if (next <= st.Target) next = st.Target + MinStepBytes;   // always make forward progress
+                        long next = (long)(peerState.Target * (peerState.SlowStart ? SlowStartFactor : CongAvoidFactor));
+                        if (next <= peerState.Target) next = peerState.Target + MinStepBytes;   // always make forward progress
                         if (next > ceiling) next = ceiling;
-                        st.Target = (int)next;
-                        pinned = NetworkingRatesGroup.SetConnectionRatePinned(st.Conn, st.Target, raising: true);
-                        branch = st.SlowStart ? "RAISE-fast" : "RAISE";
+                        peerState.Target = (int)next;
+                        pinned = NetworkingRatesGroup.SetConnectionRatePinned(peerState.Conn, peerState.Target, raising: true);
+                        branch = peerState.SlowStart ? "RAISE-fast" : "RAISE";
                     }
                     else branch = "RAISE-ceiling";
                 }
 
                 if (ConfigLog != null && ConfigLog.Value)
-                    LoggerOptions.LogMessage($"[AdaptiveRate] peer {peer.m_uid} {branch}: cap {oldTarget / 1048576}->{st.Target / 1048576} MB/s, "
-                        + $"delivered {delivered / 1048576f:F1} MB/s, pingAge {pingAge:F1}/{BadConnectionSecs:F0}s, "
-                        + $"queue {queue / 1048576f:F1}/{highWater / 1048576} MB"
+                    LoggerOptions.LogMessage($"[AdaptiveRate] peer {peer.m_uid} {branch}: cap {oldTarget / BytesPerMegabyte}->{peerState.Target / BytesPerMegabyte} MB/s, "
+                        + $"delivered {delivered / (float)BytesPerMegabyte:F1} MB/s, pingAge {pingAge:F1}/{BadConnectionSecs:F0}s, "
+                        + $"queue {queue / (float)BytesPerMegabyte:F1}/{highWater / BytesPerMegabyte} MB"
                         + (pinned.HasValue ? (pinned.Value ? " [pin ok]" : " [PIN FAILED]") : ""));
             }
 

@@ -6,23 +6,18 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// TEST-BUILD DIAGNOSTIC (not for release). One-shot audit of build-piece ObjectType.
-    ///
-    /// Client instantiation order is Type-descending (ZNetScene.ZDOCompare): Solid (2) is always
-    /// instantiated before Default (0). A ZDO's type comes straight from the prefab's serialized
-    /// ZNetView.m_type (ZNetView.cs: this.m_zdo.Type = this.m_type). Vanilla build pieces are Solid,
-    /// so a vanilla floor/bridge always exists before the loose item resting on it.
-    ///
-    /// If a custom build-piece mod ships a piece with m_type left at the Unity default (Default=0),
-    /// that piece is in the SAME instantiation tier as the items on top of it — pure load-race — so
-    /// a tombstone/item can spawn and fall before its support exists. This audit names any such piece.
-    ///
-    /// Reads ZNetScene.m_prefabs after the count stops growing (Jotunn registers modded prefabs after
-    /// ZNetScene.Awake). Runs on both server and client; the dedi log is the one that matters.
+    /// Names build pieces whose ZNetView.m_type is not Solid. Clients instantiate Type-descending
+    /// (ZNetScene.ZDOCompare), so a Solid floor always exists before the loose items resting on it; a modded
+    /// piece left at the Unity default lands in the same tier as those items and can lose the race. Reads
+    /// ZNetScene.m_prefabs once the count stops growing, since Jotunn registers after ZNetScene.Awake.
     /// </summary>
     [HarmonyPatch]
     public static class PieceTypeAudit
     {
+        private const int MaxSettleChecks = 60;
+        private const int StableChecksRequired = 3;
+        private const float SettleCheckSeconds = 1f;
+
         private static bool s_started;
 
         [HarmonyPatch(typeof(ZNetScene), "Awake")]
@@ -36,30 +31,30 @@ namespace FiresGhettoNetworkMod
 
         private static IEnumerator RunWhenPrefabsSettle()
         {
-            int last = -1;
-            int stableTicks = 0;
-            for (int i = 0; i < 60; i++)
+            int lastCount = -1;
+            int stableChecks = 0;
+            for (int check = 0; check < MaxSettleChecks; check++)
             {
-                ZNetScene zs = ZNetScene.instance;
-                int count = zs != null ? zs.m_prefabs.Count : 0;
-                if (count > 0 && count == last)
+                ZNetScene scene = ZNetScene.instance;
+                int count = scene != null ? scene.m_prefabs.Count : 0;
+                if (count > 0 && count == lastCount)
                 {
-                    if (++stableTicks >= 3) break;
+                    if (++stableChecks >= StableChecksRequired) break;
                 }
                 else
                 {
-                    stableTicks = 0;
+                    stableChecks = 0;
                 }
-                last = count;
-                yield return new WaitForSeconds(1f);
+                lastCount = count;
+                yield return new WaitForSeconds(SettleCheckSeconds);
             }
             Audit();
         }
 
         private static void Audit()
         {
-            ZNetScene zs = ZNetScene.instance;
-            if (zs == null)
+            ZNetScene scene = ZNetScene.instance;
+            if (scene == null)
             {
                 LoggerOptions.LogWarning("[PieceAudit] ZNetScene null at audit time - aborting.");
                 return;
@@ -69,21 +64,21 @@ namespace FiresGhettoNetworkMod
             int nonSolid = 0;
             var suspects = new List<string>();
 
-            foreach (GameObject go in zs.m_prefabs)
+            foreach (GameObject prefab in scene.m_prefabs)
             {
-                if (go == null) continue;
-                if (go.GetComponent<Piece>() == null) continue;
-                ZNetView nview = go.GetComponent<ZNetView>();
+                if (prefab == null) continue;
+                if (prefab.GetComponent<Piece>() == null) continue;
+                ZNetView nview = prefab.GetComponent<ZNetView>();
                 if (nview == null) continue;
 
                 totalPieces++;
                 if (nview.m_type != ZDO.ObjectType.Solid)
                 {
                     nonSolid++;
-                    bool hasCollider = go.GetComponentInChildren<Collider>() != null;
-                    bool hasWearNTear = go.GetComponent<WearNTear>() != null;
+                    bool hasCollider = prefab.GetComponentInChildren<Collider>() != null;
+                    bool hasWearNTear = prefab.GetComponent<WearNTear>() != null;
                     suspects.Add(
-                        $"  {go.name}  type={nview.m_type}  collider={hasCollider}  wearNTear={hasWearNTear}");
+                        $"  {prefab.name}  type={nview.m_type}  collider={hasCollider}  wearNTear={hasWearNTear}");
                 }
             }
 

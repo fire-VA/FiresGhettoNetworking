@@ -109,26 +109,26 @@ namespace FiresGhettoNetworkMod
         // "Wrapper -> Inner" for logging, e.g. "BufferingSocket -> ZSteamSocket".
         public static string UnwrappedSocketName(ZNetPeer peer)
         {
-            var s = peer != null ? peer.m_socket : null;
-            if (s == null) return "null";
-            var inner = UnwrapSocket(s);
-            return ReferenceEquals(inner, s) ? s.GetType().Name : (s.GetType().Name + " -> " + inner.GetType().Name);
+            var socket = peer != null ? peer.m_socket : null;
+            if (socket == null) return "null";
+            var inner = UnwrapSocket(socket);
+            return ReferenceEquals(inner, socket) ? socket.GetType().Name : (socket.GetType().Name + " -> " + inner.GetType().Name);
         }
 
         // True iff the peer's REAL (unwrapped) transport is a Steam socket.
         public static bool IsSteamSocket(ZNetPeer peer)
         {
-            var s = peer != null ? peer.m_socket : null;
-            return s != null && UnwrapSocket(s).GetType().Name == "ZSteamSocket";
+            var socket = peer != null ? peer.m_socket : null;
+            return socket != null && UnwrapSocket(socket).GetType().Name == "ZSteamSocket";
         }
 
         public static uint GetConnectionHandle(ZNetPeer peer)
         {
             try
             {
-                var s = peer != null ? peer.m_socket : null;
-                if (s == null) return 0u;
-                var sock = UnwrapSocket(s);
+                var socket = peer != null ? peer.m_socket : null;
+                if (socket == null) return 0u;
+                var sock = UnwrapSocket(socket);
                 if (sock.GetType().Name != "ZSteamSocket") return 0u;
                 var conField = sock.GetType().GetField("m_con", BindingFlags.NonPublic | BindingFlags.Instance);
                 if (conField == null) return 0u;
@@ -272,17 +272,17 @@ namespace FiresGhettoNetworkMod
             ApplyRecvBufferSize();
             ApplyRecvMaxMessageSize();
 
-            int n = 0;
+            int applied = 0;
             try
             {
                 var peers = ZNet.instance.GetPeers();
                 if (peers != null)
                     foreach (var p in peers)
-                        if (p != null) { ApplyEffectiveToConnection(p); n++; }
+                        if (p != null) { ApplyEffectiveToConnection(p); applied++; }
             }
             catch (Exception e) { LoggerOptions.LogWarning($"Live per-connection rate apply failed: {e.Message}"); }
 
-            LoggerOptions.LogMessage($"Live rates applied to {n} open connection(s): "
+            LoggerOptions.LogMessage($"Live rates applied to {applied} open connection(s): "
                 + $"SendRateMax {EffectiveConfig.SteamSendRateMax() / 1024 / 1024} MB/s, "
                 + $"SendBuffer {EffectiveConfig.SteamSendBufferBytes() / 1024 / 1024} MB, "
                 + $"RecvBuffer {EffectiveConfig.SteamRecvBufferBytes() / 1024 / 1024} MB"
@@ -358,17 +358,10 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>
-        /// Apply Steam per-connection max-message ceiling on the receive side.
-        /// Without this, raising the recv buffer above 512 KB still hits "Reliable
-        /// message size too large" rejections at the 512 KB Steam default — the
-        /// buffer holds the bytes but the per-message gate blocks delivery. This
-        /// method pairs with ApplyRecvBufferSize: both should rise together.
-        ///
-        /// Enum k_ESteamNetworkingConfig_RecvMaxMessageSize is missing from
-        /// Valheim's bundled Steamworks.NET wrapper; FiresSteamworksPatcher
-        /// injects it at preloader time on the server. On a host without that
-        /// patcher, the probe fails and this method silently no-ops — same
-        /// behavior pattern as ApplyRecvBufferSize.
+        /// Raises Steam's per-connection max message size alongside the recv buffer. Without it the buffer
+        /// holds the bytes but the 512 KB per-message gate still rejects delivery. The enum is missing from
+        /// Valheim's bundled Steamworks.NET wrapper and is injected by FiresSteamworksPatcher at preload, so
+        /// on a host without that patcher the probe fails and this no-ops, as ApplyRecvBufferSize does.
         /// </summary>
         public static void ApplyRecvMaxMessageSize()
         {
@@ -413,19 +406,6 @@ namespace FiresGhettoNetworkMod
                 return false;
             }
             catch { return false; }
-        }
-
-        private static int GetSendRateValue(object option)
-        {
-            string optionStr = option.ToString();
-            return optionStr switch
-            {
-                "_1024KB" => 1024 * 1024,
-                "_768KB" => 768 * 1024,
-                "_512KB" => 512 * 1024,
-                "_256KB" => 256 * 1024,
-                _ => 150 * 1024
-            };
         }
 
         // ====================== UPDATE RATE PATCH ======================
@@ -587,20 +567,9 @@ namespace FiresGhettoNetworkMod
             return code.AsEnumerable();
         }
 
-        private static int GetConfiguredQueueLimit()
-        {
-            // NOTE: This runs ONCE at patch time (transpiler), not at runtime — so
-            // tier changes mid-session don't take effect on the queue limit until the
-            // patch is reloaded. That's a known limitation; the trade-off is keeping
-            // the transpiler simple. Steam send rates and recv buffer DO update live.
-            return EffectiveConfig.QueueSize() switch
-            {
-                QueueSizeOptions._80KB => 80 * 1024,
-                QueueSizeOptions._64KB => 64 * 1024,
-                QueueSizeOptions._48KB => 48 * 1024,
-                QueueSizeOptions._32KB => 32 * 1024,
-                _ => 10240 // vanilla fallback
-            };
-        }
+        private const int VanillaQueueLimitBytes = 10240;
+
+        /// <summary>Runs once at patch time, so a tier change mid-session does not move the queue limit until reload.</summary>
+        private static int GetConfiguredQueueLimit() => EffectiveConfig.QueueSizeBytes(VanillaQueueLimitBytes);
     }
 }

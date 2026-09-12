@@ -5,9 +5,9 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
     /// "post the full log to Discord" action.
     ///
     /// The relay module deliberately knows nothing about:
-    ///  ? how the host discovers Discord reactions (bot poll, gateway, HTTP, ...)
-    ///  ? how the host authenticates the reacting user
-    ///  ? how the host fetches the cached log bytes for a given platform id
+    ///   - how the host discovers Discord reactions (bot poll, gateway, HTTP, ...)
+    ///   - how the host authenticates the reacting user
+    ///   - how the host fetches the cached log bytes for a given platform id
     ///
     /// Those are all mod-specific concerns. The module only owns the registry of which
     /// message ids map to which players, plus the dispatch plumbing.
@@ -29,6 +29,6 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
         /// Exceptions are caught by the caller; implementations should still log their
         /// own errors for diagnosability.
         /// </summary>
-        void HandleRequest(LogRequestContext ctx, string discordUserId, string emoji);
+        void HandleRequest(LogRequestContext context, string discordUserId, string emoji);
     }
 }

@@ -8,45 +8,9 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod.AutoTune
 {
     /// <summary>
-    /// Client-side instantiation pacing for ZNetScene.CreateObjects (Workstream A).
-    ///
-    /// Two layered mechanisms, both ultimately controlling how many ZDOs vanilla
-    /// instantiates per frame in <c>ZNetScene.CreateObjects</c>:
-    ///
-    ///   1. PRIMARY — TIME-BUDGET PREFIX
-    ///      <see cref="CreateObjects_TimeBudgetPrefix"/> intercepts the call,
-    ///      replays vanilla's own <c>CreateObjectsSorted</c> + <c>CreateDistantObjects</c>
-    ///      private methods (via <see cref="HarmonyReversePatch"/>) in small chunks,
-    ///      and stops as soon as a per-frame ms budget elapses. The prefix returns
-    ///      false so the original method never runs; vanilla's per-frame cap loses
-    ///      its grip.
-    ///
-    ///      Why call the privates rather than instantiate ourselves: vanilla
-    ///      <c>CreateObjectsSorted</c> already does the right things — distance-sort
-    ///      against <c>ZNet.GetReferencePosition()</c>, <c>IsZoneReadyForType</c>
-    ///      gating, prefab validity check, server-side destroy of bad ZDOs. We don't
-    ///      want a fork; we want to call the same code on a smaller cadence.
-    ///
-    ///      "Persistent across frames" falls out for free — vanilla's
-    ///      <c>CreateDestroyObjects</c> calls us at 30 Hz with a freshly-rebuilt
-    ///      near/distant list each tick. Whatever we didn't instantiate this tick
-    ///      is in the next tick's list, minus the .Created flag we flipped.
-    ///
-    ///      "Resort on teleport" also falls out for free — sort uses live
-    ///      <c>GetReferencePosition()</c> every chunk call.
-    ///
-    ///   2. FALLBACK — CAP-BUMP TRANSPILER
-    ///      Original <see cref="CreateObjects_BatchCapTranspiler"/> is preserved.
-    ///      When the prefix is disabled (<see cref="EffectiveConfig.TimeSliceInstantiationEnabled"/>
-    ///      false) vanilla's own body runs — but with the 10/100 caps already
-    ///      transpiled to <c>cap × ZoneLoadBatchSize</c>. So toggling the prefix
-    ///      off doesn't drop us back to raw vanilla; it drops us back to the
-    ///      previous-generation behaviour. Clean A/B comparison surface.
-    ///
-    /// Server-side, dedicated only: bail. The dedicated server's CreateDestroyObjects
-    /// path goes through <see cref="ServerAuthorityPatches.CreateDestroyObjects_Prefix"/>
-    /// which itself calls <c>__instance.CreateObjects(...)</c> — that re-enters here
-    /// and we exit early so server-side timing is untouched.
+    /// Client-side instantiation pacing for ZNetScene.CreateObjects: a time-budget prefix replays vanilla's
+    /// own sorted and distant passes in chunks, with the older batch-cap transpiler as the fallback when
+    /// time-slicing is switched off.
     /// </summary>
     [HarmonyPatch]
     public static class ZoneLoadPatches
@@ -62,19 +26,10 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         // ----- Time-budget tuning -----
 
-        // We chunk vanilla's CreateObjectsSorted into multiple short calls per
-        // frame so the time budget can interrupt between chunks. ChunkSize=1
-        // gives the tightest possible budget adherence: worst-case overshoot is
-        // exactly one Instantiate call. ChunkSize=10 (the prior value) tuned
-        // for the assumption that prefabs cost ~0.1 ms each; in cities with
-        // first-instantiate spikes (5-35 ms per heavy prefab — shader variant
-        // compilation + asset bundle resolution), one 10-item chunk could burn
-        // 50+ ms before the loop's between-chunk budget check fired, producing
-        // 25x budget overshoot and visible hitching. The per-chunk sort cost
-        // on a few-hundred-element list is ~1.5 us, so going 10 -> 1 adds
-        // negligible overhead and plugs the overshoot leak. The remaining
-        // first-instantiate spikes are eliminated separately by the prefab
-        // prewarm in FiresEasyBakeMeshes.
+        // Vanilla's CreateObjectsSorted is chunked so the time budget can interrupt between chunks. One
+        // prefab per chunk caps the overshoot at a single Instantiate; the previous ten assumed ~0.1 ms each,
+        // which a city's first-instantiate spikes (shader variants, bundle resolution) turned into 50 ms of
+        // overshoot and visible hitching. The per-chunk sort costs about 1.5 us on a few hundred elements.
         private const int ChunkSize = 1;
 
         // When SafetyFallbackEnabled and pending list exceeds the threshold,
