@@ -1,4 +1,4 @@
-* v1.4.11 - hotfix updates
+* v1.4.12 - hotfix updates
   - graves, dropped items and tames no longer sink through floors when an area loads
   - waking up after sleeping on a dedicated server is quick again
   - crossplay servers show the correct player limit in the server list
