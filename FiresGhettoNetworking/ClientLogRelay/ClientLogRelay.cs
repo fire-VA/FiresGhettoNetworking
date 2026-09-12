@@ -5,18 +5,10 @@ using UnityEngine;
 namespace VerdantsAscent.Modules.ClientLogRelay
 {
     /// <summary>
-    /// Central fan-out hub for client login artifacts.
-    ///
-    /// Contract:
-    ///  1. The wire transport (VAngarde anti-cheat challenge, or any other RPC) constructs
-    ///     a <see cref="ClientLogArtifacts"/> and calls <see cref="ReportArtifacts"/>.
-    ///  2. The relay parses errors/warnings once into the artifact, then invokes every
-    ///     registered <see cref="IClientLogConsumer"/>.
-    ///  3. Each consumer decides independently what to do — write to disk, post to Discord,
-    ///     stash in memory, etc.
-    ///
-    /// Registration is process-global and idempotent (same ConsumerId cannot be registered
-    /// twice). All public methods are thread-safe under a simple lock.
+    /// Fan-out hub for client login artifacts. The wire transport builds a ClientLogArtifacts and calls
+    /// ReportArtifacts; the relay parses errors and warnings into it once, then hands it to every registered
+    /// consumer, each of which decides on its own whether to write it to disk, post it, or ignore it.
+    /// Registration is process-global and idempotent, and every public method is locked.
     /// </summary>
     public static class ClientLogRelay
     {
@@ -25,7 +17,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
 
         /// <summary>
         /// True when at least one consumer is registered. Wire-transport layers should check
-        /// this before doing the work of soliciting a log from the client — no consumers,
+        /// this before doing the work of soliciting a log from the client - no consumers,
         /// no point.
         /// </summary>
         public static bool HasConsumers
@@ -148,22 +140,12 @@ namespace VerdantsAscent.Modules.ClientLogRelay
             }
         }
 
-        // ?????????????????????????????????????????????????????????
-        //  Cross-mod login-snapshot ownership
-        // ?????????????????????????????????????????????????????????
-        //  Multiple mods that drop in this folder may each want to POST a Discord embed
-        //  on every client login. To avoid double-posting we coordinate through an
-        //  AppDomain-level slot keyed by a non-namespaced string constant ? so two mods
-        //  built against different renamed copies of this module still see the same
-        //  ownership state.
-        //
-        //  Contract:
-        //    ? Every mod that wants to own the login-snapshot channel calls
-        //      TryClaimLoginSnapshotOwnership("MyMod.Login", priority) in its plugin init.
-        //    ? Highest priority wins. Ties go to the first caller.
-        //    ? A consumer checks IsLoginSnapshotOwner(ownerId) in its EnabledGate and
-        //      no-ops when the answer is false.
-        //    ? If NO mod claims, every consumer stays enabled (backwards-compatible).
+        // Cross-mod login-snapshot ownership. Several mods dropping in this folder may each want to post a
+        // Discord embed per login, so ownership is coordinated through an AppDomain slot keyed by a
+        // non-namespaced string: two mods built against renamed copies still see the same state. Each claims
+        // with TryClaimLoginSnapshotOwnership("MyMod.Login", priority) - highest priority wins, ties to the
+        // first caller - and each consumer no-ops when IsLoginSnapshotOwner says otherwise. With no claim at
+        // all every consumer stays enabled.
 
         /// <summary>
         /// Fully-qualified string literal; intentionally NOT derived from a namespace so
@@ -210,7 +192,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
                 if (priority > currentPriority)
                 {
                     Debug.Log($"[ClientLogRelay] Login snapshot owner changed: " +
-                              $"'{currentOwner}' (priority {currentPriority}) ? '{ownerId}' (priority {priority})");
+                              $"'{currentOwner}' (priority {currentPriority}) -> '{ownerId}' (priority {priority})");
                     AppDomain.CurrentDomain.SetData(LoginOwnerKey, ownerId);
                     AppDomain.CurrentDomain.SetData(LoginOwnerPriorityKey, priority);
                     return true;
@@ -232,7 +214,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
         {
             if (string.IsNullOrEmpty(ownerId)) return false;
             string currentOwner = AppDomain.CurrentDomain.GetData(LoginOwnerKey) as string;
-            if (string.IsNullOrEmpty(currentOwner)) return true; // nobody claimed ? everyone allowed
+            if (string.IsNullOrEmpty(currentOwner)) return true; // nobody claimed, everyone allowed
             return string.Equals(currentOwner, ownerId, StringComparison.Ordinal);
         }
 
@@ -245,18 +227,10 @@ namespace VerdantsAscent.Modules.ClientLogRelay
             return AppDomain.CurrentDomain.GetData(LoginOwnerKey) as string;
         }
 
-        // ?????????????????????????????????????????????????????????
-        //  Log-request reaction dispatch
-        // ?????????????????????????????????????????????????????????
-        //  The host mod plugs in a single ILogRequestHandler. When it spots a recognised
-        //  reaction on a previously-posted snapshot message (via whatever bot / gateway /
-        //  polling it has available) it calls TryDispatchLogRequest and the relay:
-        //    1. Resolves the message id through LogRequestRegistry.
-        //    2. Authorises the reacting user via the handler.
-        //    3. Invokes the handler with the resolved context.
-        //
-        //  The relay never talks to Discord on its own here ? it just routes.
-
+        // Log-request reaction dispatch. The host mod plugs in one ILogRequestHandler and calls
+        // TryDispatchLogRequest when it spots a recognised reaction; the relay resolves the message id
+        // through LogRequestRegistry, authorises the reacting user through the handler, then invokes it.
+        // Routing only - the relay never talks to Discord itself here.
         private static Interactions.ILogRequestHandler _logRequestHandler;
 
         /// <summary>
@@ -288,7 +262,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
         /// Main entry point for reaction dispatch. Called by the host mod's bot listener
         /// (or equivalent) once it has identified an incoming emoji-reaction event.
         /// Returns true if the event was resolved to a known message AND an authorised
-        /// user, false otherwise. Not an error ? an unknown message id just means the
+        /// user, false otherwise. Not an error; an unknown message id just means the
         /// reaction is on something this module didn't post.
         /// </summary>
         /// <param name="messageId">Discord message snowflake id the reaction was added to.</param>
@@ -301,7 +275,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
             lock (_lock) { handler = _logRequestHandler; }
             if (handler == null) return false;
 
-            if (!Interactions.LogRequestRegistry.TryGet(messageId, out var ctx))
+            if (!Interactions.LogRequestRegistry.TryGet(messageId, out var context))
                 return false;
 
             bool authorised;
@@ -320,7 +294,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
 
             try
             {
-                handler.HandleRequest(ctx, discordUserId, emoji);
+                handler.HandleRequest(context, discordUserId, emoji);
                 return true;
             }
             catch (Exception ex)

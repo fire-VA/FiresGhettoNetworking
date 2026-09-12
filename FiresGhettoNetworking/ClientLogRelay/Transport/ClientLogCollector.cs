@@ -7,18 +7,9 @@ using UnityEngine;
 namespace VerdantsAscent.Modules.ClientLogRelay.Transport
 {
     /// <summary>
-    /// Client-side helpers that assemble the raw inputs needed to build a
-    /// <see cref="ClientLogArtifacts"/> on the server.
-    ///
-    /// The relay itself deliberately knows nothing about the wire — every mod picks its own
-    /// RPC / protocol / compression story. This helper exists so that the <b>client</b> half
-    /// of the pipeline (read <c>BepInEx/LogOutput.log</c>, enumerate <c>Chainloader.PluginInfos</c>)
-    /// doesn't have to be re-derived inside every consumer. Drop it into the other mod,
-    /// call <see cref="ReadLocalBepInExLog"/> + <see cref="BuildLocalModList"/>, serialise
-    /// whichever way you want, and forward the bytes to the server.
-    ///
-    /// Dependencies: BepInEx only (same as the rest of this module). No ZNet, no ZPackage,
-    /// no Valheim types.
+    /// The client half of the pipeline: read BepInEx/LogOutput.log and enumerate Chainloader.PluginInfos.
+    /// The relay itself knows nothing about the wire, so each mod serialises these however it likes and
+    /// forwards the bytes. BepInEx only - no ZNet, no ZPackage, no Valheim types.
     /// </summary>
     public static class ClientLogCollector
     {
@@ -104,17 +95,11 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Transport
         }
 
         /// <summary>
-        /// Off-thread variant of <see cref="ReadLocalBepInExLog"/>. Schedules the file read
-        /// on a <see cref="ThreadPool"/> worker so it never blocks the Unity main thread,
-        /// then invokes <paramref name="onComplete"/> with the bytes (or <c>null</c> on
-        /// failure) via <c>MainThreadDispatcher.Enqueue</c> so callers can safely touch
-        /// Unity APIs from the callback.
-        ///
-        /// Preferred in hot paths like the anti-cheat challenge response where a
-        /// multi-megabyte synchronous read would otherwise stall a login frame.
+        /// ReadLocalBepInExLog on a ThreadPool worker, with the result handed back through
+        /// MainThreadDispatcher so the callback can touch Unity APIs. Preferred wherever a multi-megabyte
+        /// synchronous read would stall a login frame.
         /// </summary>
-        /// <param name="onComplete">Invoked on the main thread with the log bytes (or null).
-        /// Never null-checked ? caller must provide a handler.</param>
+        /// <param name="onComplete">Called on the main thread with the bytes, or null on failure. Required.</param>
         public static void ReadLocalBepInExLogAsync(Action<byte[]> onComplete)
         {
             if (onComplete == null) return;

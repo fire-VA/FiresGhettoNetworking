@@ -6,18 +6,10 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// TEST-BUILD DIAGNOSTIC (not for release). Tracks ItemDrop / TombStone spawns to
-    /// catch the "falls through a structure on zone reload" bug. v2: the v1 probe sampled
-    /// at Awake — before position/ownership were set — so it logged garbage ((0,0,0),
-    /// owner=False) and its danger-case detection never fired. This version starts a
-    /// coroutine, waits for the object to settle, captures the real spawn state, then
-    /// re-checks after a few seconds to see if it actually dropped.
-    ///
-    /// What to look for in the log:
-    ///   [FallProbe] SPAWN ... beneath=NONE   = spawned with no collider under it (at risk)
-    ///   [FallProbe] FELL  ... drop=X.XXm     = it actually dropped after spawning (the bug)
-    /// If a deliberate repro produces SPAWN-beneath=NONE lines but no FELL lines, the items
-    /// are landing fine and the issue isn't reproducing here.
+    /// Traces ItemDrop and TombStone spawns for the "falls through a structure on zone reload" report. Awake
+    /// is too early to sample - position and ownership are not set yet - so a coroutine waits for the object
+    /// to settle, records the real spawn state, then re-checks a few seconds later. SPAWN lines with
+    /// beneath=NONE mean nothing was under it; a following FELL line means it actually dropped.
     /// </summary>
     [HarmonyPatch]
     public static class FallThroughProbe
@@ -29,8 +21,7 @@ namespace FiresGhettoNetworkMod
         {
             if (!s_maskReady)
             {
-                s_groundMask = LayerMask.GetMask(
-                    "Default", "static_solid", "Default_small", "piece", "terrain", "vehicle");
+                s_groundMask = SolidSurface.Mask();
                 s_maskReady = true;
             }
             return s_groundMask;

@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.1";
+        public const string PluginVersion = "1.4.11";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -62,6 +62,8 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<int>   ConfigPredictionMaxLookaheadZones;
         public static ConfigEntry<bool> ConfigEnableInvulnerableSupportSkip;
         public static ConfigEntry<bool> ConfigEnableInstanceOrphanPrune;
+        public static ConfigEntry<bool> ConfigFixTeleportGhosts;
+        public static ConfigEntry<bool> ConfigFixGroundSnapThroughFloors;
         public static ConfigEntry<bool> ConfigEnableRpcRouter;
         public static ConfigEntry<bool> ConfigEnableRpcAoI;
         public static ConfigEntry<float> ConfigRpcAoIRadius;
@@ -138,173 +140,88 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogMessage($"{PluginName} v{PluginVersion} — Running on CLIENT or SINGLE-PLAYER/LISTEN SERVER, only client-safe features will be applied.");
             }
 
-            // ====================================================================
-            // ALWAYS run these – they are either harmless on clients or needed early
-            // ====================================================================
-            SafeInvokeInit("FiresGhettoNetworkMod.CompressionGroup", "InitConfig", new object[] { Config });
-            SafeInvokeInit("FiresGhettoNetworkMod.NetworkingRatesGroup", "Init", new object[] { Config });
-            SafeInvokeInit("FiresGhettoNetworkMod.DedicatedServerGroup", "Init", new object[] { Config });
+            // Always registered: harmless on clients, or needed before anything else.
+            InvokeStaticInitByTypeName("FiresGhettoNetworkMod.CompressionGroup", "InitConfig", new object[] { Config });
+            InvokeStaticInitByTypeName("FiresGhettoNetworkMod.NetworkingRatesGroup", "Init", new object[] { Config });
+            InvokeStaticInitByTypeName("FiresGhettoNetworkMod.DedicatedServerGroup", "Init", new object[] { Config });
             SendQueueHeadroomMonitor.InitConfig(Config);
             AdaptiveSendRate.InitConfig(Config);
 
-            // Core networking patches that are safe and useful on both client and server
             Harmony.PatchAll(typeof(CompressionGroup));
             Harmony.PatchAll(typeof(NetworkingRatesGroup));
             Harmony.PatchAll(typeof(DedicatedServerGroup));
 
-            // SendZDOs heartbeat diagnostic — once per ~10 s per connected
-            // peer, logs queue size / cap / budget / bail percentage.
-            // Always on (server only via internal IsDedicated gate) so we
-            // can correlate user-reported intermittent failures (stale
-            // voxel edits, frozen mobs, shaking carts) against actual
-            // send-side queue saturation. Cost is two int increments per
-            // SendZDOs call.
             Harmony.PatchAll(typeof(SendZDOsHeartbeatDiagnostic));
 
-            // Fall-through DIAGNOSTICS — verbose, opt-in (default off). Two probes that
-            // investigate items/tombstones sinking through structures:
-            //   FallThroughProbe — per item/tombstone spawn, raycasts for support and logs
-            //                      at-risk spawns and confirmed drops (real per-spawn cost).
-            //   PieceTypeAudit   — one-shot audit naming build pieces left non-Solid (the
-            //                      load-order culprit). Gated at registration: when off, the
-            //                      hot Awake paths are never patched, so they cost nothing.
             if (ConfigEnableFallThroughDiagnostics.Value)
             {
                 Harmony.PatchAll(typeof(FallThroughProbe));
                 Harmony.PatchAll(typeof(PieceTypeAudit));
             }
 
-            // Server disconnect logger — always on (server-gated internally).
-            // Logs each peer drop with duration + a burst counter so a mass
-            // timeout (save-freeze/stall → everyone drops at once) is instantly
-            // distinguishable from a single client's link failure. Low-volume.
             Harmony.PatchAll(typeof(ServerDisconnectDiagnostics));
 
-            // Bulk-transfer gate boost — at ZNet.Start, reflectively patches
-            // the 20 KB GetSendQueueSize gate inside every loaded
-            // ServerSync.ConfigSync and ServerCharacters.Shared copy so their
-            // fragment loops match our raised ZDOMan cap. 
             Harmony.PatchAll(typeof(BulkTransferGatePatches));
 
-            // Pure-diagnostic patch — surfaces vanilla's "Writing a lot of data" warning
-            // with ZDO uid / prefab / position so the offender is actually findable.
-            // Runs on both sides because ZDO.Save is hit on both sides; cost is negligible
-            // when no bucket is oversized (seven dict lookups, zero allocations).
             Harmony.PatchAll(typeof(BigZdoDiagnostic));
 
-            // Admin console test for the ServerSync/ServerCharacters disconnect disarm:
-            // registers the 'fgn_overload' command + its routed RPCs. The queue force only
-            // acts while a test is running, so idle cost is one branch. See DisarmOverloadTest.
             Harmony.PatchAll(typeof(DisarmOverloadTest));
 
-            // Admin console test for the ZSTD compression round-trip ('fgn_comptest'). Registers
-            // the command + RPCs; does nothing unless an admin runs it. See CompressionRoundTripTest.
             Harmony.PatchAll(typeof(CompressionRoundTripTest));
 
-            // Heavy stress tests: fgn_flood (volume blast) + fgn_socketramp (escalate-to-failure,
-            // records the cliff to FiresGhetto_StressResults.txt). Idle until an admin runs them.
             Harmony.PatchAll(typeof(SocketStressTests));
 
-            // Passive, opt-in send-queue headroom telemetry (fgn_headroom). Off by default = zero cost.
             Harmony.PatchAll(typeof(SendQueueHeadroomMonitor));
 
-            // Per-peer adaptive send-rate controller (AIMD). Server-gated internally; ramps each peer's
-            // pinned send rate from the Auto-Tune baseline toward HYPERBOOST as the link proves it can take it.
             Harmony.PatchAll(typeof(AdaptiveSendRate));
 
-            // Instantiation / zone-load stress (fgn_zdoflood). Idle until an admin runs it.
             Harmony.PatchAll(typeof(ZdoFloodTest));
 
             WackyDatabaseCompatibilityPatch.Init(Harmony);
 
-            // Player position sync — has BOTH server-side (priority boost) and client-side
-            // (interpolation + prediction) patches. Individual methods guard on IsServer().
-            // Must run on both sides so clients get interpolation/prediction and config entries bind.
 
 
-            // Config entries for PlayerPositionSyncPatches are bound from
-            // inside BindConfigs() in the correct section-display order.
             Harmony.PatchAll(typeof(PlayerPositionSyncPatches));
 
-            // Client-side invulnerable-piece support skip (Workstream E.1).
-            // Patch is registered on both sides because it's harmless on the
-            // server (its prefix bails on IsDedicated()) and we don't want a
-            // listen-host to miss the optimization. Tier-shadowing is irrelevant
-            // here — this is a binary on/off classifier-driven skip.
             Harmony.PatchAll(typeof(WearNTearClientSupportPatches));
 
-            // Client-side ZNetScene.RemoveObjects throttle — spreads the
-            // "destroy everything that left the active area" burst across
-            // multiple frames so leaving a megabase doesn't freeze the client.
-            // Prefix self-skips on dedi; safe to register on both sides.
             Harmony.PatchAll(typeof(ClientCleanupThrottle));
 
-            // Ownership-handoff pre-snap. Applies vanilla's own OwnerSync rising-edge
-            // snap at the top of FixedUpdate instead of in LateUpdate, so a creature
-            // never simulates a physics step from a dead-reckoned position that drifted
-            // into geometry. Registered on every side — ownership migrates on the
-            // dedicated server too — and it self-limits to creatures with real drift.
+            Harmony.PatchAll(typeof(GroundSnapPatches));
+
             Harmony.PatchAll(typeof(OwnershipHandoffPatches));
 
-            // ====================================================================
-            // AUTO-TUNE — runs on both client (probe) and server (self-tune + aggregator).
-            // Config entries for Auto-Tune are bound from inside BindConfigs() so the
-            // section-display order matches the numeric prefix.
-            // ====================================================================
+            try
+            {
+                TeleportGhostFix.Init();
+                Harmony.PatchAll(typeof(TeleportGhostFix));
+            }
+            catch (System.Exception ex)
+            {
+                LoggerOptions.LogWarning($"[TeleportGhostFix] could not be attached; vanilla behaviour is unchanged. {ex.Message}");
+            }
+
+            // Auto-tune: probe on clients, self-tune on servers.
             Harmony.PatchAll(typeof(AutoTuneProbeHooks));
             Harmony.PatchAll(typeof(ZoneLoadPatches));
             ServerAutoTune.InitServerSide();
 
-            // Client Log Relay — TEMPORARILY DISABLED.
-            // Thunderstore rejected the upload because of this module; we'll spin
-            // it out into its own standalone mod later.  The source files are still
-            // on disk under ClientLogRelay/ but excluded from the csproj <Compile>
-            // list so they don't ship in this build.  Re-enable by adding the
-            // <Compile Include="ClientLogRelay\..."> entries back and restoring
-            // the init / OnApplicationQuit blocks below.
 
-            // ====================================================================
-            // EVERYTHING BELOW THIS POINT ONLY RUNS ON A TRUE DEDICATED SERVER
-            // ====================================================================
+            // Everything below runs only on a dedicated server with server authority on.
+            // ClientLogRelay is excluded from the csproj until it ships as its own mod; its sources remain on disk.
             if (isDedicated && ConfigEnableServerAuthority.Value)
             {
-                // Ship fixes — only patched when enabled, so a dedicated server
-                // running with ship fixes off pays zero per-tick ship overhead.
                 if (ConfigEnableShipFixes.Value)
                     Harmony.PatchAll(typeof(ShipFixesGroup));
 
-                // Registered independently of the ship-fixes toggle: this is a correctness guard for
-                // server-OWNED hulls, not a steering feature. Vanilla applies no buoyancy while the
-                // water level is unresolvable but leaves the Rigidbody live, so an unloaded zone means
-                // the hull free-falls and then damages itself on landing (ImpactEffect fires for the
-                // owner). Self-gates to dedicated + owner, so it is inert on the peer-owned default.
                 Harmony.PatchAll(typeof(ServerShipSimulationPatches));
 
-                // ZDO memory management (useful on long-running dedicated servers)
                 Harmony.PatchAll(typeof(ZDOMemoryManager));
 
-                // All server-authority patches.
-                //
-                // ServerStabilityPatches (Humanoid.UpdateAttack null-guard, WNT
-                // UpdateSupport collider re-init, RequestRespons ship-handoff) —
-                // pure defensive/optimisation patches, always on when authority is.
-                //
-                // ServerOwnershipPatches — second attempt 2026-05-23. The first
-                // attempt (selective Character+Ship ownership with sticky-server
-                // logic) froze mobs and was reverted. This version mirrors
-                // Serverside Simulations EXACTLY — broad transfer, release on no
-                // coverage, no special-casing of server-as-owner. Gated by its
-                // own sub-toggle (ConfigEnableServerOwnership, defaults OFF)
-                // so an operator can leave the rest of authority on while
-                // keeping ownership transfer off.
                 Harmony.PatchAll(typeof(ServerAuthorityPatches));
                 Harmony.PatchAll(typeof(ServerStabilityPatches));
                 Harmony.PatchAll(typeof(MonsterAIPatches));
 
-                // Mutually exclusive V2 / V3 ownership transfer. Both prefix
-                // ZDOMan.ReleaseNearbyZDOS, so they cannot coexist. Selective
-                // (V3) takes precedence when both flags are on — it's the
-                // safer default because interactables stay vanilla peer-owned.
                 if (ConfigEnableServerOwnershipSelective.Value)
                 {
                     if (ConfigEnableServerOwnership.Value)
@@ -336,9 +253,6 @@ namespace FiresGhettoNetworkMod
                 Harmony.PatchAll(typeof(ZDOThrottlingPatches));
                 Harmony.PatchAll(typeof(AILODPatches));
 
-                // Opt-in boot-time patch verification. Default OFF — runtime
-                // [ServerStatus] proves the patches are working. Flip the config
-                // ON when troubleshooting mod-conflict or first-attach issues.
                 if (ConfigEnableBootPatchVerification.Value)
                 {
                     DumpPatchInfo(typeof(BaseAI),       "UpdateAI");
@@ -354,7 +268,6 @@ namespace FiresGhettoNetworkMod
                     DumpPatchInfo(typeof(TerrainComp),  "Update");
                 }
 
-                // RPC Router — intercepts routed RPCs for filtering/bandwidth savings
                 if (ConfigEnableRpcRouter.Value)
                 {
                     Harmony.PatchAll(typeof(RpcRouterPatches));
@@ -367,39 +280,26 @@ namespace FiresGhettoNetworkMod
                     TriggerOnDeathHandler.Register();
                     TalkerSayHandler.Register();
                     SpawnedZoneHandler.Register();
-                    // 📡 RPC ROUTER mini-banner — replaces the verbose
-                    // 9-handler-list line with a compact summary. Detail
-                    // line stays verbose-only for diagnostics.
                     VAGhettoLoadSummary.EmitRpcRouter(
-                        handlersRegistered: 9,
+                        handlersRegistered: RoutedRpcManager.HandlerCount,
                         aoiRadius: ConfigRpcAoIRadius?.Value ?? 256f,
                         aoiEnabled: ConfigEnableRpcAoI?.Value ?? false);
                     if (VAGhettoLoadSummary.VerboseEnabled)
-                        LoggerOptions.LogInfo("RPC Router enabled — DamageText, HealthChanged, WNTHealthChanged, SetTarget, AddNoise, TriggerAnimation, TriggerOnDeath, TalkerSay, SpawnedZone handlers registered.");
+                        LoggerOptions.LogInfo("RPC Router enabled — handlers: " + string.Join(", ", RoutedRpcManager.HandlerMethodNames) + ".");
                 }
 
-                // ZDO delta compression — only send changed fields on re-syncs.
-                // Public test removed the ZDOExtraData.Get* helpers this optimization
-                // is built on; the class is conditionally compiled out on public test.
-                // The registration follows suit, and config-on-but-no-op is fine —
-                // sessions fall back to vanilla full-ZDO serialization.
                 if (ConfigEnableZDODelta.Value)
                 {
                     Harmony.PatchAll(typeof(ZDODeltaPatches));
                     LoggerOptions.LogInfo("ZDO delta compression enabled.");
                 }
 
-                // WearNTear server CPU optimization — skip support calc for full-health pieces
                 if (ConfigEnableWNTServerOptimization.Value)
                 {
                     Harmony.PatchAll(typeof(WearNTearServerPatches));
                     LoggerOptions.LogInfo("WearNTear server optimization enabled.");
                 }
 
-                // 🏛 SERVER AUTH mini-banner — single visual summary
-                // of which server-authority sub-systems are active for
-                // this session. Replaces the old "All server-side
-                // features..." plain line.
                 string ownershipMode =
                     ConfigEnableServerOwnershipSelective.Value ? "V3 selective"
                     : ConfigEnableServerOwnership.Value ? "V2 broad"
@@ -424,20 +324,9 @@ namespace FiresGhettoNetworkMod
                 }
             }
 
-            // Dummy RPC registration – harmless and needed for some features on both sides
             StartCoroutine(RegisterDummyRpcWhenReady());
 
-            // Shared help panel (FiresCore) — SOFT dependency; no-ops when Core is absent.
-            FgnHelpContent.TryRegister();
 
-            // Compact "loaded" banner — antenna with signal-strength bar.
-            // Deferred to WORLD LOAD time (when ZNetScene is up) so it
-            // bookends the load with the same timing as FAP's compact
-            // banner. The BIG "loading" banner already fires at the
-            // top of Awake; the compact one fires later once the world
-            // is actually loaded. Keeps the three Fires* mods'
-            // banner timing consistent (BIG = early-load, compact =
-            // world-load).
             StartCoroutine(EmitCompactBannerWhenZNetReady());
         }
 
@@ -586,7 +475,7 @@ namespace FiresGhettoNetworkMod
             DumpList("Finalizer",  info.Finalizers);
         }
 
-        private void SafeInvokeInit(string typeName, string methodName, object[] args)
+        private void InvokeStaticInitByTypeName(string typeName, string methodName, object[] args)
         {
             try
             {
@@ -872,6 +761,22 @@ namespace FiresGhettoNetworkMod
                     "custom terrain on a non-vanilla layer (RPGmaker overlay, etc.) and you see mobs\n" +
                     "permanently parked instead of recovering, add that layer name here. The cache\n" +
                     "refreshes when this value changes; no restart needed.",
+                    null));
+
+            ConfigFixGroundSnapThroughFloors = Config.Bind(
+                "12 - Advanced",
+                "Fix Ground Snap Through Floors",
+                true,
+                new ConfigDescription(
+                    "Vanilla decides whether something has fallen out of the world by comparing it to the\n" +
+                    "HEIGHTMAP, which cannot see build pieces. Digging moves the heightmap, so pits and mines\n" +
+                    "are fine, but anything resting on a piece BELOW the heightmap is not: a tame penned on a\n" +
+                    "cellar floor under a mound, or a gravestone in that cellar, reads as under the world and\n" +
+                    "is teleported up to the dirt, through the floor that was holding it. With this on, that\n" +
+                    "one check asks what is actually underneath first (see 'Dedi Fell-Out Rescue Layers' for\n" +
+                    "the surfaces that count) and only falls back to the heightmap when nothing is there.\n" +
+                    "Affects Character.UnderWorldCheck and TombStone.PositionCheck. Costs a single raycast,\n" +
+                    "and only in the moment vanilla was about to teleport something.",
                     null));
 
             ConfigShowAILODInServerStatus = Config.Bind(
@@ -1204,6 +1109,18 @@ namespace FiresGhettoNetworkMod
                 "firing repeatedly on a healthy server, another mod is mismanaging ZNetScene\n" +
                 "state and should be investigated. Disable as a kill switch if it ever causes\n" +
                 "trouble (you'd then see the original NRE caught by the existing fallback).");
+
+            ConfigFixTeleportGhosts = Config.Bind(
+                "12 - Advanced",
+                "Fix Teleport Ghost Players",
+                true,
+                "Fixes a Valheim 1.0 bug. When something jumps out of a player's area in one step\n" +
+                "(a portal, a teleport command), the server tests the position it is LEAVING, never tells\n" +
+                "that player, and they keep seeing the traveller frozen where they left until it next\n" +
+                "crosses a zone line. Re-runs vanilla's own check once the new position has landed.\n" +
+                "Stands down on its own when the game or another mod already fixes it, e.g.\n" +
+                "ValheimCommunityPatch's 'Fix Teleport Ghost Players' (deferred to while that is on).\n" +
+                "SERVER / LISTEN-HOST ONLY. No effect on a connecting client.");
 
             ConfigEnableFallThroughDiagnostics = Config.Bind(
                 "01 - General",

@@ -3,22 +3,8 @@ using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
-    // VAGhettoLoadSummary — emoji-headed mini-banners that REPLACE
-    // per-item logging with a single visual summary per batch.
-    //
-    // Ported from FiresAdminPrefabs/Utilities/VAFapLoadSummary.cs.
-    // Same shape, different emojis tuned for FGN's domain
-    // (networking / RPC / ownership / autotune).
-    //
-    // Banner format:
-    //   ╭── 📡 RPC ROUTER ──╮
-    //   │ 9 handlers wired   │
-    //   │ AoI radius 256m    │
-    //   ╰────────────────────╯
-    //
-    // All lines tagged [FiresGhettoNetworkMod] [LoadSummary] so the
-    // ported FiresLogColorPatch (or FAT's copy) routes them to a
-    // distinct color (Cyan per the keyword rules above).
+    // Boxed mini-banners that replace per-item logging with one summary per batch. Tagged
+    // [FiresGhettoNetworkMod] [LoadSummary] so FiresLogColorPatch gives them their own colour.
     public static class VAGhettoLoadSummary
     {
         private const string Tag = "[LoadSummary]";
@@ -70,10 +56,7 @@ namespace FiresGhettoNetworkMod
             });
         }
 
-        // Verbose-mode predicate. Delegates to FiresLogger.VerboseEnabled
-        // (which reads ConfigLogLevel == Info). Per-item log sites use
-        // this to decide whether to emit details or just the summary.
-        public static bool VerboseEnabled => FiresLogger.VerboseEnabled;
+        public static bool VerboseEnabled => LoggerOptions.VerboseEnabled;
 
         // Generic mini-box renderer. See VAFapLoadSummary.EmitMiniBox
         // for the width-math rationale — same code, same caveats.

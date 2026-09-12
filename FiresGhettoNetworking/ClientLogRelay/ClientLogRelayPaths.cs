@@ -5,21 +5,9 @@ using UnityEngine;
 namespace VerdantsAscent.Modules.ClientLogRelay
 {
     /// <summary>
-    /// Conventional filesystem paths used by the stock <see cref="Consumers.DiskConsumer"/>.
-    /// A mod that drops in this folder can pass the delegate
-    /// <c>() =&gt; ClientLogRelayPaths.GetDefaultClientLogsDir("MyMod")</c> as the
-    /// <c>rootDirResolver</c> and get the same layout every consumer in this ecosystem uses:
-    ///
-    /// <code>
-    ///   {BepInEx config}/{ModId}/ClientLogs/
-    ///     {SafePlayerName}_{SafePlatformId}/
-    ///       LogOutput.log
-    ///       modlist.txt
-    ///       errors_warnings.txt
-    /// </code>
-    ///
-    /// The helper creates the directory on first access so the consumer does not have to.
-    /// Dependencies: BepInEx only.
+    /// The layout DiskConsumer writes into, so every mod dropping in this folder shares it:
+    /// {BepInEx config}/{ModId}/ClientLogs/{SafePlayerName}_{SafePlatformId}/ holding LogOutput.log,
+    /// modlist.txt and errors_warnings.txt. The directory is created on first access.
     /// </summary>
     public static class ClientLogRelayPaths
     {

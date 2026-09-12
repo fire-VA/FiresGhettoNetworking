@@ -89,7 +89,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
         {
             var sb = new StringBuilder();
             string label = string.IsNullOrEmpty(brandLabel) ? "ClientLogRelay" : brandLabel;
-            sb.AppendLine($"# {label} — Client vs Server Mod List Diff");
+            sb.AppendLine($"# {label} - Client vs Server Mod List Diff");
             sb.AppendLine($"# Player:          {playerName ?? "unknown"}");
             sb.AppendLine($"# PlatformID:      {platformId ?? "unknown"}");
             sb.AppendLine($"# Captured:        {capturedUtc:yyyy-MM-dd HH:mm:ss} UTC");
@@ -103,7 +103,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay
 
             if (r.VersionMismatches.Count > 0)
             {
-                sb.AppendLine("## Version mismatches (client ? server)");
+                sb.AppendLine("## Version mismatches (client vs server)");
                 foreach (var m in r.VersionMismatches)
                     sb.AppendLine($"  {m.Guid,-55} client={m.ClientVersion}  server={m.ServerVersion}");
                 sb.AppendLine();

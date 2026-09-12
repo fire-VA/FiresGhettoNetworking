@@ -8,38 +8,10 @@ using HarmonyLib;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Hardens every loaded copy of any third-party "bulk transfer" framework
-    /// (ServerSync and the ServerCharacters fork) against being starved by our
-    /// raised ZDOMan queue cap. On each framework's waitForQueue-style gate loop
-    /// we make TWO rewrites:
-    ///
-    ///   1. Disarm the 30-second self-disconnect — ALWAYS. ServerSync computes
-    ///      `timeout = Time.time + 30f` and calls ZNet.Disconnect(peer) once it
-    ///      elapses while the peer's send queue sits above the gate. A slow or
-    ///      high-ping peer behind our raised ZDO queue trips this even though its
-    ///      link is perfectly alive. We push that 30 out of reach so the send just
-    ///      waits for the queue to drain instead of dropping the player. This is
-    ///      the primary fix and runs regardless of the gate budget below.
-    ///
-    ///   2. Raise the internal 20 KB send-queue gate toward our cap — BUDGETED.
-    ///      Secondary: helps the fragment loop keep pace, but is floored to a no-op
-    ///      when many ServerSync copies share a small Steam send buffer (which is
-    ///      exactly why the disconnect-disarm above is the real fix, not this).
-    ///
-    /// CURRENT TARGETS:
-    ///   - ServerSync.ConfigSync          (Azumatt / Marketplace / EW / WackyDB / etc.)
-    ///   - ServerCharacters.Shared        (Smoothbrain ServerCharacters fork)
-    ///
-    /// The scan keys on a method calling BOTH GetSendQueueSize and ZNet.Disconnect
-    /// (the wait-or-drop loop), not on the gate constant — so the disarm lands even if
-    /// a fork changed its gate value, while skipping plain GetSendQueueSize forwarders.
-    /// Cecil-verified targets: ServerCharacters.Shared.&lt;sendCompressedDataToPeer&gt;waitForQueue
-    /// (the player-profile path) and ServerSync.ConfigSync.&lt;distributeConfigToPeers&gt;waitForQueue.
-    /// Every patched site is logged so the disarm can be confirmed in-game per copy.
-    ///
-    /// RUNS AT: ZNet.Start postfix. Plugin assemblies are loaded by then and the
-    /// first bulk transfer (server→client config push on join, or SC profile push)
-    /// happens after ZNet.Start, so the patches land in time.
+    /// Patches every loaded ServerSync / ServerCharacters bulk-transfer gate loop at ZNet.Start: the
+    /// 30-second self-disconnect is disarmed unconditionally, and the 20 KB send-queue gate is raised toward
+    /// our cap within the configured budget. Sites are matched by shape (GetSendQueueSize plus
+    /// ZNet.Disconnect in one method), not by constant, and every patched site is logged.
     /// </summary>
     [HarmonyPatch]
     public static class BulkTransferGatePatches
@@ -381,16 +353,9 @@ namespace FiresGhettoNetworkMod
             return Math.Max(20000, Math.Min(target, perMod));
         }
 
-        private static int GetTargetQueueSize()
-        {
-            return EffectiveConfig.QueueSize() switch
-            {
-                QueueSizeOptions._80KB => 80 * 1024,
-                QueueSizeOptions._64KB => 64 * 1024,
-                QueueSizeOptions._48KB => 48 * 1024,
-                QueueSizeOptions._32KB => 32 * 1024,
-                _ => 20000 // _vanilla — match/under common third-party gates so the gate raise no-ops
-            };
-        }
+        private const int ThirdPartyGateFloorBytes = 20000;
+
+        /// <summary>The vanilla option targets the common third-party gate size, so raising the gate no-ops.</summary>
+        private static int GetTargetQueueSize() => EffectiveConfig.QueueSizeBytes(ThirdPartyGateFloorBytes);
     }
 }

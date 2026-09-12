@@ -5,39 +5,14 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Client-side ZNetScene.RemoveObjects throttle.
-    ///
-    /// Vanilla destroys every out-of-area instance in a SINGLE frame, which on a
-    /// megabase (~150k instances) is a multi-second freeze when you leave the area.
-    /// We spread that work across frames at ConfigClientMaxDestroysPerFrame a tick.
-    ///
-    /// CONTAINMENT INVARIANT — the reason this file looks the way it does.
-    /// Vanilla's teardown being atomic means a creature can never outlive the walls
-    /// that contain it. Deferring destruction broke that: a queued ZNetView stays
-    /// fully alive — its ZDO is still valid and IsOwner() can still be true — so
-    /// BaseAI keeps steering it and ZSyncTransform.OwnerSync keeps writing the
-    /// resulting transform back into the ZDO every LateUpdate. When a pen's pieces
-    /// were dequeued before the creature inside them (enqueue order is ZNetScene
-    /// .m_instances dictionary order, i.e. arbitrary), the creature walked out
-    /// through the gap and THAT ESCAPED POSITION IS WHAT PERSISTED. Reported in the
-    /// wild as tames leaving their pens and trapped bosses escaping sealed arenas,
-    /// on dedicated servers and listen hosts alike — this patch only skips true
-    /// dedicated servers, so it runs for every client and every listen host, on
-    /// every config combination.
-    ///
-    /// Two rules restore the invariant:
-    ///   1. Anything that simulates its own position — a Character, or a live
-    ///      Rigidbody — is destroyed IN-FRAME, exactly like vanilla, and never
-    ///      enters the queue. A megabase teardown is static pieces almost end to
-    ///      end, so the hitch-smoothing this class exists for is unaffected.
-    ///   2. Whatever still defers drains non-Solid first and Solid/Terrain last —
-    ///      the mirror of vanilla's Solid-first creation order (ZNetScene.ZDOCompare)
-    ///      — so containment outlives its contents for anything rule 1 misses.
+    /// Spreads ZNetScene.RemoveObjects across frames so leaving a megabase does not freeze the client.
+    /// Anything that simulates its own position is still destroyed in-frame, and whatever defers drains
+    /// loose before solid, so containment always outlives its contents.
     /// </summary>
     [HarmonyPatch]
     public static class ClientCleanupThrottle
     {
-        // Split queues implement rule 2: contents (loose) drain before containment (solid).
+        // Contents drain before containment.
         private static readonly HashSet<ZNetView> _pendingDestroySet = new HashSet<ZNetView>();
         private static readonly Queue<ZNetView> _pendingLooseQueue = new Queue<ZNetView>();
         private static readonly Queue<ZNetView> _pendingSolidQueue = new Queue<ZNetView>();
@@ -66,7 +41,7 @@ namespace FiresGhettoNetworkMod
         {
             if (!__runOriginal) return false;
 
-            if (IsDedicatedServer()) return true;
+            if (ServerClientUtils.ZNetIsDedicated()) return true;
 
             int maxDestroysPerFrame = FiresGhettoNetworkMod.ConfigClientMaxDestroysPerFrame?.Value ?? 0;
             if (maxDestroysPerFrame <= 0) return true;
@@ -93,7 +68,6 @@ namespace FiresGhettoNetworkMod
             _sessionStaticDeferred = 0;
         }
 
-        private static bool IsDedicatedServer() => ZNet.instance != null && ZNet.instance.IsDedicated();
 
         // ---- teardown instrumentation -------------------------------------------------------
         // Without this the fix is invisible: a creature that stays penned proves nothing, because

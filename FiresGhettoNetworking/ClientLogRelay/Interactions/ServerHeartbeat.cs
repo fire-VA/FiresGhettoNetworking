@@ -21,8 +21,8 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
         private const string DiscordApiBase = "https://discord.com/api/v10";
         private const float HeartbeatIntervalSeconds = 60f;
         private const string SentinelFileName = "server_heartbeat_ghetto.json";
-        private const string EMOJI_RESTART = "\uD83D\uDD04";
-        private const string EMOJI_STOP = "\u26D4";
+        private const string EmojiRestart = "\uD83D\uDD04";
+        private const string EmojiStop = "\u26D4";
 
         private static string _sentinelPath;
         private static string _statusMessageId;
@@ -50,7 +50,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
 
             if (string.IsNullOrEmpty(_botToken) || string.IsNullOrEmpty(_channelId))
             {
-                Debug.Log("[ServerHeartbeat] BotToken or StatusChannelId not set — heartbeat disabled.");
+                Debug.Log("[ServerHeartbeat] BotToken or StatusChannelId not set - heartbeat disabled.");
                 InitSentinel();
                 SpawnCrashNotifier();
                 return;
@@ -264,8 +264,8 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             }
 
             Debug.Log($"[ServerHeartbeat] Seeding control reactions on message {_statusMessageId}");
-            yield return AddReaction(_channelId, _statusMessageId, EMOJI_RESTART);
-            yield return AddReaction(_channelId, _statusMessageId, EMOJI_STOP);
+            yield return AddReaction(_channelId, _statusMessageId, EmojiRestart);
+            yield return AddReaction(_channelId, _statusMessageId, EmojiStop);
             Debug.Log("[ServerHeartbeat] Control reactions seeded successfully");
         }
 
@@ -326,11 +326,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                     req.timeout = 10;
                     yield return req.SendWebRequest();
 
-#if UNITY_2020_1_OR_NEWER
                     if (req.result != UnityWebRequest.Result.Success)
-#else
-                    if (req.isNetworkError || req.isHttpError)
-#endif
                     {
                         Debug.LogWarning($"[ServerHeartbeat] Heartbeat edit failed ({req.responseCode}): {req.downloadHandler?.text ?? req.error}");
                     }
@@ -344,7 +340,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             yield return new WaitForSeconds(10f);
             yield return ResolveBotUserId();
 
-            string[] emojis = { EMOJI_RESTART, EMOJI_STOP };
+            string[] emojis = { EmojiRestart, EmojiStop };
 
             while (!_cleanShutdown)
             {
@@ -386,12 +382,12 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                             string userName = (userToken as JObject)?["username"]?.ToString() ?? userId;
                             Debug.Log($"[ServerHeartbeat] '{userName}' clicked {emoji}");
 
-                            if (emoji == EMOJI_RESTART)
+                            if (emoji == EmojiRestart)
                             {
                                 yield return DoRestart(userName);
                                 yield break;
                             }
-                            else if (emoji == EMOJI_STOP)
+                            else if (emoji == EmojiStop)
                             {
                                 yield return DoStop(userName);
                                 yield break;
@@ -439,41 +435,41 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
             }
         }
 
-        private static IEnumerator DoRestart(string reqByName)
+        private static IEnumerator DoRestart(string requestedByName)
         {
-            Debug.Log($"[ServerHeartbeat] Server RESTART requested by '{reqByName}'");
+            Debug.Log($"[ServerHeartbeat] Server RESTART requested by '{requestedByName}'");
             _cleanShutdown = true;
             try { WriteSentinel("restarting"); } catch { }
 
             var embed = new Dictionary<string, object>
             {
                 { "title", "\uD83D\uDD04 Server Restarting..." },
-                { "description", $"Restart requested by {reqByName}" },
+                { "description", $"Restart requested by {requestedByName}" },
                 { "color", 15105570 }
             };
             yield return EditStatusMessageCoroutine(_statusMessageId, embed);
 
-            WriteFlag("restart_requested.flag", $"Restart requested by {reqByName} at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+            WriteFlag("restart_requested.flag", $"Restart requested by {requestedByName} at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
 
             yield return new WaitForSeconds(3f);
             Application.Quit();
         }
 
-        private static IEnumerator DoStop(string reqByName)
+        private static IEnumerator DoStop(string requestedByName)
         {
-            Debug.Log($"[ServerHeartbeat] Server STOP requested by '{reqByName}'");
+            Debug.Log($"[ServerHeartbeat] Server STOP requested by '{requestedByName}'");
             _cleanShutdown = true;
             try { WriteSentinel("stopped"); } catch { }
 
             var embed = new Dictionary<string, object>
             {
                 { "title", "\u26D4 Server Stopped" },
-                { "description", $"Stop requested by {reqByName}" },
+                { "description", $"Stop requested by {requestedByName}" },
                 { "color", 15548997 }
             };
             yield return EditStatusMessageCoroutine(_statusMessageId, embed);
 
-            WriteFlag("stop_requested.flag", $"Stop requested by {reqByName} at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+            WriteFlag("stop_requested.flag", $"Stop requested by {requestedByName} at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
 
             yield return new WaitForSeconds(3f);
             Application.Quit();
@@ -509,7 +505,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                         // Extra safety: peer could become null between snapshot and iteration
                         if (peer != null && !string.IsNullOrEmpty(peer.m_playerName))
                         {
-                            names.Add("• " + peer.m_playerName);
+                            names.Add("\u2022 " + peer.m_playerName);
                         }
                     }
 
@@ -542,7 +538,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                         new Dictionary<string, object> { { "name", "Last Heartbeat" }, { "value", DateTime.UtcNow.ToString("HH:mm:ss") + " UTC" }, { "inline", true } },
                     }
                 },
-                { "footer", new Dictionary<string, object> { { "text", $"Updates every 60s · {_brandLabel ?? "ServerHeartbeat"}" } } }
+                { "footer", new Dictionary<string, object> { { "text", $"Updates every 60s \u00B7 {_brandLabel ?? "ServerHeartbeat"}" } } }
             };
         }
 
@@ -651,21 +647,21 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 int pid = Process.GetCurrentProcess().Id;
                 string serverName = GetServerName();
 
-                string sSentinel = _sentinelPath.Replace("'", "''");
-                string sWebhook = _statusWebhookUrl.Replace("'", "''");
-                string sName = serverName.Replace("'", "''").Replace("\"", "\\\"");
-                string sDisplay = (_webhookName ?? "Valheim Server").Replace("'", "''");
+                string escapedSentinelPath = _sentinelPath.Replace("'", "''");
+                string escapedWebhookUrl = _statusWebhookUrl.Replace("'", "''");
+                string escapedServerName = serverName.Replace("'", "''").Replace("\"", "\\\"");
+                string escapedDisplayName = (_webhookName ?? "Valheim Server").Replace("'", "''");
 
-                string ps =
+                string watchdogScript =
                     "try{ (Get-Process -Id " + pid + " -EA SilentlyContinue).WaitForExit() }catch{}\n" +
                     "Start-Sleep 3\n" +
-                    "$s=Get-Content '" + sSentinel + "' -Raw -EA SilentlyContinue\n" +
+                    "$s=Get-Content '" + escapedSentinelPath + "' -Raw -EA SilentlyContinue\n" +
                     "if($s -notmatch '\"running\"'){exit}\n" +
                     "$t=(Get-Date).ToUniversalTime().ToString('HH:mm:ss')\n" +
                     "$emoji=[char]::ConvertFromUtf32(0x1F4A5)\n" +
-                    "$b=@{username='" + sDisplay + "';embeds=@(@{title=\"\"$emoji Server Crash Detected\"\";description=\"\"**" + sName + "** crashed or was killed.\"\";color=15105570;fields=@(@{name='Detected At';value=\"\"$t UTC\"\";inline=$true});footer=@{text='" + (_brandLabel ?? "ServerHeartbeat") + "'}})}|ConvertTo-Json -Depth 5 -Compress\n" +
-                    "try{(New-Object Net.WebClient).UploadString('" + sWebhook + "','POST',$b)|Out-Null}catch{}\n" +
-                    "try{Set-Content '" + sSentinel + "' '{\"status\":\"crashed\"}' -EA SilentlyContinue}catch{}";
+                    "$b=@{username='" + escapedDisplayName + "';embeds=@(@{title=\"\"$emoji Server Crash Detected\"\";description=\"\"**" + escapedServerName + "** crashed or was killed.\"\";color=15105570;fields=@(@{name='Detected At';value=\"\"$t UTC\"\";inline=$true});footer=@{text='" + (_brandLabel ?? "ServerHeartbeat") + "'}})}|ConvertTo-Json -Depth 5 -Compress\n" +
+                    "try{(New-Object Net.WebClient).UploadString('" + escapedWebhookUrl + "','POST',$b)|Out-Null}catch{}\n" +
+                    "try{Set-Content '" + escapedSentinelPath + "' '{\"status\":\"crashed\"}' -EA SilentlyContinue}catch{}";
 
                 var psi = new ProcessStartInfo
                 {
@@ -679,7 +675,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
                 var proc = Process.Start(psi);
                 if (proc != null)
                 {
-                    proc.StandardInput.Write(ps);
+                    proc.StandardInput.Write(watchdogScript);
                     proc.StandardInput.Close();
                     Debug.Log($"[ServerHeartbeat] Crash notifier spawned (watchdog PID {proc.Id}, monitoring server PID {pid})");
                 }
@@ -739,10 +735,10 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Interactions
         private static void EnsureHost()
         {
             if (_host != null) return;
-            var go = new GameObject("ServerHeartbeat_Host");
-            UnityEngine.Object.DontDestroyOnLoad(go);
-            go.hideFlags = HideFlags.HideAndDontSave;
-            _host = go.AddComponent<HeartbeatHost>();
+            var host = new GameObject("ServerHeartbeat_Host");
+            UnityEngine.Object.DontDestroyOnLoad(host);
+            host.hideFlags = HideFlags.HideAndDontSave;
+            _host = host.AddComponent<HeartbeatHost>();
         }
 
         private class HeartbeatHost : MonoBehaviour { }

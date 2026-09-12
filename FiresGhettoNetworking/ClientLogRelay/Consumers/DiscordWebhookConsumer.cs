@@ -10,22 +10,22 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
     /// <summary>
     /// Stock consumer that posts a Discord embed snapshot each time a client logs in.
     ///
-    /// By default only the summary embed is posted — no file attachments. Three reaction
+    /// By default only the summary embed is posted - no file attachments. Three reaction
     /// buttons are pre-added by the bot so admins can request specific artifacts on demand:
     /// <list type="bullet">
-    /// <item>?? <c>:envelope_with_arrow:</c> — full BepInEx log</item>
-    /// <item>? <c>:no_entry:</c> — errors + warnings report</item>
-    /// <item>?? <c>:jigsaw:</c> — client mod list + client-vs-server diff</item>
+    /// <item>?? <c>:envelope_with_arrow:</c> - full BepInEx log</item>
+    /// <item>? <c>:no_entry:</c> - errors + warnings report</item>
+    /// <item>?? <c>:jigsaw:</c> - client mod list + client-vs-server diff</item>
     /// </list>
     /// </summary>
     public sealed class DiscordWebhookConsumer : IClientLogConsumer
     {
-        // Reaction emoji constants — single source of truth for consumer + poller.
-        public const string EMOJI_LOG    = "\uD83D\uDCE9"; // ?? :envelope_with_arrow:
-        public const string EMOJI_ERRORS      = "\u26D4";        // ? :no_entry:
-        public const string EMOJI_MODS        = "\uD83E\uDDE9"; // ?? :jigsaw:
-        public const string EMOJI_DISCONNECT  = "\u267B\uFE0F"; // ?? :recycle:
-        public const string EMOJI_RESTART     = "\uD83D\uDD04"; // ?? :arrows_counterclockwise:
+        // Reaction emoji constants - single source of truth for consumer + poller.
+        public const string EmojiLog    = "\uD83D\uDCE9"; // ?? :envelope_with_arrow:
+        public const string EmojiErrors      = "\u26D4";        // :no_entry:
+        public const string EmojiMods        = "\uD83E\uDDE9"; // ?? :jigsaw:
+        public const string EmojiDisconnect  = "\u267B\uFE0F"; // ?? :recycle:
+        public const string EmojiRestart     = "\uD83D\uDD04"; // ?? :arrows_counterclockwise:
 
         public string ConsumerId { get; }
 
@@ -104,13 +104,13 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
                 embed.AddField("\uD83D\uDCAC Mods w/ Issues", modsWithIssues.Count.ToString(), true);
             }
 
-            embed.AddField("\uD83D\uDCC4 Log Size", FormatBytes(artifacts.LogBytes?.Length ?? 0), true);
+            embed.AddField("\uD83D\uDCC4 Log Size", DiscordPayload.FormatBytes(artifacts.LogBytes?.Length ?? 0), true);
 
             if (modsWithIssues.Count > 0)
             {
-                const int MAX_SHOWN = 5;
+                const int MaxShown = 5;
                 var sb = new StringBuilder();
-                for (int i = 0; i < modsWithIssues.Count && i < MAX_SHOWN; i++)
+                for (int i = 0; i < modsWithIssues.Count && i < MaxShown; i++)
                 {
                     var hit = modsWithIssues[i];
                     string shortName = hit.Guid;
@@ -119,27 +119,27 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
                         shortName = hit.Guid.Substring(lastDot + 1);
                     sb.AppendLine($"\u2022 {shortName} ({hit.Hits} mention{(hit.Hits == 1 ? "" : "s")})");
                 }
-                if (modsWithIssues.Count > MAX_SHOWN)
-                    sb.AppendLine($"*({modsWithIssues.Count - MAX_SHOWN} more)*");
+                if (modsWithIssues.Count > MaxShown)
+                    sb.AppendLine($"*({modsWithIssues.Count - MaxShown} more)*");
                 embed.AddField("\u26A0\uFE0F Problem Mods", sb.ToString().TrimEnd(), false);
             }
 
             if (hasDiff)
             {
-                var d = artifacts.ModDiff;
-                string diffSummary = $"client-only: {d.ClientOnly.Count} server-only: {d.ServerOnly.Count} mismatched: {d.VersionMismatches.Count}";
+                var diff = artifacts.ModDiff;
+                string diffSummary = $"client-only: {diff.ClientOnly.Count} server-only: {diff.ServerOnly.Count} mismatched: {diff.VersionMismatches.Count}";
                 embed.AddField("\uD83D\uDD04 Mod Diff (C vs S)", diffSummary, false);
 
-                if (d.VersionMismatches.Count > 0)
+                if (diff.VersionMismatches.Count > 0)
                 {
                     int clientBehind = 0;
                     int serverBehind = 0;
-                    foreach (var m in d.VersionMismatches)
+                    foreach (var m in diff.VersionMismatches)
                     {
                         int cmp = CompareVersions(m.ClientVersion, m.ServerVersion);
                         if (cmp < 0) clientBehind++;
                         else if (cmp > 0) serverBehind++;
-                        else { clientBehind++; serverBehind++; } // unparseable — flag both
+                        else { clientBehind++; serverBehind++; } // unparseable - flag both
                     }
                     string updateSummary = $"\u2B06\uFE0F Client: {clientBehind} \u2502 \u2B06\uFE0F Server: {serverBehind}";
                     embed.AddField("\uD83D\uDD27 Needs Update", updateSummary, false);
@@ -152,7 +152,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
             string footerText;
             if (enableReaction)
             {
-                string hint = $"{EMOJI_LOG} Log \u2502 {EMOJI_ERRORS} Errors \u2502 {EMOJI_MODS} Mods \u2502 {EMOJI_DISCONNECT} Disconnect";
+                string hint = $"{EmojiLog} Log \u2502 {EmojiErrors} Errors \u2502 {EmojiMods} Mods \u2502 {EmojiDisconnect} Disconnect";
                 footerText = string.IsNullOrEmpty(serverName)
                     ? hint
                     : $"{footerLabel} \u2014 {serverName}\n{hint}";
@@ -226,7 +226,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
                         if (!string.IsNullOrEmpty(botToken) && !string.IsNullOrEmpty(channelId))
                         {
                             MinimalWebhookPoster.AddReactions(botToken, channelId, messageId,
-                                EMOJI_LOG, EMOJI_ERRORS, EMOJI_MODS, EMOJI_DISCONNECT);
+                                EmojiLog, EmojiErrors, EmojiMods, EmojiDisconnect);
 
                             // Clean up old client log messages (keep only the 10 most recent)
                             MinimalWebhookPoster.StartCleanupOldClientLogs(botToken, channelId, keepCount: 10);
@@ -251,18 +251,10 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
         }
 
         /// <summary>
-        /// Finds mods that appear in error/warning log lines using a multi-strategy approach:
-        ///
-        /// 1. First, extract all **tags** from the report — bracketed names like
-        ///    <c>[QuestManager]</c>, <c>[FiresRPGmaker]</c> and colon-prefixed names like
-        ///    <c>VerdantsAscentPieces:</c>, <c>VABackpacks:</c>.
-        /// 2. For each mod, check whether any tag fuzzy-matches the GUID or any of its
-        ///    segments (e.g. the GUID <c>com.Fire.verdantsascent_pieces</c> matches tag
-        ///    <c>VerdantsAscentPieces</c> after normalisation).
-        /// 3. Also do a word-boundary search of the full GUID + each long segment against
-        ///    the raw report text as a fallback.
-        ///
-        /// Returns a list of (guid, hitCount) pairs sorted by GUID.
+        /// Finds mods named in error and warning lines. Bracketed tags and colon-prefixed names are pulled
+        /// out of the report first, then fuzzy-matched against each GUID and its segments (so
+        /// com.Fire.verdantsascent_pieces matches the tag VerdantsAscentPieces); a word-boundary search of
+        /// the raw text catches the rest. Returns (guid, hitCount) pairs sorted by GUID.
         /// </summary>
         private static List<ModIssueHit> FindModsWithIssues(ClientLogArtifacts artifacts)
         {
@@ -345,8 +337,8 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
         /// <summary>
         /// Extracts log-source tags from BepInEx error/warning lines. Captures:
         /// <list type="bullet">
-        /// <item><c>[TagName]</c> — bracketed tags after the log-level prefix</item>
-        /// <item><c>TagName:</c> — word followed by colon at the start of the message body</item>
+        /// <item><c>[TagName]</c> - bracketed tags after the log-level prefix</item>
+        /// <item><c>TagName:</c> - word followed by colon at the start of the message body</item>
         /// </list>
         /// Returns all found tags (including duplicates for counting).
         /// </summary>
@@ -381,7 +373,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
 
                     if (bracketCount == 1)
                     {
-                        // First bracket is log-level — but BepInEx sometimes embeds the
+                        // First bracket is log-level - but BepInEx sometimes embeds the
                         // source in the level bracket: "[Warning:Server Devcommands]"
                         int colon = content.IndexOf(':');
                         if (colon >= 0 && colon < content.Length - 1)
@@ -467,33 +459,23 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
         private static bool IsGuidChar(char c)
             => char.IsLetterOrDigit(c) || c == '.' || c == '_' || c == '-';
 
-        private static string FormatBytes(long bytes)
-        {
-            if (bytes <= 0) return "0 B";
-            string[] units = { "B", "KB", "MB", "GB" };
-            double v = bytes;
-            int u = 0;
-            while (v >= 1024 && u < units.Length - 1) { v /= 1024; u++; }
-            return $"{v:0.##} {units[u]}";
-        }
-
         /// <summary>
         /// Compares two dot-separated version strings (e.g. "1.2.3" vs "1.3.0").
         /// Returns &lt; 0 if <paramref name="a"/> is older, &gt; 0 if newer, 0 if equal
         /// or if either string is unparseable.
         /// </summary>
-        private static int CompareVersions(string a, string b)
+        private static int CompareVersions(string left, string right)
         {
-            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return 0;
-            var pa = a.Split('.');
-            var pb = b.Split('.');
-            int len = Math.Max(pa.Length, pb.Length);
-            for (int i = 0; i < len; i++)
+            if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right)) return 0;
+            var leftParts = left.Split('.');
+            var rightParts = right.Split('.');
+            int segments = Math.Max(leftParts.Length, rightParts.Length);
+            for (int i = 0; i < segments; i++)
             {
-                int va = 0, vb = 0;
-                if (i < pa.Length) int.TryParse(pa[i], out va);
-                if (i < pb.Length) int.TryParse(pb[i], out vb);
-                if (va != vb) return va.CompareTo(vb);
+                int leftValue = 0, rightValue = 0;
+                if (i < leftParts.Length) int.TryParse(leftParts[i], out leftValue);
+                if (i < rightParts.Length) int.TryParse(rightParts[i], out rightValue);
+                if (leftValue != rightValue) return leftValue.CompareTo(rightValue);
             }
             return 0;
         }

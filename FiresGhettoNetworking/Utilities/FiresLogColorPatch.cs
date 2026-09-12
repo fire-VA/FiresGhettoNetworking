@@ -7,31 +7,9 @@ using HarmonyLib;
 
 namespace FiresGhettoNetworkMod
 {
-    // FiresLogColorPatch — ports FiresAdminTerrain's per-class console-
-    // color override into FiresGhettoNetworkMod. Intercepts
-    // BepInEx.Logging.ConsoleLogListener.LogEvent and writes our mod's
-    // log lines in distinct console colors based on the [ClassName]
-    // sub-tag in the message.
-    //
-    // Why ported (not source-linked):
-    //   - FAT (FiresAdminTerrain) installs the same patch. If both mods
-    //     are loaded, both prefixes would fire on every matching log
-    //     line and double-print.
-    //   - To avoid double-printing without modifying FAT, this copy
-    //     uses a RUNTIME guard: if FAT's color-patch assembly is
-    //     loaded, our prefix bails (return true → pass through to
-    //     vanilla → FAT's prefix already handled it).
-    //   - The check is memoized on first call so the per-line overhead
-    //     is one volatile-bool read.
-    //
-    // Coexistence matrix:
-    //   FAT loaded + FGN loaded → FAT handles all logs, FGN bails
-    //   FAT NOT loaded + FGN loaded → FGN handles all logs (Fires* tags)
-    //   FAT loaded + FGN NOT loaded → FAT handles all logs (current behavior)
-    //
-    // Adding a new category:
-    //   Same as FAT — add a (keyword, color) entry to s_classColorRules
-    //   in first-match-wins order.
+    // Colours this mod's console lines by their [ClassName] sub-tag. Fires* mods share one AppDomain-wide
+    // ownership key: the first colour patch to fire claims it and the rest pass through, so no line is
+    // printed twice.
     [HarmonyPatch]
     internal static class FiresLogColorPatch
     {
@@ -123,9 +101,6 @@ namespace FiresGhettoNetworkMod
 
         // Reflection cache — BepInEx.ConsoleManager is `internal` so
         // direct access fails CS0122. Resolved once on first call.
-        private static bool s_reflectionResolved;
-        private static Func<object> s_consoleStreamGetter;
-        private static Action<ConsoleColor> s_setConsoleColor;
 
         // Cross-mod ownership coordination. Identical pattern to FAT's
         // copy of FiresLogColorPatch — first Fires* color patch whose
@@ -140,41 +115,6 @@ namespace FiresGhettoNetworkMod
         private const string OwnerKey = "FiresColorPatch.Owner";
         private const string MyOwnerName = "FiresGhettoNetworkMod";
 
-        private static void EnsureReflection()
-        {
-            if (s_reflectionResolved) return;
-            s_reflectionResolved = true;
-            try
-            {
-                var asm = typeof(BepInEx.Logging.ConsoleLogListener).Assembly;
-                var consoleManagerType = asm.GetType("BepInEx.ConsoleManager", throwOnError: false);
-                if (consoleManagerType == null) return;
-
-                var streamProp = consoleManagerType.GetProperty("ConsoleStream",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-                if (streamProp != null)
-                {
-                    var getMethod = streamProp.GetGetMethod(nonPublic: true);
-                    if (getMethod != null)
-                    {
-                        s_consoleStreamGetter = (Func<object>)Delegate.CreateDelegate(
-                            typeof(Func<object>), getMethod);
-                    }
-                }
-
-                var setColorMethod = consoleManagerType.GetMethod("SetConsoleColor",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
-                    binder: null,
-                    types: new[] { typeof(ConsoleColor) },
-                    modifiers: null);
-                if (setColorMethod != null)
-                {
-                    s_setConsoleColor = (Action<ConsoleColor>)Delegate.CreateDelegate(
-                        typeof(Action<ConsoleColor>), setColorMethod);
-                }
-            }
-            catch { /* leave delegates null — caller falls back to vanilla */ }
-        }
 
         [HarmonyPatch(typeof(ConsoleLogListener), nameof(ConsoleLogListener.LogEvent))]
         [HarmonyPrefix]
@@ -235,21 +175,17 @@ namespace FiresGhettoNetworkMod
                     return true;
                 }
 
-                EnsureReflection();
-                if (s_consoleStreamGetter == null || s_setConsoleColor == null)
-                    return true;
-
-                var stream = s_consoleStreamGetter() as TextWriter;
+                var stream = BepInExConsole.Stream;
                 if (stream == null) return true;
 
                 try
                 {
-                    s_setConsoleColor(color);
+                    BepInExConsole.SetColor(color);
                     stream.Write(eventArgs.ToStringLine());
                 }
                 finally
                 {
-                    s_setConsoleColor(ConsoleColor.Gray);
+                    BepInExConsole.SetColor(ConsoleColor.Gray);
                 }
                 return false;
             }

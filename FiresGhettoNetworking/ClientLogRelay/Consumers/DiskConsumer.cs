@@ -48,7 +48,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Consumers
             string folder = ClientLogArtifactWriter.Write(root, artifacts);
             if (folder != null)
             {
-                Debug.Log($"[ClientLogRelay:{ConsumerId}] Wrote artifacts for {artifacts.PlatformId} ? {folder}");
+                Debug.Log($"[ClientLogRelay:{ConsumerId}] Wrote artifacts for {artifacts.PlatformId} -> {folder}");
             }
         }
     }

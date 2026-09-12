@@ -13,52 +13,52 @@ namespace FiresGhettoNetworkMod
 
         private static int s_lastSeenUpdateCount;
 
-        public static int s_uai_examined;
-        public static int s_uai_bail_nviewNull;
-        public static int s_uai_bail_nviewInvalid;
-        public static int s_uai_bail_zdoNull;
-        public static int s_uai_bail_charNull;
-        public static int s_uai_passThrough_isOwner;
-        public static int s_uai_passThrough_notOwner;
+        public static int s_updateAi_examined;
+        public static int s_updateAi_bail_nviewNull;
+        public static int s_updateAi_bail_nviewInvalid;
+        public static int s_updateAi_bail_zdoNull;
+        public static int s_updateAi_bail_charNull;
+        public static int s_updateAi_passThrough_isOwner;
+        public static int s_updateAi_passThrough_notOwner;
 
-        public static int s_mai_examined;
+        public static int s_monsterAi_examined;
 
-        public static int s_co_calls;
-        public static int s_co_nullReturns;
+        public static int s_createObject_calls;
+        public static int s_createObject_nullReturns;
 
-        public static int s_cdo_passes;
-        public static int s_cdo_bail_noPeers;
-        public static int s_cdo_bail_nre;
-        public static long s_cdo_nearTotal;
-        public static long s_cdo_distantTotal;
-        public static long s_cdo_distinctNearTotal;
-        public static long s_cdo_distinctDistantTotal;
-        public static int s_cdo_areaReadyTrue;
-        public static int s_cdo_areaReadyFalse;
-        public static int s_cdo_orphansPruned;
+        public static int s_createDestroy_passes;
+        public static int s_createDestroy_bail_noPeers;
+        public static int s_createDestroy_bail_nre;
+        public static long s_createDestroy_nearTotal;
+        public static long s_createDestroy_distantTotal;
+        public static long s_createDestroy_distinctNearTotal;
+        public static long s_createDestroy_distinctDistantTotal;
+        public static int s_createDestroy_areaReadyTrue;
+        public static int s_createDestroy_areaReadyFalse;
+        public static int s_createDestroy_orphansPruned;
 
-        public static int s_iaal_calls;
-        public static int s_iaal_resultTrue;
-        public static int s_iaal_resultFalse;
-        public static int s_iaal_minMissingZones = int.MaxValue;
-        public static int s_iaal_maxMissingZones;
-        public static int s_iaal_lastMissingZoneX;
-        public static int s_iaal_lastMissingZoneY;
+        public static int s_activeAreaLoaded_calls;
+        public static int s_activeAreaLoaded_resultTrue;
+        public static int s_activeAreaLoaded_resultFalse;
+        public static int s_activeAreaLoaded_minMissingZones = int.MaxValue;
+        public static int s_activeAreaLoaded_maxMissingZones;
+        public static int s_activeAreaLoaded_lastMissingZoneX;
+        public static int s_activeAreaLoaded_lastMissingZoneY;
 
-        public static int s_so_passes;
-        public static int s_so_zdosProcessed;
-        public static int s_so_transfersToServer;
-        public static int s_so_releases;
+        public static int s_ownership_passes;
+        public static int s_ownership_zdosProcessed;
+        public static int s_ownership_transfersToServer;
+        public static int s_ownership_releases;
 
-        public static int s_ailod_examined;
-        public static int s_ailod_playerOrTamed;
-        public static int s_ailod_decidedNear;
-        public static int s_ailod_decidedMidBand;
-        public static int s_ailod_decidedFarRan;
-        public static int s_ailod_decidedFarSkipped;
-        public static int s_ailod_peersLastSeen;
-        public static float s_ailod_minNearestDist = float.MaxValue;
-        public static float s_ailod_maxNearestDist;
+        public static int s_aiLod_examined;
+        public static int s_aiLod_playerOrTamed;
+        public static int s_aiLod_decidedNear;
+        public static int s_aiLod_decidedMidBand;
+        public static int s_aiLod_decidedFarRan;
+        public static int s_aiLod_decidedFarSkipped;
+        public static int s_aiLod_peersLastSeen;
+        public static float s_aiLod_minNearestDist = float.MaxValue;
+        public static float s_aiLod_maxNearestDist;
 
         private static float s_nextEmitTime;
         private static float s_lastEmitTime;
@@ -108,20 +108,20 @@ namespace FiresGhettoNetworkMod
               .Append(" | tick: ").Append(updateCount).Append(" (+").Append(updateDelta).Append(")")
               .Append(" | peers: ").Append(peerCount)
               .Append(" | ai lists: ").Append(aiList).Append(" BaseAI / ").Append(baseList).Append(" BaseAIInst / ").Append(charList).Append(" Char")
-              .Append(" | BaseAI.UpdateAI: ").Append(s_uai_examined).Append(" ex, owner=").Append(s_uai_passThrough_isOwner)
-                  .Append(" notOwner=").Append(s_uai_passThrough_notOwner)
-                  .Append(" bail(nv=").Append(s_uai_bail_nviewNull)
-                  .Append(",inv=").Append(s_uai_bail_nviewInvalid)
-                  .Append(",zdo=").Append(s_uai_bail_zdoNull)
-                  .Append(",char=").Append(s_uai_bail_charNull).Append(")")
-              .Append(" | MonsterAI.UpdateAI: ").Append(s_mai_examined).Append(" ex")
-              .Append(" | CreateObject: ").Append(s_co_calls - s_co_nullReturns).Append(" ok, ").Append(s_co_nullReturns).Append(" null")
+              .Append(" | BaseAI.UpdateAI: ").Append(s_updateAi_examined).Append(" ex, owner=").Append(s_updateAi_passThrough_isOwner)
+                  .Append(" notOwner=").Append(s_updateAi_passThrough_notOwner)
+                  .Append(" bail(nv=").Append(s_updateAi_bail_nviewNull)
+                  .Append(",inv=").Append(s_updateAi_bail_nviewInvalid)
+                  .Append(",zdo=").Append(s_updateAi_bail_zdoNull)
+                  .Append(",char=").Append(s_updateAi_bail_charNull).Append(")")
+              .Append(" | MonsterAI.UpdateAI: ").Append(s_monsterAi_examined).Append(" ex")
+              .Append(" | CreateObject: ").Append(s_createObject_calls - s_createObject_nullReturns).Append(" ok, ").Append(s_createObject_nullReturns).Append(" null")
               .Append(" | CreateDestroyObjects: ").Append(FormatCreateDestroyObjectsSegment())
               .Append(" | IsActiveAreaLoaded: ").Append(FormatIsActiveAreaLoadedSegment())
-              .Append(" | ServerOwnership: ").Append(s_so_passes).Append(" passes, ")
-                  .Append(s_so_zdosProcessed).Append(" zdos, ")
-                  .Append(s_so_transfersToServer).Append(" toServer, ")
-                  .Append(s_so_releases).Append(" released");
+              .Append(" | ServerOwnership: ").Append(s_ownership_passes).Append(" passes, ")
+                  .Append(s_ownership_zdosProcessed).Append(" zdos, ")
+                  .Append(s_ownership_transfersToServer).Append(" toServer, ")
+                  .Append(s_ownership_releases).Append(" released");
 
             if (FiresGhettoNetworkMod.ConfigShowAILODInServerStatus?.Value ?? true)
                 AppendAILODSegment(sb);
@@ -131,95 +131,95 @@ namespace FiresGhettoNetworkMod
 
         private static void ResetWindowCounters()
         {
-            s_uai_examined = 0;
-            s_uai_bail_nviewNull = 0;
-            s_uai_bail_nviewInvalid = 0;
-            s_uai_bail_zdoNull = 0;
-            s_uai_bail_charNull = 0;
-            s_uai_passThrough_isOwner = 0;
-            s_uai_passThrough_notOwner = 0;
+            s_updateAi_examined = 0;
+            s_updateAi_bail_nviewNull = 0;
+            s_updateAi_bail_nviewInvalid = 0;
+            s_updateAi_bail_zdoNull = 0;
+            s_updateAi_bail_charNull = 0;
+            s_updateAi_passThrough_isOwner = 0;
+            s_updateAi_passThrough_notOwner = 0;
 
-            s_mai_examined = 0;
+            s_monsterAi_examined = 0;
 
-            s_co_calls = 0;
-            s_co_nullReturns = 0;
+            s_createObject_calls = 0;
+            s_createObject_nullReturns = 0;
 
-            s_cdo_passes = 0;
-            s_cdo_bail_noPeers = 0;
-            s_cdo_bail_nre = 0;
-            s_cdo_nearTotal = 0;
-            s_cdo_distantTotal = 0;
-            s_cdo_distinctNearTotal = 0;
-            s_cdo_distinctDistantTotal = 0;
-            s_cdo_areaReadyTrue = 0;
-            s_cdo_areaReadyFalse = 0;
-            s_cdo_orphansPruned = 0;
+            s_createDestroy_passes = 0;
+            s_createDestroy_bail_noPeers = 0;
+            s_createDestroy_bail_nre = 0;
+            s_createDestroy_nearTotal = 0;
+            s_createDestroy_distantTotal = 0;
+            s_createDestroy_distinctNearTotal = 0;
+            s_createDestroy_distinctDistantTotal = 0;
+            s_createDestroy_areaReadyTrue = 0;
+            s_createDestroy_areaReadyFalse = 0;
+            s_createDestroy_orphansPruned = 0;
 
-            s_iaal_calls = 0;
-            s_iaal_resultTrue = 0;
-            s_iaal_resultFalse = 0;
-            s_iaal_minMissingZones = int.MaxValue;
-            s_iaal_maxMissingZones = 0;
-            s_iaal_lastMissingZoneX = 0;
-            s_iaal_lastMissingZoneY = 0;
+            s_activeAreaLoaded_calls = 0;
+            s_activeAreaLoaded_resultTrue = 0;
+            s_activeAreaLoaded_resultFalse = 0;
+            s_activeAreaLoaded_minMissingZones = int.MaxValue;
+            s_activeAreaLoaded_maxMissingZones = 0;
+            s_activeAreaLoaded_lastMissingZoneX = 0;
+            s_activeAreaLoaded_lastMissingZoneY = 0;
 
-            s_so_passes = 0;
-            s_so_zdosProcessed = 0;
-            s_so_transfersToServer = 0;
-            s_so_releases = 0;
+            s_ownership_passes = 0;
+            s_ownership_zdosProcessed = 0;
+            s_ownership_transfersToServer = 0;
+            s_ownership_releases = 0;
 
-            s_ailod_examined = 0;
-            s_ailod_playerOrTamed = 0;
-            s_ailod_decidedNear = 0;
-            s_ailod_decidedMidBand = 0;
-            s_ailod_decidedFarRan = 0;
-            s_ailod_decidedFarSkipped = 0;
-            s_ailod_peersLastSeen = 0;
-            s_ailod_minNearestDist = float.MaxValue;
-            s_ailod_maxNearestDist = 0f;
+            s_aiLod_examined = 0;
+            s_aiLod_playerOrTamed = 0;
+            s_aiLod_decidedNear = 0;
+            s_aiLod_decidedMidBand = 0;
+            s_aiLod_decidedFarRan = 0;
+            s_aiLod_decidedFarSkipped = 0;
+            s_aiLod_peersLastSeen = 0;
+            s_aiLod_minNearestDist = float.MaxValue;
+            s_aiLod_maxNearestDist = 0f;
         }
 
         private static string FormatCreateDestroyObjectsSegment()
         {
-            if (s_cdo_passes + s_cdo_bail_noPeers + s_cdo_bail_nre == 0) return "noCalls";
-            string orphanSeg = s_cdo_orphansPruned > 0 ? $", orphansPruned={s_cdo_orphansPruned}" : "";
-            return $"{s_cdo_passes} passes (bail noPeers={s_cdo_bail_noPeers}, nre={s_cdo_bail_nre}), "
-                 + $"near={FormatBigCount(s_cdo_nearTotal)} (distinct {FormatBigCount(s_cdo_distinctNearTotal)}), "
-                 + $"distant={FormatBigCount(s_cdo_distantTotal)} (distinct {FormatBigCount(s_cdo_distinctDistantTotal)}), "
-                 + $"gate true={s_cdo_areaReadyTrue} false={s_cdo_areaReadyFalse}"
+            if (s_createDestroy_passes + s_createDestroy_bail_noPeers + s_createDestroy_bail_nre == 0) return "noCalls";
+            string orphanSeg = s_createDestroy_orphansPruned > 0 ? $", orphansPruned={s_createDestroy_orphansPruned}" : "";
+            return $"{s_createDestroy_passes} passes (bail noPeers={s_createDestroy_bail_noPeers}, nre={s_createDestroy_bail_nre}), "
+                 + $"near={FormatBigCount(s_createDestroy_nearTotal)} (distinct {FormatBigCount(s_createDestroy_distinctNearTotal)}), "
+                 + $"distant={FormatBigCount(s_createDestroy_distantTotal)} (distinct {FormatBigCount(s_createDestroy_distinctDistantTotal)}), "
+                 + $"gate true={s_createDestroy_areaReadyTrue} false={s_createDestroy_areaReadyFalse}"
                  + orphanSeg;
         }
 
         private static string FormatIsActiveAreaLoadedSegment()
         {
-            if (s_iaal_calls == 0) return "noCalls";
-            float pctTrue = 100f * s_iaal_resultTrue / s_iaal_calls;
-            string missingDetail = s_iaal_resultFalse > 0
-                ? $", missing[min={s_iaal_minMissingZones} max={s_iaal_maxMissingZones} lastMissCoord=({s_iaal_lastMissingZoneX},{s_iaal_lastMissingZoneY})]"
+            if (s_activeAreaLoaded_calls == 0) return "noCalls";
+            float pctTrue = 100f * s_activeAreaLoaded_resultTrue / s_activeAreaLoaded_calls;
+            string missingDetail = s_activeAreaLoaded_resultFalse > 0
+                ? $", missing[min={s_activeAreaLoaded_minMissingZones} max={s_activeAreaLoaded_maxMissingZones} lastMissCoord=({s_activeAreaLoaded_lastMissingZoneX},{s_activeAreaLoaded_lastMissingZoneY})]"
                 : "";
-            return $"{s_iaal_calls} calls, {pctTrue:F1}% true{missingDetail}";
+            return $"{s_activeAreaLoaded_calls} calls, {pctTrue:F1}% true{missingDetail}";
         }
 
         private static void AppendAILODSegment(StringBuilder sb)
         {
-            if (s_ailod_examined == 0)
+            if (s_aiLod_examined == 0)
             {
                 sb.Append(" | AILOD: idle");
                 return;
             }
 
-            string nearestRange = s_ailod_minNearestDist < float.MaxValue
-                ? $"{s_ailod_minNearestDist:F0}-{s_ailod_maxNearestDist:F0}m"
+            string nearestRange = s_aiLod_minNearestDist < float.MaxValue
+                ? $"{s_aiLod_minNearestDist:F0}-{s_aiLod_maxNearestDist:F0}m"
                 : "n/a";
             float nearMeters = FiresGhettoNetworkMod.ConfigAILODNearDistance?.Value ?? DefaultAILODNearMeters;
             float farMeters  = FiresGhettoNetworkMod.ConfigAILODFarDistance?.Value  ?? DefaultAILODFarMeters;
 
-            sb.Append(" | AILOD: ").Append(s_ailod_examined).Append(" ex")
-              .Append(" (skipTamed=").Append(s_ailod_playerOrTamed).Append(")")
-              .Append(", near=").Append(s_ailod_decidedNear)
-              .Append(" mid=").Append(s_ailod_decidedMidBand)
-              .Append(" farRan=").Append(s_ailod_decidedFarRan)
-              .Append(" farSkipped=").Append(s_ailod_decidedFarSkipped)
+            sb.Append(" | AILOD: ").Append(s_aiLod_examined).Append(" ex")
+              .Append(" (skipTamed=").Append(s_aiLod_playerOrTamed).Append(")")
+              .Append(", near=").Append(s_aiLod_decidedNear)
+              .Append(" mid=").Append(s_aiLod_decidedMidBand)
+              .Append(" farRan=").Append(s_aiLod_decidedFarRan)
+              .Append(" farSkipped=").Append(s_aiLod_decidedFarSkipped)
               .Append(", nearestPeer ").Append(nearestRange)
               .Append(" (gate ").Append(nearMeters.ToString("F0")).Append("/").Append(farMeters.ToString("F0")).Append("m)");
         }

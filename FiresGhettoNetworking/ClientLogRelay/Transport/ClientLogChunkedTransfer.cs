@@ -22,7 +22,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Transport
         }
 
         private static readonly Dictionary<long, TransferState> _activeTransfers = new Dictionary<long, TransferState>();
-        private const float TRANSFER_TIMEOUT = 60f;
+        private const float TransferTimeoutSeconds = 60f;
 
         public class TransferResult
         {
@@ -157,13 +157,13 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Transport
         {
             float now = Time.realtimeSinceStartup;
             var timedOut = _activeTransfers
-                .Where(kvp => (now - kvp.Value.LastChunkTime) > TRANSFER_TIMEOUT)
+                .Where(kvp => (now - kvp.Value.LastChunkTime) > TransferTimeoutSeconds)
                 .Select(kvp => kvp.Key)
                 .ToList();
 
             foreach (var peerId in timedOut)
             {
-                Debug.LogWarning($"[ClientLogChunkedTransfer] Transfer from peer {peerId} timed out after {TRANSFER_TIMEOUT}s - cleaning up");
+                Debug.LogWarning($"[ClientLogChunkedTransfer] Transfer from peer {peerId} timed out after {TransferTimeoutSeconds}s - cleaning up");
                 _activeTransfers.Remove(peerId);
             }
         }

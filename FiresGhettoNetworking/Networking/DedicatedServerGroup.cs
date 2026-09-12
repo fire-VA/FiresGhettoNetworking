@@ -173,35 +173,12 @@ namespace FiresGhettoNetworkMod
         }
 
         // ====================== ADVERTISED MAX OVERRIDE ======================
-        // Vanilla hard-codes "10" as the advertised max in three matchmaking
-        // sites. Steam server browser → BattleMetrics reads the value from
-        // ZSteamMatchmaking.RegisterServer; PlayFab session matchmaking reads
-        // it from ZPlayFabMatchmaking.SetPlatformMatchmakingData; PlayFab Party
-        // network capacity is set in ZPlayFabMatchmaking.CreateAndJoinNetwork.
-        // We rewrite each "ldc.i4.s 10" literal to the configured advertised
-        // limit so the public-facing max-player count actually matches what
-        // the server is provisioned for (or whatever marketing value the
-        // operator wants to display).
-        //
-        // Order of preference for the replacement value:
-        //   1. ConfigAdvertisedPlayerLimit if > 0 (operator wants a display
-        //      value distinct from the real cap)
-        //   2. ConfigPlayerLimit (advertised matches the real cap)
-        //   3. PlayFab paths get +1 (vanilla counts the host as a slot in
-        //      non-dedicated mode; matches the existing OverridePlayerLimit
-        //      adjustment)
-        //
-        // PUBLIC_TEST note: ZSteamMatchmaking was refactored out in the public
-        // test build (matchmaking now goes through MultiBackendMatchmaking).
-        // The Steam transpiler is conditionally compiled.
-
-        private static int ResolveAdvertisedLimit(bool addPlayFabHostSlot)
+        // ConfigAdvertisedPlayerLimit when set, otherwise ConfigPlayerLimit. Steam entry points are prefixed
+        // below; the PlayFab stores are rewritten further down.
+        private static int ResolveAdvertisedLimit()
         {
-            int adv = FiresGhettoNetworkMod.ConfigAdvertisedPlayerLimit?.Value ?? 0;
-            int target = adv > 0 ? adv : FiresGhettoNetworkMod.ConfigPlayerLimit.Value;
-            if (addPlayFabHostSlot && ZNet.m_onlineBackend == OnlineBackendType.PlayFab)
-                target += 1;
-            return target;
+            int advertised = FiresGhettoNetworkMod.ConfigAdvertisedPlayerLimit?.Value ?? 0;
+            return advertised > 0 ? advertised : FiresGhettoNetworkMod.ConfigPlayerLimit.Value;
         }
 
         private static bool IsIntConstantLoad(CodeInstruction ins)
@@ -216,38 +193,16 @@ namespace FiresGhettoNetworkMod
                 || op == OpCodes.Ldc_I4_8;
         }
 
-        // BATTLE-METRICS ADVERTISED MAX OVERRIDE.
-        //
-        // First attempt (v1.3.0) transpiled ZSteamMatchmaking.RegisterServer and
-        // ZPlayFabMatchmaking.* — Harmony attaching to RegisterServer broke the
-        // SteamMatchmaking::CreateLobby async callback chain, leaving the lobby
-        // half-created (log showed "Registering lobby" but never "Lobby was
-        // created"). Server then never appeared on the Steam Community list.
-        //
-        // Correct approach (stolen from Azumatt's MaxPlayerCount mod): prefix
-        // the SDK methods themselves with a byref-int rewrite. Two surfaces:
-        //
-        //   1. Steamworks.SteamMatchmaking.CreateLobby(ELobbyType, int cMaxMembers)
-        //      — this is the actual call site Valheim's RegisterServer makes
-        //      with a hardcoded 10. cMaxMembers is what Steam stores on the
-        //      lobby and what the server browser / favorite query display as
-        //      the "max" half of "X / max".
-        //
-        //   2. Steamworks.SteamGameServer.SetMaxPlayerCount(int cPlayersMax)
-        //      — defensive: assembly_valheim doesn't appear to call this in
-        //      0.221.12, but PlayFab / mods / future Valheim versions might.
-        //      No-op if never invoked.
-        //
-        // Both prefixes pull the override from ConfigAdvertisedPlayerLimit
-        // (falling back to ConfigPlayerLimit), matching the same ResolveAdvertisedLimit
-        // helper used elsewhere in this file.
+        // A transpiler on ZSteamMatchmaking.RegisterServer broke the CreateLobby callback chain (v1.3.0), so
+        // the Steam SDK entry points are prefixed instead. The game does not call SetMaxPlayerCount today;
+        // that prefix is inert until something does.
 
         [HarmonyPatch(typeof(Steamworks.SteamMatchmaking), nameof(Steamworks.SteamMatchmaking.CreateLobby))]
         [HarmonyPrefix]
         static void OverrideSteamLobbyMaxMembers(Steamworks.ELobbyType eLobbyType, ref int cMaxMembers)
         {
             if (!isDedicatedDetected) return;
-            int target = ResolveAdvertisedLimit(addPlayFabHostSlot: false);
+            int target = ResolveAdvertisedLimit();
             if (target <= 0 || cMaxMembers == target) return;
             LoggerOptions.LogInfo($"Overriding SteamMatchmaking.CreateLobby cMaxMembers: {cMaxMembers} → {target}");
             cMaxMembers = target;
@@ -258,63 +213,80 @@ namespace FiresGhettoNetworkMod
         static void OverrideSteamGameServerMaxPlayers(ref int cPlayersMax)
         {
             if (!isDedicatedDetected) return;
-            int target = ResolveAdvertisedLimit(addPlayFabHostSlot: false);
+            int target = ResolveAdvertisedLimit();
             if (target <= 0 || cPlayersMax == target) return;
             LoggerOptions.LogInfo($"Overriding SteamGameServer.SetMaxPlayerCount cPlayersMax: {cPlayersMax} → {target}");
             cPlayersMax = target;
         }
 
-        private static List<CodeInstruction> RewriteConstBeforeFieldStore(
-            IEnumerable<CodeInstruction> instructions,
-            string fieldName,
-            string methodLabel,
-            bool addPlayFabHostSlot,
-            bool silentIfNotFound = false)
-        {
-            var list = instructions as List<CodeInstruction> ?? new List<CodeInstruction>(instructions);
-            bool patched = false;
-            for (int i = 0; i < list.Count; i++)
-            {
-                var ins = list[i];
-                if (ins.opcode != OpCodes.Stfld) continue;
-                if (!(ins.operand is FieldInfo fi) || fi.Name != fieldName) continue;
-                if (i == 0 || !IsIntConstantLoad(list[i - 1])) continue;
+        private const int VanillaDedicatedLobbySeats = 11;
+        private const int VanillaSessionMaxPlayers = 10;
+        private const int MinAdvertisedPlayers = 2;
+        private const int MaxAdvertisedPlayers = 64;
 
-                int target = ResolveAdvertisedLimit(addPlayFabHostSlot);
-                LoggerOptions.LogInfo($"Overriding {methodLabel} {fieldName} → {target}");
-                list[i - 1] = new CodeInstruction(OpCodes.Ldc_I4, target);
-                patched = true;
-                break;
-            }
-            if (!patched && !silentIfNotFound)
-                LoggerOptions.LogWarning($"{fieldName} constant not found in {methodLabel}. Patch skipped.");
-            return list;
+        /// <summary>Lobby capacity carries a seat for the dedicated server itself, which vanilla's browser subtracts back off.</summary>
+        public static int PlayFabLobbyCapacity()
+        {
+            int advertised = ResolveAdvertisedLimit();
+            if (advertised <= 0) return VanillaDedicatedLobbySeats;
+            if (ZNet.instance != null && ZNet.instance.IsDedicated()) advertised += 1;
+            return Mathf.Clamp(advertised, MinAdvertisedPlayers, MaxAdvertisedPlayers);
         }
 
-        private static List<CodeInstruction> RewriteConstBeforePropertySet(
-            List<CodeInstruction> list,
-            string propertyName,
-            string methodLabel,
-            bool addPlayFabHostSlot)
+        public static int PlayFabSessionMaxPlayers()
         {
-            string setterName = "set_" + propertyName;
-            bool patched = false;
-            for (int i = 0; i < list.Count; i++)
-            {
-                var ins = list[i];
-                if (ins.opcode != OpCodes.Callvirt && ins.opcode != OpCodes.Call) continue;
-                if (!(ins.operand is MethodInfo mi) || mi.Name != setterName) continue;
-                if (i == 0 || !IsIntConstantLoad(list[i - 1])) continue;
+            int advertised = ResolveAdvertisedLimit();
+            if (advertised <= 0) return VanillaSessionMaxPlayers;
+            return Mathf.Clamp(advertised, MinAdvertisedPlayers, MaxAdvertisedPlayers);
+        }
 
-                int target = ResolveAdvertisedLimit(addPlayFabHostSlot);
-                LoggerOptions.LogInfo($"Overriding {methodLabel} {propertyName} → {target}");
-                list[i - 1] = new CodeInstruction(OpCodes.Ldc_I4, target);
-                patched = true;
-                break;
+        /// <summary>The crossplay browser reads these two writes; the Steam SDK prefixes above cannot reach them.</summary>
+        [HarmonyPatch(typeof(ZPlayFabMatchmaking), "CreateLobby")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> OverridePlayFabLobbyCapacity(IEnumerable<CodeInstruction> instructions)
+        {
+            return RewriteMaxPlayersStore(instructions, "ZPlayFabMatchmaking.CreateLobby",
+                "CreateLobbyRequest::MaxPlayers", nameof(PlayFabLobbyCapacity));
+        }
+
+        [HarmonyPatch(typeof(ZPlayFabMatchmaking), "SetPlatformMatchmakingData")]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> OverridePlayFabSessionMax(IEnumerable<CodeInstruction> instructions)
+        {
+            return RewriteMaxPlayersStore(instructions, "ZPlayFabMatchmaking.SetPlatformMatchmakingData",
+                "MultiplayerSessionData::m_maxPlayers", nameof(PlayFabSessionMaxPlayers));
+        }
+
+        /// <summary>Anchors on the field store rather than the literal: the client build writes 10 there, the dedicated build 11.</summary>
+        private static IEnumerable<CodeInstruction> RewriteMaxPlayersStore(
+            IEnumerable<CodeInstruction> instructions, string patchedMethod, string fieldId, string capacityGetter)
+        {
+            if (!isDedicatedDetected) return instructions;
+
+            var code = new List<CodeInstruction>(instructions);
+            var capacity = AccessTools.Method(typeof(DedicatedServerGroup), capacityGetter);
+            int rewritten = 0;
+
+            for (int i = 1; i < code.Count; i++)
+            {
+                if (code[i].opcode != OpCodes.Stfld) continue;
+
+                var field = code[i].operand as FieldInfo;
+                if (field == null || field.DeclaringType == null) continue;
+                if (field.DeclaringType.Name + "::" + field.Name != fieldId) continue;
+                if (!IsIntConstantLoad(code[i - 1])) continue;
+
+                code[i - 1] = new CodeInstruction(OpCodes.Call, capacity);
+                rewritten++;
             }
-            if (!patched)
-                LoggerOptions.LogWarning($"{propertyName} constant not found in {methodLabel}. Patch skipped.");
-            return list;
+
+            if (rewritten == 0)
+                LoggerOptions.LogWarning(
+                    $"Advertised player limit: {patchedMethod} has no constant store into {fieldId}; the crossplay browser keeps vanilla's max.");
+            else
+                LoggerOptions.LogMessage($"Advertised player limit: rewrote {rewritten} store(s) into {fieldId} in {patchedMethod}.");
+
+            return code;
         }
     }
 }

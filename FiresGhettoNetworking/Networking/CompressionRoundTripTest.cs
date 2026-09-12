@@ -6,21 +6,11 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Admin console test for the Deflate compression round-trip (the magic-driven receive fix in
-    /// CompressionGroup). 'fgn_comptest [count] [sizeKB]':
-    ///   1. Local sanity — Compress -> Decompress BOTH a compressible payload (gets the FGD1 magic +
-    ///      shrinks) and an incompressible one (passes through raw, no magic), confirming each is
-    ///      byte-identical after the round-trip.
-    ///   2. Wire burst — the server fires N packets at you (server -> client, the direction that
-    ///      desynced joiners), ALTERNATING compressible (even seq) and incompressible (odd seq) every
-    ///      packet. Each carries a nonce, sequence, payload and FNV checksum; the client verifies every
-    ///      one arrived intact and counts how many of each kind landed.
-    ///
-    /// Alternating is the strong test: it forces the receiver to flip between magic (compressed) and
-    /// no-magic (raw) on EVERY packet, exercising every compressed->raw and raw->compressed boundary —
-    /// exactly where the old start-boundary bug corrupted the stream (a compressed packet read as raw
-    /// mis-parses / throws EndOfStream, which IS the real-world disconnect). With the fix every packet
-    /// is self-describing via the magic, so all of them round-trip. Admin only.
+    /// Admin console test for the Deflate round-trip in CompressionGroup. 'fgn_comptest [count] [sizeKB]'
+    /// first compresses and decompresses a compressible payload (gains the FGD1 magic) and an incompressible
+    /// one (passes through raw), then has the server burst N packets at the caller alternating between the
+    /// two. Alternating is the point: it crosses every compressed-to-raw boundary, which is where the old
+    /// start-boundary bug corrupted the stream. Each packet carries a nonce, sequence and FNV checksum.
     /// </summary>
     [HarmonyPatch]
     public static class CompressionRoundTripTest
@@ -100,19 +90,19 @@ namespace FiresGhettoNetworkMod
             // 1. Local sanity — round-trip BOTH a compressible (even seq, gets the magic + shrinks) and
             //    an incompressible (odd seq, passes through raw) payload, so both receive paths are proven
             //    before the wire test.
-            byte[] origC = MakePayload(sizeKB * 1024, 0);
-            byte[] cC = CompressionGroup.Compress(origC);
-            byte[] backC = CompressionGroup.Decompress(cC);
-            bool okC = backC != null && Checksum(backC) == Checksum(origC);
+            byte[] compressibleInput = MakePayload(sizeKB * 1024, 0);
+            byte[] compressibleWire = CompressionGroup.Compress(compressibleInput);
+            byte[] compressibleRoundTrip = CompressionGroup.Decompress(compressibleWire);
+            bool compressibleIntact = compressibleRoundTrip != null && Checksum(compressibleRoundTrip) == Checksum(compressibleInput);
 
-            byte[] origR = MakePayload(sizeKB * 1024, 1);
-            byte[] cR = CompressionGroup.Compress(origR);
-            byte[] backR = CompressionGroup.Decompress(cR);
-            bool okR = backR != null && Checksum(backR) == Checksum(origR);
+            byte[] incompressibleInput = MakePayload(sizeKB * 1024, 1);
+            byte[] incompressibleWire = CompressionGroup.Compress(incompressibleInput);
+            byte[] incompressibleRoundTrip = CompressionGroup.Decompress(incompressibleWire);
+            bool incompressibleIntact = incompressibleRoundTrip != null && Checksum(incompressibleRoundTrip) == Checksum(incompressibleInput);
 
-            args.Context?.AddString($"FGN comptest local {sizeKB}KB: compressible {(okC ? "OK" : "MISMATCH")} "
-                + $"({origC.Length}->{cC.Length}, magic={(cC.Length < origC.Length ? "yes" : "no")}); "
-                + $"incompressible {(okR ? "OK" : "MISMATCH")} ({origR.Length}->{cR.Length}, magic={(cR.Length < origR.Length ? "yes" : "no")}).");
+            args.Context?.AddString($"FGN comptest local {sizeKB}KB: compressible {(compressibleIntact ? "OK" : "MISMATCH")} "
+                + $"({compressibleInput.Length}->{compressibleWire.Length}, magic={(compressibleWire.Length < compressibleInput.Length ? "yes" : "no")}); "
+                + $"incompressible {(incompressibleIntact ? "OK" : "MISMATCH")} ({incompressibleInput.Length}->{incompressibleWire.Length}, magic={(incompressibleWire.Length < incompressibleInput.Length ? "yes" : "no")}).");
 
             // 2. Wire burst (server -> client), alternating compressible / incompressible every packet.
             s_expectNonce = ++s_nonceSeq;
@@ -241,11 +231,7 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        private static void RPC_Status(long sender, string msg)
-        {
-            if (Console.instance != null) Console.instance.AddString(msg);
-            else LoggerOptions.LogMessage(msg);
-        }
+        private static void RPC_Status(long sender, string msg) => AdminConsoleEcho.Print(msg);
 
         // Outbound queued bytes to the target peer (m_sendQueue + Steam pending) — for flow control.
         private static int GetTargetQueueBytes(long target)
@@ -280,34 +266,34 @@ namespace FiresGhettoNetworkMod
         // compressed->raw and raw->compressed boundary in the stream.
         private static byte[] MakePayload(int size, int seq)
         {
-            byte[] p = new byte[size];
+            byte[] payload = new byte[size];
             if (IsRawSeq(seq))
             {
                 byte[] block = RawBlock;
                 int off = (seq * 7) % block.Length;
-                for (int i = 0; i < size; i++) p[i] = block[(off + i) % block.Length];
+                for (int i = 0; i < size; i++) payload[i] = block[(off + i) % block.Length];
             }
             else
             {
-                for (int i = 0; i < size; i++) p[i] = (byte)((i + seq) & 0xFF);
+                for (int i = 0; i < size; i++) payload[i] = (byte)((i + seq) & 0xFF);
             }
-            return p;
+            return payload;
         }
 
-        private static bool PayloadMatches(byte[] p, int seq)
+        private static bool PayloadMatches(byte[] payload, int seq)
         {
-            if (p == null || p.Length == 0) return false;
-            int n = p.Length;
-            int[] idx = { 0, n / 3, n / 2, (2 * n) / 3, n - 1 };
+            if (payload == null || payload.Length == 0) return false;
+            int length = payload.Length;
+            int[] probeOffsets = { 0, length / 3, length / 2, (2 * length) / 3, length - 1 };
             if (IsRawSeq(seq))
             {
                 byte[] block = RawBlock;
                 int off = (seq * 7) % block.Length;
-                foreach (int i in idx) if (p[i] != block[(off + i) % block.Length]) return false;
+                foreach (int i in probeOffsets) if (payload[i] != block[(off + i) % block.Length]) return false;
             }
             else
             {
-                foreach (int i in idx) if (p[i] != (byte)((i + seq) & 0xFF)) return false;
+                foreach (int i in probeOffsets) if (payload[i] != (byte)((i + seq) & 0xFF)) return false;
             }
             return true;
         }

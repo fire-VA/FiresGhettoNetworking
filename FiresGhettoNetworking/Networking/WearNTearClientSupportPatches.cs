@@ -4,37 +4,10 @@ using HarmonyLib;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Workstream E.1 — client-side structural support skip for invulnerable pieces.
-    ///
-    /// Vanilla <see cref="WearNTear.UpdateSupport"/> is the most expensive
-    /// per-piece per-tick path on the client during heavy bases: each call does
-    /// up to N <c>Physics.OverlapBoxNonAlloc</c> queries (one per BoundData),
-    /// then iterates each hit collider, walks the support graph, computes lossy
-    /// support transfer, and updates the cached state. For a 140k-piece base
-    /// where invulnerable pieces dominate the active area, the SUPPORT
-    /// PROPAGATION cost across that set is the steady-state ceiling.
-    ///
-    /// Invulnerable pieces by definition cannot be removed by damage, cannot
-    /// collapse, and never need their own support recomputed. They DO still
-    /// participate in the support graph from neighbours' perspectives — a
-    /// mortal piece resting on an invulnerable substrate calls
-    /// <see cref="WearNTear.GetSupport"/> on the substrate and gets back
-    /// <c>m_support</c>. By forcing <c>m_support</c> to the material's max value
-    /// once (vanilla's Awake already does this) and never touching it again,
-    /// the substrate continues to advertise full support to mortal queries
-    /// while paying zero per-tick CPU.
-    ///
-    /// "Asymmetric query path" (per the perf plan): we DON'T patch GetSupport,
-    /// only UpdateSupport. Mortal-piece support queries land on our forced
-    /// m_support value and return correctly without ever entering vanilla's
-    /// physics overlap path on the invulnerable substrate. Result: invulnerable
-    /// pieces are pure support sources, never consumers.
-    ///
-    /// Server-side intentionally NOT patched here — <see cref="WearNTearServerPatches"/>
-    /// already short-circuits the entire <c>UpdateWear</c> (which is what calls
-    /// UpdateSupport on the server) for invulnerable pieces via the same
-    /// <see cref="WearNTearClassifier"/>. Patching UpdateSupport directly on
-    /// the server side would be redundant work.
+    /// Client-side skip of WearNTear.UpdateSupport for pieces WearNTearClassifier rates fully invulnerable.
+    /// They keep advertising the maximum support vanilla's Awake already set, so neighbours' GetSupport
+    /// queries still resolve, while the per-tick physics overlap is never paid. The server side is covered
+    /// by WearNTearServerPatches.
     /// </summary>
     [HarmonyPatch]
     public static class WearNTearClientSupportPatches

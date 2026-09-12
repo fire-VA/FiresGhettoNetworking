@@ -1,5 +1,7 @@
 using HarmonyLib;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -15,7 +17,6 @@ namespace FiresGhettoNetworkMod
         private const float RescueRaycastStartHeight = 6000f;
         private const float RescueRaycastMaxDistance = 12000f;
         private const float RescueGroundClearance = 1f;
-        private const string DefaultRescueLayerMaskCsv = "Default,static_solid,Default_small,piece,terrain,vehicle";
 
         private const float VelocityEmaWeight = 0.5f;
         private const float VelocitySampleMinDeltaSec = 0.05f;
@@ -115,7 +116,7 @@ namespace FiresGhettoNetworkMod
         {
             if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetConnectedPeers().Count == 0)
             {
-                ServerStatusDiagnostics.s_cdo_bail_noPeers++;
+                ServerStatusDiagnostics.s_createDestroy_bail_noPeers++;
                 return true;
             }
 
@@ -152,7 +153,7 @@ namespace FiresGhettoNetworkMod
             }
             catch (System.NullReferenceException ex)
             {
-                ServerStatusDiagnostics.s_cdo_bail_nre++;
+                ServerStatusDiagnostics.s_createDestroy_bail_nre++;
                 LoggerOptions.LogWarning($"CreateDestroyObjects encountered NRE (likely mod conflict), falling back to vanilla: {ex.Message}");
                 return true;
             }
@@ -191,15 +192,15 @@ namespace FiresGhettoNetworkMod
 
         private static void RecordCreateDestroyObjectsDiagnostics()
         {
-            ServerStatusDiagnostics.s_cdo_passes++;
-            ServerStatusDiagnostics.s_cdo_nearTotal += _cdoNearScratch.Count;
-            ServerStatusDiagnostics.s_cdo_distantTotal += _cdoDistantScratch.Count;
-            ServerStatusDiagnostics.s_cdo_distinctNearTotal += _cdoNearFiltered.Count;
-            ServerStatusDiagnostics.s_cdo_distinctDistantTotal += _cdoDistantFiltered.Count;
+            ServerStatusDiagnostics.s_createDestroy_passes++;
+            ServerStatusDiagnostics.s_createDestroy_nearTotal += _cdoNearScratch.Count;
+            ServerStatusDiagnostics.s_createDestroy_distantTotal += _cdoDistantScratch.Count;
+            ServerStatusDiagnostics.s_createDestroy_distinctNearTotal += _cdoNearFiltered.Count;
+            ServerStatusDiagnostics.s_createDestroy_distinctDistantTotal += _cdoDistantFiltered.Count;
             if (ZoneSystem.instance != null && ZoneSystem.instance.IsActiveAreaLoaded())
-                ServerStatusDiagnostics.s_cdo_areaReadyTrue++;
+                ServerStatusDiagnostics.s_createDestroy_areaReadyTrue++;
             else
-                ServerStatusDiagnostics.s_cdo_areaReadyFalse++;
+                ServerStatusDiagnostics.s_createDestroy_areaReadyFalse++;
         }
 
         // Remove dictionary entries whose ZNetView is Unity-destroyed or whose
@@ -247,7 +248,7 @@ namespace FiresGhettoNetworkMod
 
             for (int i = 0; i < _orphanScratch.Count; i++)
                 scene.m_instances.Remove(_orphanScratch[i]);
-            ServerStatusDiagnostics.s_cdo_orphansPruned += _orphanScratch.Count;
+            ServerStatusDiagnostics.s_createDestroy_orphansPruned += _orphanScratch.Count;
             _orphanScratch.Clear();
 
             float now = Time.realtimeSinceStartup;
@@ -310,17 +311,17 @@ namespace FiresGhettoNetworkMod
 
         private static void RecordIsActiveAreaLoadedDiagnostics(int missing, int firstMissX, int firstMissY)
         {
-            ServerStatusDiagnostics.s_iaal_calls++;
+            ServerStatusDiagnostics.s_activeAreaLoaded_calls++;
             if (missing == 0)
             {
-                ServerStatusDiagnostics.s_iaal_resultTrue++;
+                ServerStatusDiagnostics.s_activeAreaLoaded_resultTrue++;
                 return;
             }
-            ServerStatusDiagnostics.s_iaal_resultFalse++;
-            if (missing < ServerStatusDiagnostics.s_iaal_minMissingZones) ServerStatusDiagnostics.s_iaal_minMissingZones = missing;
-            if (missing > ServerStatusDiagnostics.s_iaal_maxMissingZones) ServerStatusDiagnostics.s_iaal_maxMissingZones = missing;
-            ServerStatusDiagnostics.s_iaal_lastMissingZoneX = firstMissX;
-            ServerStatusDiagnostics.s_iaal_lastMissingZoneY = firstMissY;
+            ServerStatusDiagnostics.s_activeAreaLoaded_resultFalse++;
+            if (missing < ServerStatusDiagnostics.s_activeAreaLoaded_minMissingZones) ServerStatusDiagnostics.s_activeAreaLoaded_minMissingZones = missing;
+            if (missing > ServerStatusDiagnostics.s_activeAreaLoaded_maxMissingZones) ServerStatusDiagnostics.s_activeAreaLoaded_maxMissingZones = missing;
+            ServerStatusDiagnostics.s_activeAreaLoaded_lastMissingZoneX = firstMissX;
+            ServerStatusDiagnostics.s_activeAreaLoaded_lastMissingZoneY = firstMissY;
         }
 
         [HarmonyPatch(typeof(ZoneSystem), "Update")]
@@ -361,19 +362,19 @@ namespace FiresGhettoNetworkMod
 
         [HarmonyPatch(typeof(Tameable), "Awake")]
         [HarmonyPrefix]
-        public static bool Tameable_Awake_Prefix() => !IsDedicatedServer();
+        public static bool Tameable_Awake_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
         [HarmonyPatch(typeof(Tameable), "Update")]
         [HarmonyPrefix]
-        public static bool Tameable_Update_Prefix() => !IsDedicatedServer();
+        public static bool Tameable_Update_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
         [HarmonyPatch(typeof(Tameable), "SetText")]
         [HarmonyPrefix]
-        public static bool Tameable_SetText_Prefix() => !IsDedicatedServer();
+        public static bool Tameable_SetText_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
         [HarmonyPatch(typeof(AudioMan), "Update")]
         [HarmonyPrefix]
-        public static bool AudioMan_Update_Prefix() => !IsDedicatedServer();
+        public static bool AudioMan_Update_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
         // TerrainComp.Awake + OnDestroy MUST run on the dedicated server — they are NOT rendering work.
         // Awake sets m_nview (GetComponent<ZNetView>()), registers the terrain-op RPC, and Loads saved
@@ -385,79 +386,129 @@ namespace FiresGhettoNetworkMod
         // (mesh/collision rebuild — pure render cost the headless server doesn't need) stays skipped.
         [HarmonyPatch(typeof(TerrainComp), "Update")]
         [HarmonyPrefix]
-        public static bool TerrainComp_Update_Prefix() => !IsDedicatedServer();
+        public static bool TerrainComp_Update_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
         [HarmonyPatch(typeof(ShieldDomeImageEffect), "Awake")]
         [HarmonyPrefix]
-        public static bool ShieldDomeImageEffect_Awake_Prefix() => !IsDedicatedServer();
+        public static bool ShieldDomeImageEffect_Awake_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
-        // The dedicated server instantiates planted crops but must NOT run their grow logic. Plant.SUpdate
-        // calls Grow() on the owner, and Grow() DESTROYS the crop (9999 dmg) when m_status != Healthy &&
-        // m_destroyIfCantGrow. The headless server reads the wrong status — it skips TerrainComp (above), so
-        // its terrain has no cultivation and the crop evaluates as NotCultivated/NoSpace and gets reaped.
-        // Skipping SUpdate on the dedi leaves crops to the owning client, which grows them correctly; a crop
-        // with no client present simply waits and grows when one returns, exactly like vanilla.
+        /// <summary>Crop growth belongs to the owning client: the dedi has no cultivated terrain, so Grow() reaps healthy crops.</summary>
         [HarmonyPatch(typeof(Plant), "SUpdate")]
         [HarmonyPrefix]
-        public static bool Plant_SUpdate_Prefix() => !IsDedicatedServer();
+        public static bool Plant_SUpdate_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
-        // The dedicated server instantiates carts for collision/awareness but must NOT simulate their
-        // physics — a live (non-kinematic) Rigidbody runs before the zone's colliders finish streaming in,
-        // so the cart phases through walls / pops out of its stall and then fights ZSyncTransform as the
-        // colliders load. Make every cart body kinematic on the dedi; ZSyncTransform then drives position via
-        // MovePosition from the owning client. Set Speculative collision first so isKinematic doesn't log the
-        // "Kinematic body only supports Speculative Continuous collision detection" warning.
+        /// <summary>Carts are instantiated for collision but never simulated: a live body runs before the zone's colliders exist.</summary>
         [HarmonyPatch(typeof(Vagon), "Awake")]
         [HarmonyPostfix]
         public static void Vagon_Awake_DediKinematic_Postfix(Vagon __instance)
         {
-            if (!IsDedicatedServer() || __instance == null) return;
-            foreach (var rb in __instance.GetComponentsInChildren<Rigidbody>())
-            {
-                if (rb == null) continue;
-                if (rb.collisionDetectionMode == CollisionDetectionMode.Continuous
-                    || rb.collisionDetectionMode == CollisionDetectionMode.ContinuousDynamic)
-                    rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
-                rb.isKinematic = true;
-            }
+            if (!ServerClientUtils.ZNetIsDedicated()) return;
+            HoldStillOnDedi(__instance);
         }
 
-        private static bool IsDedicatedServer() => ZNet.instance != null && ZNet.instance.IsDedicated();
-
-        private static int s_fellOutRescueMaskCached;
-        private static string s_fellOutRescueMaskCachedSource;
-
-        private static int GetFellOutRescueMask()
+        /// <summary>A grave is a live Rigidbody launched upward on spawn; an unfrozen dedi sinks it through the floor and persists that.</summary>
+        [HarmonyPatch(typeof(TombStone), "Awake")]
+        [HarmonyPostfix]
+        public static void TombStone_Awake_DediKinematic_Postfix(TombStone __instance)
         {
-            string source = FiresGhettoNetworkMod.ConfigDediFellOutRescueLayers?.Value
-                            ?? DefaultRescueLayerMaskCsv;
-
-            if (s_fellOutRescueMaskCachedSource == source) return s_fellOutRescueMaskCached;
-
-            int mask = ParseLayerMaskCsv(source);
-            if (mask == 0)
-            {
-                LoggerOptions.LogWarning(
-                    $"[FellOutRescue] Layer mask from '{source}' resolved to 0 — falling back to vanilla terrain only. "
-                    + "Check layer names exist in the build.");
-                mask = LayerMask.GetMask("terrain");
-            }
-
-            s_fellOutRescueMaskCached = mask;
-            s_fellOutRescueMaskCachedSource = source;
-            return mask;
+            if (!ServerClientUtils.ZNetIsDedicated()) return;
+            HoldStillOnDedi(__instance);
         }
 
-        private static int ParseLayerMaskCsv(string csv)
+        /// <summary>
+        /// Owner-side grave upkeep the dedi must not run: it snaps graves to heightmap height, and it deletes any
+        /// grave whose Container reads empty, which a freshly inherited ZDO does until its items arrive.
+        /// </summary>
+        [HarmonyPatch(typeof(TombStone), "UpdateDespawn")]
+        [HarmonyPrefix]
+        public static bool TombStone_UpdateDespawn_Prefix() => !ServerClientUtils.ZNetIsDedicated();
+
+        /// <summary>Freezes a body the dedi instantiates but must not simulate, and stops vanilla writing velocities into it.</summary>
+        private static void HoldStillOnDedi(Component root)
         {
-            var names = new List<string>();
-            foreach (var raw in csv.Split(','))
+            if (root == null) return;
+
+            foreach (var body in root.GetComponentsInChildren<Rigidbody>())
             {
-                var trimmed = raw?.Trim();
-                if (!string.IsNullOrEmpty(trimmed)) names.Add(trimmed);
+                if (body == null) continue;
+                if (body.collisionDetectionMode == CollisionDetectionMode.Continuous
+                    || body.collisionDetectionMode == CollisionDetectionMode.ContinuousDynamic)
+                    body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+                body.isKinematic = true;
             }
-            return names.Count > 0 ? LayerMask.GetMask(names.ToArray()) : 0;
+
+            foreach (var syncTransform in root.GetComponentsInChildren<ZSyncTransform>())
+            {
+                if (syncTransform == null) continue;
+                syncTransform.m_syncBodyVelocity = false;
+                MarkBodyKinematicForSync(syncTransform);
+            }
         }
+
+        /// <summary>Buoyancy writes velocity, which a frozen body cannot take; live server-owned bodies still float.</summary>
+        [HarmonyPatch(typeof(Floating), nameof(Floating.CustomFixedUpdate))]
+        [HarmonyPrefix]
+        public static bool Floating_CustomFixedUpdate_DediKinematic_Prefix(Rigidbody ___m_body)
+        {
+            if (!ServerClientUtils.ZNetIsDedicated()) return true;
+            return ___m_body == null || !___m_body.isKinematic;
+        }
+
+        /// <summary>
+        /// Game.SleepStop scans every WearNTear in the scene on wake, outside its local-player guard. The dedi owns
+        /// none of them, so only the scan costs anything, and it stalls the frame the wake RPC flushes in.
+        /// </summary>
+        [HarmonyPatch(typeof(Game), "SleepStop")]
+        [HarmonyTranspiler]
+        public static IEnumerable<CodeInstruction> Game_SleepStop_SkipWearNTearScanOnDedi(
+            IEnumerable<CodeInstruction> instructions)
+        {
+            var code = new List<CodeInstruction>(instructions);
+            var wearNTearSource = AccessTools.Method(typeof(ServerAuthorityPatches), nameof(WearNTearsToWake));
+
+            for (int i = 0; i < code.Count; i++)
+            {
+                if (code[i].opcode != OpCodes.Call && code[i].opcode != OpCodes.Callvirt) continue;
+
+                var called = code[i].operand as MethodInfo;
+                if (called == null || called.Name != "FindObjectsByType") continue;
+
+                code[i] = new CodeInstruction(OpCodes.Call, wearNTearSource);
+                return code;
+            }
+
+            LoggerOptions.LogWarning(
+                "[SleepStop] Game.SleepStop has no FindObjectsByType call to redirect; the dedicated server keeps vanilla's scene-wide scan on wake.");
+            return code;
+        }
+
+        private static WearNTear[] WearNTearsToWake(FindObjectsSortMode sortMode)
+        {
+            if (ServerClientUtils.ZNetIsDedicated()) return System.Array.Empty<WearNTear>();
+            return UnityEngine.Object.FindObjectsByType<WearNTear>(sortMode);
+        }
+
+        private static AccessTools.FieldRef<ZSyncTransform, bool> _bodyIsKinematicSnapshot;
+
+        /// <summary>ZSyncTransform caches isKinematic in Awake and branches on that copy, so freezing a body must update it.</summary>
+        private static void MarkBodyKinematicForSync(ZSyncTransform syncTransform)
+        {
+            try
+            {
+                if (_bodyIsKinematicSnapshot == null)
+                    _bodyIsKinematicSnapshot = AccessTools.FieldRefAccess<ZSyncTransform, bool>("m_isKinematicBody");
+                _bodyIsKinematicSnapshot(syncTransform) = true;
+            }
+            catch (System.Exception ex)
+            {
+                LoggerOptions.LogWarning($"[HoldStillOnDedi] ZSyncTransform kinematic snapshot not updated ({ex.Message}); the body is still frozen.");
+            }
+        }
+
+
+        // The solid-surface mask lives in SolidSurface now: same config entry, one parser, shared with
+        // the ground-snap fix so both answer "what can you stand on?" identically.
+        private static int GetFellOutRescueMask() => SolidSurface.Mask();
 
         [HarmonyPatch(typeof(ZSyncTransform), "OwnerSync")]
         [HarmonyPrefix]
@@ -465,7 +516,7 @@ namespace FiresGhettoNetworkMod
             ZSyncTransform __instance,
             Rigidbody ___m_body)
         {
-            if (!IsDedicatedServer()) return true;
+            if (!ServerClientUtils.ZNetIsDedicated()) return true;
 
             Vector3 pos = __instance.transform.position;
             if (pos.y >= KillPlaneY) return true;

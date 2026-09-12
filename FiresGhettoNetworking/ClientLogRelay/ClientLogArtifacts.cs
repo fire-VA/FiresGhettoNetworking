@@ -4,17 +4,10 @@ using System.Collections.Generic;
 namespace VerdantsAscent.Modules.ClientLogRelay
 {
     /// <summary>
-    /// Data transfer object passed to every <see cref="IClientLogConsumer"/> when a client has
-    /// finished logging in and their BepInEx log + mod list have been received on the server.
-    ///
-    /// Construction is done by whichever wire-transport layer owns the challenge/response
-    /// protocol (e.g. the VAngarde anti-cheat's challenge handler). After the bytes arrive,
-    /// the transport hands the populated DTO to <see cref="ClientLogRelay.ReportArtifacts"/>
-    /// and the relay does parsing, persistence, and fan-out.
-    ///
-    /// All fields are read-only after construction — consumers must not mutate the byte arrays
-    /// or dictionaries they receive. This keeps the fan-out safe when multiple consumers run
-    /// concurrently on the main thread.
+    /// What every consumer receives once a client's BepInEx log and mod list have arrived on the server. The
+    /// wire transport that owns the protocol builds it and hands it to ClientLogRelay.ReportArtifacts, which
+    /// parses, persists and fans it out. Treat every field as read-only: consumers run one after another over
+    /// the same instance.
     /// </summary>
     public sealed class ClientLogArtifacts
     {

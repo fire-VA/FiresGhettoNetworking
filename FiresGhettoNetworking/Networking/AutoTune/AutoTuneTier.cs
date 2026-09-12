@@ -223,16 +223,16 @@ namespace FiresGhettoNetworkMod.AutoTune
             bool ok = true;
             foreach (Tier tier in new[] { Tier.Low, Tier.Medium, Tier.High })
             {
-                var p = For(tier);
-                ok &= CheckFloor(tier, "SendRateMin", p.SteamSendRateMinBytes, VanillaFloor.SendRateBytes);
-                ok &= CheckFloor(tier, "SendRateMax", p.SteamSendRateMaxBytes, VanillaFloor.SendRateBytes);
-                ok &= CheckFloor(tier, "SendBuffer",  p.SteamSendBufferBytes,  VanillaFloor.SendBufferBytes);
-                ok &= CheckFloor(tier, "RecvBuffer",  p.SteamRecvBufferBytes,  VanillaFloor.RecvBufferBytes);
-                if (VanillaFloor.Percent(p.UpdateRate) < VanillaFloor.Percent(VanillaFloor.UpdateRate))
+                var preset = For(tier);
+                ok &= CheckFloor(tier, "SendRateMin", preset.SteamSendRateMinBytes, VanillaFloor.SendRateBytes);
+                ok &= CheckFloor(tier, "SendRateMax", preset.SteamSendRateMaxBytes, VanillaFloor.SendRateBytes);
+                ok &= CheckFloor(tier, "SendBuffer",  preset.SteamSendBufferBytes,  VanillaFloor.SendBufferBytes);
+                ok &= CheckFloor(tier, "RecvBuffer",  preset.SteamRecvBufferBytes,  VanillaFloor.RecvBufferBytes);
+                if (VanillaFloor.Percent(preset.UpdateRate) < VanillaFloor.Percent(VanillaFloor.UpdateRate))
                 {
                     ok = false;
                     LoggerOptions.LogError($"AutoTune VanillaFloor SELF-CHECK FAILED: {tier} tier UpdateRate="
-                        + $"{p.UpdateRate} is below vanilla ({VanillaFloor.UpdateRate}). Fix the preset.");
+                        + $"{preset.UpdateRate} is below vanilla ({VanillaFloor.UpdateRate}). Fix the preset.");
                 }
             }
             if (ok)
@@ -408,16 +408,16 @@ namespace FiresGhettoNetworkMod.AutoTune
         {
             if (UseClientAutoTune())
                 return TierPresets.For(AutoTuneState.ClientTier).InstantiationBudgetMs;
-            int v = FiresGhettoNetworkMod.ConfigInstantiationBudgetMs?.Value ?? 3;
-            return Math.Max(1, v);
+            int configured = FiresGhettoNetworkMod.ConfigInstantiationBudgetMs?.Value ?? 3;
+            return Math.Max(1, configured);
         }
 
         public static int MaxInstancesPerFrame()
         {
             if (UseClientAutoTune())
                 return TierPresets.For(AutoTuneState.ClientTier).MaxInstancesPerFrame;
-            int v = FiresGhettoNetworkMod.ConfigMaxInstancesPerFrame?.Value ?? 100;
-            return Math.Max(10, v);
+            int configured = FiresGhettoNetworkMod.ConfigMaxInstancesPerFrame?.Value ?? 100;
+            return Math.Max(10, configured);
         }
 
         public static bool SafetyFallbackEnabled()
@@ -431,8 +431,8 @@ namespace FiresGhettoNetworkMod.AutoTune
         {
             if (UseClientAutoTune())
                 return TierPresets.For(AutoTuneState.ClientTier).SafetyFallbackThreshold;
-            int v = FiresGhettoNetworkMod.ConfigSafetyFallbackThreshold?.Value ?? 5000;
-            return Math.Max(100, v);
+            int configured = FiresGhettoNetworkMod.ConfigSafetyFallbackThreshold?.Value ?? 5000;
+            return Math.Max(100, configured);
         }
 
         public static bool TimeSliceInstantiationEnabled()
@@ -514,6 +514,19 @@ namespace FiresGhettoNetworkMod.AutoTune
             return FiresGhettoNetworkMod.ConfigRpcAoIRadius.Value;
         }
 
+        /// <summary>Configured send-queue cap in bytes. Each caller supplies its own meaning for the vanilla option.</summary>
+        public static int QueueSizeBytes(int vanillaFallbackBytes)
+        {
+            switch (QueueSize())
+            {
+                case QueueSizeOptions._80KB: return 80 * 1024;
+                case QueueSizeOptions._64KB: return 64 * 1024;
+                case QueueSizeOptions._48KB: return 48 * 1024;
+                case QueueSizeOptions._32KB: return 32 * 1024;
+                default: return vanillaFallbackBytes;
+            }
+        }
+
         public static int ExtendedZoneRadius()
         {
             // Defer to Render Limits when present — it owns zone-load sizing, so FGN adds no layers.
@@ -539,11 +552,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 && AutoTuneState.HasServerResult;
         }
 
-        // ---------------- Enum→bytes helpers ----------------
-        // (Duplicates NetworkRatesGroup.GetSendRateValue intentionally — keeps this
-        // module self-contained so callers don't need a runtime dependency on the
-        // patch class. The two helpers must stay in sync; if a new option is added
-        // there, mirror it here.)
+        // Enum to bytes, read by the transpiler at patch time.
 
         private static int SendRateMinFromEnum(SendRateMinOptions opt)
         {

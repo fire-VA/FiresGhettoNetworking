@@ -9,24 +9,14 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Heavy network stress tests (admin only). Where fgn_comptest sends COMPRESSIBLE data to verify
-    /// the compression round-trip is byte-correct (128 KB shrinks to ~837 B — it proves correctness,
-    /// not the pipe), these push INCOMPRESSIBLE bytes so the wire actually carries the full payload,
-    /// and they escalate to the breaking point and record it.
+    /// Admin-only throughput stress tests, the incompressible counterpart to fgn_comptest's correctness run.
     ///
-    ///   fgn_flood [count] [sizeKB] [raw|comp]
-    ///       Server bursts count x sizeKB packets at you (default 1000 x 64, incompressible) and
-    ///       reports throughput + any loss. Hammer far past normal traffic and watch for drops.
+    ///   fgn_flood [count] [sizeKB] [raw|comp]   bursts packets at the caller and reports throughput and loss.
+    ///   fgn_socketramp [startGB] [stepGB] [maxGB]   escalates until the link drops or the data arrives wrong,
+    ///       writing the last-good and failing levels to FiresGhetto_StressResults.txt on the server ahead of
+    ///       each send so a hard crash still leaves the breaking point on disk.
     ///
-    ///   fgn_socketramp [startGB] [stepGB] [maxGB]
-    ///       Server sends an incompressible burst of startGB, waits for you to confirm you got it all
-    ///       intact, then escalates by stepGB and repeats — UNTIL you disconnect, the data arrives
-    ///       corrupt/incomplete, or you stop acking. The last-good level and the failing level are
-    ///       written to FiresGhetto_StressResults.txt on the SERVER (write-ahead, so a hard crash
-    ///       still leaves the breaking point on disk). This is how you find — and record — the cliff.
-    ///
-    /// Same proven transport as fgn_comptest: client -> server start over the no-target routed RPC
-    /// (stable because it's command-fired), server -> the requesting client over its peer uid.
+    /// Transport matches fgn_comptest: command-fired routed RPC up, peer uid back down.
     /// </summary>
     [HarmonyPatch]
     public static class SocketStressTests
@@ -167,7 +157,7 @@ namespace FiresGhettoNetworkMod
         private static void RPC_FloodStart(long sender, int count, int sizeKB, int raw)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!IsAdmin(sender)) { Msg(sender, "FGN flood denied — admin only."); return; }
+            if (!ServerClientUtils.IsAdmin(sender)) { Msg(sender, "FGN flood denied — admin only."); return; }
             if (s_busy) { Msg(sender, "FGN stress already running."); return; }
             count = Mathf.Clamp(count, 1, MaxCount);
             sizeKB = Mathf.Clamp(sizeKB, 1, ChunkKB);
@@ -217,7 +207,7 @@ namespace FiresGhettoNetworkMod
         private static void RPC_RampStart(long sender, int startGB, int stepGB, int maxGB)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!IsAdmin(sender)) { Msg(sender, "FGN ramp denied — admin only."); return; }
+            if (!ServerClientUtils.IsAdmin(sender)) { Msg(sender, "FGN ramp denied — admin only."); return; }
             if (s_busy) { Msg(sender, "FGN stress already running."); return; }
             int maxGbCeil = (int)(HardMaxBytes / (1024L * 1024 * 1024));
             startGB = Mathf.Clamp(startGB, 1, maxGbCeil);
@@ -446,11 +436,7 @@ namespace FiresGhettoNetworkMod
             NetworkingRatesGroup.RestoreConnection(peer);
         }
 
-        private static void RPC_Msg(long sender, string msg)
-        {
-            if (Console.instance != null) Console.instance.AddString(msg);
-            else LoggerOptions.LogMessage(msg);
-        }
+        private static void RPC_Msg(long sender, string msg) => AdminConsoleEcho.Print(msg);
 
         private static byte[] MakePayload(int size, int seq, bool raw)
         {
@@ -487,18 +473,8 @@ namespace FiresGhettoNetworkMod
             catch { return false; }
         }
 
-        private static bool IsAdmin(long sender)
-        {
-            ZNetPeer peer = ZNet.instance.GetPeer(sender);
-            if (peer == null) return true;   // originated locally on the server/host — the host is admin
-            string host = peer.m_rpc?.GetSocket()?.GetHostName();
-            return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
-        }
 
-        private static void Msg(long target, string msg)
-        {
-            try { if (ZRoutedRpc.instance != null) ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcMsg, msg); } catch { }
-        }
+        private static void Msg(long target, string msg) => AdminConsoleEcho.Send(RpcMsg, target, msg);
     }
 
     // Persistent, write-ahead results log on the server. Each line is flushed immediately (AppendAllText

@@ -3,22 +3,11 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// One place that answers "how far does the world simulate, and is this zone inside it".
-    ///
-    /// Valheim 1.0 replaced the two fixed radii (ZoneSystem.m_activeArea / m_activeDistantArea)
-    /// with a player-configurable, server-synced SimulationDistance struct, and made the active
-    /// area RADIAL rather than a square block:
-    ///
-    ///   ZNet.instance.GetSyncedSimulationDistance() -> SimulationDistance
-    ///       .NearSimulationDistance   zones simulated in full   (was m_activeArea)
-    ///       .FarSimulationDistance    additional distant band
-    ///       .TotalSimulationDistance  near + far                (was m_activeDistantArea)
-    ///       .IsClassic                square area, skip the radial filter
-    ///
-    /// Every vanilla consumer now filters candidate zones through
-    /// ZoneSystem.ZonesWithinRadius(centre, zone, radius) unless IsClassic, so a square sweep
-    /// alone over-counts the corners. FGN's extended-zone-radius feature widens the NEAR band
-    /// (which also widens Total, matching what it used to do by adding to both radii).
+    /// Single answer to "how far does the world simulate, and is this zone inside it". Valheim 1.0 replaced
+    /// ZoneSystem.m_activeArea / m_activeDistantArea with the server-synced SimulationDistance struct
+    /// (Near / Far / Total) and made the active area radial unless IsClassic, so a square sweep over-counts
+    /// the corners and every candidate zone goes through ZoneSystem.ZonesWithinRadius. FGN's extended zone
+    /// radius widens the near band, which widens Total with it.
     /// </summary>
     internal static class SimDistance
     {

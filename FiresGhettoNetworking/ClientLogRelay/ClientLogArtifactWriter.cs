@@ -7,18 +7,9 @@ using UnityEngine;
 namespace VerdantsAscent.Modules.ClientLogRelay
 {
     /// <summary>
-    /// Pure, dependency-free writer that persists a <see cref="ClientLogArtifacts"/> bundle to
-    /// a target directory. Always writes three files (overwriting on each call), keyed to the
-    /// client's default folder name:
-    ///
-    /// <list type="bullet">
-    /// <item><c>{targetDir}/{folder}/LogOutput.log</c></item>
-    /// <item><c>{targetDir}/{folder}/modlist.txt</c></item>
-    /// <item><c>{targetDir}/{folder}/errors_warnings.txt</c></item>
-    /// </list>
-    ///
-    /// Caller controls <c>targetDir</c> so the writer can be reused by any mod.
-    /// Returns the absolute path to the per-client folder, or null on failure.
+    /// Writes a ClientLogArtifacts bundle to disk as LogOutput.log, modlist.txt and errors_warnings.txt under
+    /// a per-client folder, overwriting on each call. The caller owns the target directory, so any mod can
+    /// reuse it. Returns the folder's absolute path, or null on failure.
     /// </summary>
     public static class ClientLogArtifactWriter
     {

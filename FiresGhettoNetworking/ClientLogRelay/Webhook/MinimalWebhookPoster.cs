@@ -106,7 +106,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
 
             // Always request ?wait=true so Discord returns the full message object with
             // its id. A few extra bytes in the response body, no observable latency
-            // difference ? and required for the reaction-based log-request feature to
+            // difference, and required for the reaction-based log-request feature to
             // know which snapshot message a reaction is attached to.
             string url = webhookUrl.IndexOf('?') >= 0
                 ? webhookUrl + "&wait=true"
@@ -121,12 +121,8 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
 
                 yield return req.SendWebRequest();
 
-#if UNITY_2020_1_OR_NEWER
-                bool ok = req.result == UnityWebRequest.Result.Success;
-#else
-                bool ok = !req.isNetworkError && !req.isHttpError;
-#endif
-                if (!ok)
+                bool succeeded = req.result == UnityWebRequest.Result.Success;
+                if (!succeeded)
                 {
                     Debug.LogWarning($"[ClientLogRelay] Webhook POST failed ({req.responseCode}): {req.error}");
                     onPosted?.Invoke(null, null);
@@ -182,13 +178,13 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
                 if (embed.Fields.Count > 0)
                 {
                     var fieldList = new List<object>(embed.Fields.Count);
-                    foreach (var f in embed.Fields)
+                    foreach (var field in embed.Fields)
                     {
                         fieldList.Add(new Dictionary<string, object>
                         {
-                            ["name"]   = f.name ?? string.Empty,
-                            ["value"]  = string.IsNullOrEmpty(f.value) ? "—" : f.value,
-                            ["inline"] = f.inline,
+                            ["name"]   = field.name ?? string.Empty,
+                            ["value"]  = string.IsNullOrEmpty(field.value) ? "-" : field.value,
+                            ["inline"] = field.inline,
                         });
                     }
                     embedObj["fields"] = fieldList;
@@ -252,7 +248,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
         /// <summary>
         /// Adds multiple reactions to a message **sequentially** in a single coroutine,
         /// with a delay between each PUT to stay within Discord's per-route rate limit.
-        /// Use this instead of calling <see cref="AddReaction"/> in a loop — parallel
+        /// Use this instead of calling <see cref="AddReaction"/> in a loop - parallel
         /// coroutines will race and Discord will 429-reject all but the first.
         /// </summary>
         public static void AddReactions(string botToken, string channelId, string messageId, params string[] emojis)
@@ -281,7 +277,7 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
 
             using (var req = new UnityWebRequest(url, "PUT"))
             {
-                // PUT with no body — skip uploadHandler entirely to avoid the
+                // PUT with no body - skip uploadHandler entirely to avoid the
                 // "Content-Length is managed automatically" warning.
                 req.downloadHandler = new DownloadHandlerBuffer();
                 req.SetRequestHeader("Authorization", $"Bot {botToken}");
@@ -289,12 +285,8 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
 
                 yield return req.SendWebRequest();
 
-#if UNITY_2020_1_OR_NEWER
-                bool ok = req.result == UnityWebRequest.Result.Success;
-#else
-                bool ok = !req.isNetworkError && !req.isHttpError;
-#endif
-                if (!ok)
+                bool succeeded = req.result == UnityWebRequest.Result.Success;
+                if (!succeeded)
                 {
                     Debug.LogWarning($"[ClientLogRelay] AddReaction failed ({req.responseCode}): {req.error}");
                 }
@@ -334,13 +326,9 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
                 req.timeout = 15;
                 yield return req.SendWebRequest();
 
-#if UNITY_2020_1_OR_NEWER
-                bool ok = req.result == UnityWebRequest.Result.Success;
-#else
-                bool ok = !req.isNetworkError && !req.isHttpError;
-#endif
+                bool succeeded = req.result == UnityWebRequest.Result.Success;
 
-                if (!ok)
+                if (!succeeded)
                 {
                     if (req.responseCode != 403 && req.responseCode != 404)
                         Debug.LogWarning($"[ClientLogRelay] Failed to fetch messages for cleanup ({req.responseCode})");
@@ -424,13 +412,9 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
                         delReq.timeout = 10;
                         yield return delReq.SendWebRequest();
 
-#if UNITY_2020_1_OR_NEWER
-                        ok = delReq.result == UnityWebRequest.Result.Success;
-#else
-                        ok = !delReq.isNetworkError && !delReq.isHttpError;
-#endif
+                        bool deleted = delReq.result == UnityWebRequest.Result.Success;
 
-                        if (ok || delReq.responseCode == 404)
+                        if (deleted || delReq.responseCode == 404)
                         {
                             // Success or already deleted
                         }
@@ -451,9 +435,9 @@ namespace VerdantsAscent.Modules.ClientLogRelay.Webhook
         private static void EnsureHost()
         {
             if (_host != null) return;
-            var go = new GameObject("ClientLogRelay_WebhookHost");
-            UnityEngine.Object.DontDestroyOnLoad(go);
-            _host = go.AddComponent<CoroutineHost>();
+            var host = new GameObject("ClientLogRelay_WebhookHost");
+            UnityEngine.Object.DontDestroyOnLoad(host);
+            _host = host.AddComponent<CoroutineHost>();
         }
 
         /// <summary>Internal MonoBehaviour that hosts coroutines for webhook POSTs.</summary>

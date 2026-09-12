@@ -21,46 +21,45 @@ namespace FiresGhettoNetworkMod
         private static readonly List<Player> _playersInZoneScratch = new List<Player>();
         private static readonly Dictionary<int, float> _eventDiagnosticLastLogTime = new Dictionary<int, float>();
 
-        private static readonly System.Reflection.FieldInfo _f_spawnsystem_heightmap = AccessTools.Field(typeof(SpawnSystem), "m_heightmap");
-        private static readonly System.Reflection.FieldInfo _f_randomEvent    = AccessTools.Field(typeof(RandEventSystem), "m_randomEvent");
-        private static readonly System.Reflection.FieldInfo _f_forcedEvent    = AccessTools.Field(typeof(RandEventSystem), "m_forcedEvent");
-        private static readonly System.Reflection.FieldInfo _f_activeEvent    = AccessTools.Field(typeof(RandEventSystem), "m_activeEvent");
-        private static readonly System.Reflection.MethodInfo _m_setActiveEvent = AccessTools.Method(typeof(RandEventSystem), "SetActiveEvent", new[] { typeof(RandomEvent), typeof(bool) });
-        private static readonly System.Reflection.MethodInfo _m_isAnyPlayerIn  = AccessTools.Method(typeof(RandEventSystem), "IsAnyPlayerInEventArea", new[] { typeof(RandomEvent) });
+        private static readonly System.Reflection.FieldInfo _spawnSystemHeightmapField = AccessTools.Field(typeof(SpawnSystem), "m_heightmap");
+        private static readonly System.Reflection.FieldInfo _randomEventField    = AccessTools.Field(typeof(RandEventSystem), "m_randomEvent");
+        private static readonly System.Reflection.FieldInfo _forcedEventField    = AccessTools.Field(typeof(RandEventSystem), "m_forcedEvent");
+        private static readonly System.Reflection.FieldInfo _activeEventField    = AccessTools.Field(typeof(RandEventSystem), "m_activeEvent");
+        private static readonly System.Reflection.MethodInfo _setActiveEventMethod = AccessTools.Method(typeof(RandEventSystem), "SetActiveEvent", new[] { typeof(RandomEvent), typeof(bool) });
+        private static readonly System.Reflection.MethodInfo _isAnyPlayerInEventAreaMethod  = AccessTools.Method(typeof(RandEventSystem), "IsAnyPlayerInEventArea", new[] { typeof(RandomEvent) });
 
-        private static bool IsDedicatedServer() => ZNet.instance != null && ZNet.instance.IsDedicated();
 
         [HarmonyPatch(typeof(BaseAI), "UpdateAI")]
         [HarmonyPrefix]
         public static bool BaseAI_UpdateAI_Prefix(BaseAI __instance)
         {
-            ServerStatusDiagnostics.s_uai_examined++;
+            ServerStatusDiagnostics.s_updateAi_examined++;
 
             if (__instance.m_nview == null)
             {
-                ServerStatusDiagnostics.s_uai_bail_nviewNull++;
+                ServerStatusDiagnostics.s_updateAi_bail_nviewNull++;
                 return false;
             }
             if (!__instance.m_nview.IsValid())
             {
-                ServerStatusDiagnostics.s_uai_bail_nviewInvalid++;
+                ServerStatusDiagnostics.s_updateAi_bail_nviewInvalid++;
                 return false;
             }
             if (__instance.m_nview.GetZDO() == null)
             {
-                ServerStatusDiagnostics.s_uai_bail_zdoNull++;
+                ServerStatusDiagnostics.s_updateAi_bail_zdoNull++;
                 return false;
             }
             if (__instance.m_character == null)
             {
-                ServerStatusDiagnostics.s_uai_bail_charNull++;
+                ServerStatusDiagnostics.s_updateAi_bail_charNull++;
                 return false;
             }
 
             if (__instance.m_nview.IsOwner())
-                ServerStatusDiagnostics.s_uai_passThrough_isOwner++;
+                ServerStatusDiagnostics.s_updateAi_passThrough_isOwner++;
             else
-                ServerStatusDiagnostics.s_uai_passThrough_notOwner++;
+                ServerStatusDiagnostics.s_updateAi_passThrough_notOwner++;
 
             return true;
         }
@@ -76,8 +75,8 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static void MonsterAI_UpdateAI_Counter_Prefix()
         {
-            if (!IsDedicatedServer()) return;
-            ServerStatusDiagnostics.s_mai_examined++;
+            if (!ServerClientUtils.ZNetIsDedicated()) return;
+            ServerStatusDiagnostics.s_monsterAi_examined++;
         }
 
         private const int MaxAwakeLogsPerSession = 10;
@@ -88,7 +87,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         public static void BaseAI_Awake_Diagnostic_Postfix(BaseAI __instance)
         {
-            if (!IsDedicatedServer() || _awakeLogsRemaining <= 0) return;
+            if (!ServerClientUtils.ZNetIsDedicated() || _awakeLogsRemaining <= 0) return;
 
             string name = __instance.gameObject != null ? __instance.gameObject.name : "<null-go>";
             if (!_seenAwakeNames.Add(name)) return;
@@ -105,26 +104,26 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         public static void ZNetScene_CreateObject_Diagnostic_Postfix(GameObject __result)
         {
-            if (!IsDedicatedServer()) return;
-            ServerStatusDiagnostics.s_co_calls++;
-            if (__result == null) ServerStatusDiagnostics.s_co_nullReturns++;
+            if (!ServerClientUtils.ZNetIsDedicated()) return;
+            ServerStatusDiagnostics.s_createObject_calls++;
+            if (__result == null) ServerStatusDiagnostics.s_createObject_nullReturns++;
         }
 
         [HarmonyPatch(typeof(SpawnSystem), "UpdateSpawning")]
         [HarmonyPrefix]
         static bool UpdateSpawning_Prefix(SpawnSystem __instance, ZNetView ___m_nview, List<SpawnSystemList> ___m_spawnLists)
         {
-            if (!IsDedicatedServer()) return true;
+            if (!ServerClientUtils.ZNetIsDedicated()) return true;
             if (___m_nview == null || !___m_nview.IsValid() || !___m_nview.IsOwner()) return false;
 
             bool shouldLogEventDiagnostic = ShouldLogEventDiagnosticForSpawnSystem(__instance,
-                out RandomEvent activeEvt, out RandomEvent runningEvt);
+                out RandomEvent activeEvent, out RandomEvent runningEvent);
 
             CollectPlayersInsideExpandedSpawnZone(__instance);
             if (_playersInZoneScratch.Count == 0)
             {
                 if (shouldLogEventDiagnostic)
-                    LogEventDiagnosticSkippedNoPlayers(__instance, activeEvt, runningEvt);
+                    LogEventDiagnosticSkippedNoPlayers(__instance, activeEvent, runningEvent);
                 return false;
             }
 
@@ -136,16 +135,16 @@ namespace FiresGhettoNetworkMod
                 if (spawnList?.m_spawners != null)
                     __instance.UpdateSpawnList(spawnList.m_spawners, time, false, BiomeSpawnerSalt);
 
-            RunEventSpawners(__instance, time, shouldLogEventDiagnostic, activeEvt, runningEvt);
+            RunEventSpawners(__instance, time, shouldLogEventDiagnostic, activeEvent, runningEvent);
             return false;
         }
 
         private static bool ShouldLogEventDiagnosticForSpawnSystem(
-            SpawnSystem ss, out RandomEvent activeEvt, out RandomEvent runningEvt)
+            SpawnSystem ss, out RandomEvent activeEvent, out RandomEvent runningEvent)
         {
-            activeEvt = RandEventSystem.instance != null ? _f_activeEvent.GetValue(RandEventSystem.instance) as RandomEvent : null;
-            runningEvt = RandEventSystem.instance != null ? _f_randomEvent.GetValue(RandEventSystem.instance) as RandomEvent : null;
-            if (activeEvt == null && runningEvt == null) return false;
+            activeEvent = RandEventSystem.instance != null ? _activeEventField.GetValue(RandEventSystem.instance) as RandomEvent : null;
+            runningEvent = RandEventSystem.instance != null ? _randomEventField.GetValue(RandEventSystem.instance) as RandomEvent : null;
+            if (activeEvent == null && runningEvent == null) return false;
 
             int id = ss.GetInstanceID();
             float now = Time.time;
@@ -178,46 +177,46 @@ namespace FiresGhettoNetworkMod
             SpawnSystem.m_tempNearPlayers.AddRange(_playersInZoneScratch);
         }
 
-        private static bool TryEnsureSpawnSystemHeightmap(SpawnSystem ss)
+        private static bool TryEnsureSpawnSystemHeightmap(SpawnSystem spawnSystem)
         {
-            if (ss == null || _f_spawnsystem_heightmap == null) return false;
-            var hmap = _f_spawnsystem_heightmap.GetValue(ss) as Heightmap;
-            if (hmap != null) return true;
-            hmap = Heightmap.FindHeightmap(ss.transform.position);
-            if (hmap == null) return false;
-            _f_spawnsystem_heightmap.SetValue(ss, hmap);
+            if (spawnSystem == null || _spawnSystemHeightmapField == null) return false;
+            var heightmap = _spawnSystemHeightmapField.GetValue(spawnSystem) as Heightmap;
+            if (heightmap != null) return true;
+            heightmap = Heightmap.FindHeightmap(spawnSystem.transform.position);
+            if (heightmap == null) return false;
+            _spawnSystemHeightmapField.SetValue(spawnSystem, heightmap);
             return true;
         }
 
-        private static void RunEventSpawners(SpawnSystem ss, DateTime time, bool shouldLog, RandomEvent activeEvt, RandomEvent runningEvt)
+        private static void RunEventSpawners(SpawnSystem spawnSystem, DateTime time, bool shouldLog, RandomEvent activeEvent, RandomEvent runningEvent)
         {
             if (RandEventSystem.instance == null) return;
 
             List<SpawnSystem.SpawnData> currentSpawners = RandEventSystem.instance.GetCurrentSpawners();
             if (shouldLog)
-                LogEventDiagnosticRanEventPath(ss, activeEvt, runningEvt, currentSpawners);
+                LogEventDiagnosticRanEventPath(spawnSystem, activeEvent, runningEvent, currentSpawners);
             if (currentSpawners != null)
-                ss.UpdateSpawnList(currentSpawners, time, true, EventSpawnerSalt);
+                spawnSystem.UpdateSpawnList(currentSpawners, time, true, EventSpawnerSalt);
         }
 
-        private static void LogEventDiagnosticSkippedNoPlayers(SpawnSystem ss, RandomEvent activeEvt, RandomEvent runningEvt)
+        private static void LogEventDiagnosticSkippedNoPlayers(SpawnSystem ss, RandomEvent activeEvent, RandomEvent runningEvent)
         {
             Vector3 c = ss.transform.position;
             LoggerOptions.LogInfo(
                 $"[EventDiag] SpawnSystem@({c.x:F0},{c.z:F0}) SKIPPED: no players in zone. " +
-                $"ActiveEvent='{(activeEvt != null ? activeEvt.m_name : "null")}' " +
-                $"RunningEvent='{(runningEvt != null ? runningEvt.m_name : "null")}' " +
+                $"ActiveEvent='{(activeEvent != null ? activeEvent.m_name : "null")}' " +
+                $"RunningEvent='{(runningEvent != null ? runningEvent.m_name : "null")}' " +
                 $"TotalPlayers={Player.GetAllPlayers().Count} Peers={ZNet.instance.GetConnectedPeers().Count}");
         }
 
-        private static void LogEventDiagnosticRanEventPath(SpawnSystem ss, RandomEvent activeEvt, RandomEvent runningEvt, List<SpawnSystem.SpawnData> currentSpawners)
+        private static void LogEventDiagnosticRanEventPath(SpawnSystem ss, RandomEvent activeEvent, RandomEvent runningEvent, List<SpawnSystem.SpawnData> currentSpawners)
         {
             Vector3 c = ss.transform.position;
             int count = currentSpawners != null ? currentSpawners.Count : -1;
             LoggerOptions.LogInfo(
                 $"[EventDiag] SpawnSystem@({c.x:F0},{c.z:F0}) RAN event path. " +
-                $"ActiveEvent='{(activeEvt != null ? activeEvt.m_name : "null")}' " +
-                $"RunningEvent='{(runningEvt != null ? runningEvt.m_name : "null")}' " +
+                $"ActiveEvent='{(activeEvent != null ? activeEvent.m_name : "null")}' " +
+                $"RunningEvent='{(runningEvent != null ? runningEvent.m_name : "null")}' " +
                 $"GetCurrentSpawners.Count={count} Players={_playersInZoneScratch.Count}");
         }
 
@@ -231,10 +230,10 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         static void RandEventSystem_FixedUpdate_Prefix(RandEventSystem __instance)
         {
-            if (!IsDedicatedServer()) return;
-            if (_f_forcedEvent.GetValue(__instance) is RandomEvent) return;
+            if (!ServerClientUtils.ZNetIsDedicated()) return;
+            if (_forcedEventField.GetValue(__instance) is RandomEvent) return;
 
-            RandomEvent randomEvent = _f_randomEvent.GetValue(__instance) as RandomEvent;
+            RandomEvent randomEvent = _randomEventField.GetValue(__instance) as RandomEvent;
             if (randomEvent == null) return;
 
             // A dedicated server has no local player to occupy the event origin, so vanilla's
@@ -260,20 +259,20 @@ namespace FiresGhettoNetworkMod
                 return;
             }
 
-            bool anyPlayerInEventArea = (bool)_m_isAnyPlayerIn.Invoke(__instance, new object[] { randomEvent });
+            bool anyPlayerInEventArea = (bool)_isAnyPlayerInEventAreaMethod.Invoke(__instance, new object[] { randomEvent });
             if (anyPlayerInEventArea)
-                _f_activeEvent.SetValue(__instance, randomEvent);
+                _activeEventField.SetValue(__instance, randomEvent);
         }
 
         [HarmonyPatch(typeof(RandEventSystem), "SetActiveEvent")]
         [HarmonyPrefix]
         static bool RandEventSystem_SetActiveEvent_Prefix(RandEventSystem __instance, RandomEvent ev)
         {
-            if (!IsDedicatedServer()) return true;
+            if (!ServerClientUtils.ZNetIsDedicated()) return true;
             if (ev != null) return true;
-            if (_f_forcedEvent.GetValue(__instance) is RandomEvent) return true;
+            if (_forcedEventField.GetValue(__instance) is RandomEvent) return true;
 
-            RandomEvent randomEvent = _f_randomEvent.GetValue(__instance) as RandomEvent;
+            RandomEvent randomEvent = _randomEventField.GetValue(__instance) as RandomEvent;
             return randomEvent == null;
         }
 
@@ -281,18 +280,18 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         static void RandEventSystem_FixedUpdate_Postfix(RandEventSystem __instance)
         {
-            if (!IsDedicatedServer()) return;
-            if (_f_forcedEvent.GetValue(__instance) is RandomEvent) return;
+            if (!ServerClientUtils.ZNetIsDedicated()) return;
+            if (_forcedEventField.GetValue(__instance) is RandomEvent) return;
 
-            RandomEvent randomEvent = _f_randomEvent.GetValue(__instance) as RandomEvent;
+            RandomEvent randomEvent = _randomEventField.GetValue(__instance) as RandomEvent;
 
             if (randomEvent != null)
             {
-                bool anyInArea = (bool)_m_isAnyPlayerIn.Invoke(__instance, new object[] { randomEvent });
-                _m_setActiveEvent.Invoke(__instance, new object[] { anyInArea ? randomEvent : null, false });
+                bool anyInArea = (bool)_isAnyPlayerInEventAreaMethod.Invoke(__instance, new object[] { randomEvent });
+                _setActiveEventMethod.Invoke(__instance, new object[] { anyInArea ? randomEvent : null, false });
                 return;
             }
-            _m_setActiveEvent.Invoke(__instance, new object[] { null, false });
+            _setActiveEventMethod.Invoke(__instance, new object[] { null, false });
         }
     }
 }
