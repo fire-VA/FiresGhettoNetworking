@@ -48,6 +48,8 @@ namespace FiresGhettoNetworkMod
             }
 
             s_carriedSeconds = Math.Max(-MaxCarriedSeconds, Math.Min(MaxCarriedSeconds, s_carriedSeconds - correction));
+            if (Math.Abs(correction) >= ReportThresholdSeconds)
+                CapeCrashDiagnostics.Log($"Server clock correction {correction * 1000:0} ms, carried {s_carriedSeconds * 1000:0} ms");
             Report(Math.Abs(correction));
         }
 

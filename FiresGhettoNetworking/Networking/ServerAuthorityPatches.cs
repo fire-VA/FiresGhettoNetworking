@@ -412,10 +412,11 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool ShieldDomeImageEffect_Awake_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
-        /// <summary>Crop growth belongs to the owning client: the dedi has no cultivated terrain, so Grow() reaps healthy crops.</summary>
+        /// <summary>A plant the dedi does not own only refreshes visuals and hover status a headless server never shows; plants it owns run vanilla so they still grow.</summary>
         [HarmonyPatch(typeof(Plant), "SUpdate")]
         [HarmonyPrefix]
-        public static bool Plant_SUpdate_Prefix() => !ServerClientUtils.ZNetIsDedicated();
+        public static bool Plant_SUpdate_Prefix(ZNetView ___m_nview) =>
+            !ServerClientUtils.ZNetIsDedicated() || (___m_nview != null && ___m_nview.IsValid() && ___m_nview.IsOwner());
 
         /// <summary>Carts are instantiated for collision but never simulated: a live body runs before the zone's colliders exist.</summary>
         [HarmonyPatch(typeof(Vagon), "Awake")]

@@ -147,6 +147,7 @@ namespace FiresGhettoNetworkMod
         public static bool SetConnectionConfig(string enumMemberName, int value, uint connHandle)
         {
             IntPtr ptr = IntPtr.Zero;
+            CapeCrashDiagnostics.Log($"Steam config {enumMemberName} = {value} on connection {connHandle}: resolving types");
             try
             {
                 var allTypes = AppDomain.CurrentDomain.GetAssemblies()
@@ -175,7 +176,9 @@ namespace FiresGhettoNetworkMod
                 var setMethod = utilsType.GetMethod("SetConfigValue", BindingFlags.Public | BindingFlags.Static);
                 if (setMethod == null) return false;
 
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (id {Convert.ToInt32(enumVal)}) = {value} on connection {connHandle}: calling SetConfigValue");
                 object res = setMethod.Invoke(null, new object[] { enumVal, scopeVal, new IntPtr((long)connHandle), dataVal, ptr });
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} on connection {connHandle}: returned {res}");
                 return !(res is bool b) || b;
             }
             catch (Exception e)
@@ -450,6 +453,7 @@ namespace FiresGhettoNetworkMod
         private static void SetSteamConfig(string enumMemberName, int value)
         {
             IntPtr ptr = IntPtr.Zero;
+            CapeCrashDiagnostics.Log($"Steam config {enumMemberName} = {value} (global): resolving types");
             try
             {
                 var allTypes = AppDomain.CurrentDomain.GetAssemblies()
@@ -492,7 +496,9 @@ namespace FiresGhettoNetworkMod
                     return;
                 }
 
-                setMethod.Invoke(null, new object[] { enumVal, scopeVal, IntPtr.Zero, dataVal, ptr });
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (id {Convert.ToInt32(enumVal)}) = {value} (global): calling SetConfigValue");
+                object res = setMethod.Invoke(null, new object[] { enumVal, scopeVal, IntPtr.Zero, dataVal, ptr });
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (global): returned {res}");
             }
             catch (Exception e)
             {

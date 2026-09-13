@@ -1,11 +1,23 @@
+* v1.4.23 - connection fix
+  - players no longer get disconnected while a lot of data is being sent to them, like a big base loading in (new setting "Keep Busy Connections Alive", on by default)
+
+* v1.4.22 - compression rebuild and server fixes
+  - compression rebuilt: less CPU for the same or better savings, and damaged packets are caught instead of loaded
+  - terrain edits no longer go missing when an area's ground loads late
+  - dedicated servers print their join address (IP:port) once they finish starting 
+  - smoother zone loading with "Enable Time-Slice Instantiation" on, and distant objects no longer wait behind nearby ones
+  - crops keep growing on servers that take ownership of them
+  - removed the "Max Active ZDOs" setting (it no longer did anything)
+  - clearer compression stats in the log
+
 * v1.4.15 - boats, sleeping and server fixes
   - boats no longer take constant damage while players are aboard
-  - sleeping on a busy server no longer takes a minute or more
-  - RPC filtering, ZDO throttling and AI LOD now work on servers with Server-Side Simulation off, each on its own toggle
+  - sleeping on a busy server no longer takes a minute or more (hopefully, not confirmed with crossplay and cross system clients yet)
+  - RPC filtering, ZDO throttling and AI LOD now work on servers with Server-Side Simulation off, each on its own toggle (shout out Safwan for that suggestion)
   - Server-Side Simulation stays off when ValheimCommunityPatch is on the server, since the two fight over the same objects
   - with Server-Side Simulation on, the server keeps up with terrain edits again and stops loading areas without their ground
   - buildings the server looks after wear down and collapse normally again
-  - the Queue Size setting and auto-tune queue sizes now actually apply, and compression uses less CPU
+  - the auto-tune queue sizes now properly apply, and compression uses less CPU
 
 * v1.4.12 - hotfix updates
   - graves, dropped items and tames no longer sink through floors when an area loads

@@ -196,6 +196,22 @@ namespace FiresGhettoNetworkMod
             ping = 0;
             outBytesSec = 0f;
             inBytesSec = 0f;
+            if (!TryGameServerStatus(socket, out SteamNetConnectionRealTimeStatus_t status))
+            {
+                return false;
+            }
+
+            ping = status.m_nPing;
+            outBytesSec = status.m_flOutBytesPerSec;
+            inBytesSec = status.m_flInBytesPerSec;
+            return true;
+        }
+
+        // Steam's whole real-time view of a hosted server's peer connection: its pacing rate, how long new data waits,
+        // what is sent but unacknowledged, and how much of what we send arrives.
+        internal static bool TryGameServerStatus(ISocket socket, out SteamNetConnectionRealTimeStatus_t status)
+        {
+            status = default;
 
             // Unwrap ServerSync's BufferingSocket wrapper(s) first — on a modded server peer.m_socket stays
             // wrapped for the whole session, and a raw `is ZSteamSocket` test fails on the wrapper, which
@@ -221,17 +237,8 @@ namespace FiresGhettoNetworkMod
                 return false;
             }
 
-            SteamNetConnectionRealTimeStatus_t status = default;
             SteamNetConnectionRealTimeLaneStatus_t lanes = default;
-            if (SteamGameServerNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes) != EResult.k_EResultOK)
-            {
-                return false;
-            }
-
-            ping = status.m_nPing;
-            outBytesSec = status.m_flOutBytesPerSec;
-            inBytesSec = status.m_flInBytesPerSec;
-            return true;
+            return SteamGameServerNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes) == EResult.k_EResultOK;
         }
 
         // One-shot at the first peer (re-armed when the server empties) so a test run confirms which

@@ -8,9 +8,9 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod.AutoTune
 {
     /// <summary>
-    /// Client-side instantiation pacing for ZNetScene.CreateObjects: a time-budget prefix replays vanilla's
-    /// own sorted and distant passes in chunks, with the older batch-cap transpiler as the fallback when
-    /// time-slicing is switched off.
+    /// Client-side instantiation pacing for ZNetScene.CreateObjects: a time-budget prefix creates vanilla's near
+    /// objects in vanilla's order, then its distant objects, one at a time until the frame's budget or cap is
+    /// spent, with the older batch-cap transpiler as the fallback when time-slicing is switched off.
     /// </summary>
     [HarmonyPatch]
     public static class ZoneLoadPatches
@@ -26,12 +26,6 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         // ----- Time-budget tuning -----
 
-        // Vanilla's CreateObjectsSorted is chunked so the time budget can interrupt between chunks. One
-        // prefab per chunk caps the overshoot at a single Instantiate; the previous ten assumed ~0.1 ms each,
-        // which a city's first-instantiate spikes (shader variants, bundle resolution) turned into 50 ms of
-        // overshoot and visible hitching. The per-chunk sort costs about 1.5 us on a few hundred elements.
-        private const int ChunkSize = 1;
-
         // When SafetyFallbackEnabled and pending list exceeds the threshold,
         // multiply the per-frame budget by this factor — but never beyond 16 ms
         // (one full frame at 60 fps). Keeps a teleport-into-megabase from
@@ -40,30 +34,38 @@ namespace FiresGhettoNetworkMod.AutoTune
         private const int SafetyBudgetMultiplier = 3;
         private const int SafetyBudgetMaxMs = 16;
 
-        // Reverse-patched targets — Harmony copies the original method bodies into
-        // these stubs at patch-time so we can call them directly without reflection.
-        // First parameter is the instance (target methods are private instance
-        // methods on ZNetScene). Refs preserved exactly.
-        [HarmonyReversePatch]
-        [HarmonyPatch(typeof(ZNetScene), "CreateObjectsSorted")]
-        public static void CallCreateObjectsSorted(
-            ZNetScene self,
-            List<ZDO> currentNearObjects,
-            int maxCreatedPerFrame,
-            ref int created)
-        {
-            throw new NotImplementedException("Harmony reverse patch failed for ZNetScene.CreateObjectsSorted");
-        }
+        // Vanilla's private CreateObject, ZDOCompare and InLoadingScreen, called through delegates so other mods'
+        // patches on them still apply. Resolved on first use; if this game version lacks one, or the pass ever
+        // throws, time-slicing turns itself off and vanilla instantiates for the rest of the session.
+        private static Func<ZNetScene, ZDO, GameObject> s_createObject;
+        private static Comparison<ZDO> s_vanillaOrder;
+        private static Func<ZNetScene, bool> s_inLoadingScreen;
+        private static bool s_helpersResolved;
+        private static bool s_timeSliceDisabled;
 
-        [HarmonyReversePatch]
-        [HarmonyPatch(typeof(ZNetScene), "CreateDistantObjects")]
-        public static void CallCreateDistantObjects(
-            ZNetScene self,
-            List<ZDO> objects,
-            int maxCreatedPerFrame,
-            ref int created)
+        private static readonly List<ZDO> s_pendingNear = new List<ZDO>();
+
+        private static bool TryResolveVanillaHelpers()
         {
-            throw new NotImplementedException("Harmony reverse patch failed for ZNetScene.CreateDistantObjects");
+            if (s_helpersResolved) return !s_timeSliceDisabled;
+            s_helpersResolved = true;
+
+            try
+            {
+                s_createObject = AccessTools.MethodDelegate<Func<ZNetScene, ZDO, GameObject>>(
+                    AccessTools.Method(typeof(ZNetScene), "CreateObject", new[] { typeof(ZDO) }));
+                s_vanillaOrder = AccessTools.MethodDelegate<Comparison<ZDO>>(
+                    AccessTools.Method(typeof(ZNetScene), "ZDOCompare", new[] { typeof(ZDO), typeof(ZDO) }));
+                s_inLoadingScreen = AccessTools.MethodDelegate<Func<ZNetScene, bool>>(
+                    AccessTools.Method(typeof(ZNetScene), "InLoadingScreen", Type.EmptyTypes));
+            }
+            catch (Exception ex)
+            {
+                s_timeSliceDisabled = true;
+                LoggerOptions.LogWarning($"[AutoTune] Time-slice instantiation is unavailable on this game version; vanilla instantiation stays. {ex.Message}");
+            }
+
+            return !s_timeSliceDisabled;
         }
 
         // ====================================================================
@@ -96,11 +98,18 @@ namespace FiresGhettoNetworkMod.AutoTune
                 return true;
 
             // ValheimCommunityPatch creates from its own queue inside the CreateObjectsSorted / CreateDistantObjects
-            // prefixes and hands CreateObjects empty lists; the reverse-patched originals below would bypass it.
+            // prefixes and hands CreateObjects empty lists; this pass would bypass it.
             if (ValheimCommunityPatchCompat.SchedulesObjectCreation)
                 return true;
 
-            // Cheap exits: nothing to do.
+            if (!TryResolveVanillaHelpers())
+                return true;
+
+            // Behind the loading screen vanilla creates 100 objects a frame to get the player in sooner; frame pacing
+            // only matters once they are playing.
+            if (s_inLoadingScreen(__instance))
+                return true;
+
             int nearCount    = currentNearObjects    != null ? currentNearObjects.Count    : 0;
             int distantCount = currentDistantObjects != null ? currentDistantObjects.Count : 0;
             if (nearCount == 0 && distantCount == 0)
@@ -130,47 +139,47 @@ namespace FiresGhettoNetworkMod.AutoTune
 
             try
             {
-                // Drain near list first (vanilla sorts these by Type then distance).
-                while (currentNearObjects != null
-                    && currentNearObjects.Count > 0
-                    && sw.ElapsedTicks < budgetTicks
-                    && created < maxPerFrame)
+                // Vanilla's CreateObjectsSorted order: uncreated near objects, terrain first, then buildings, then the
+                // rest, nearest first, each created only once its zone is ready for that type.
+                if (nearCount > 0 && ZoneSystem.instance.IsActiveAreaLoaded())
                 {
-                    int beforeCreated = created;
-                    int chunkCap = Math.Min(ChunkSize, maxPerFrame - created);
-                    if (chunkCap <= 0) break;
+                    Vector3 referencePosition = ZNet.instance.GetReferencePosition();
+                    s_pendingNear.Clear();
+                    foreach (ZDO zdo in currentNearObjects)
+                    {
+                        if (zdo.Created) continue;
+                        zdo.m_tempSortValue = Utils.DistanceSqr(referencePosition, zdo.GetPosition());
+                        s_pendingNear.Add(zdo);
+                    }
+                    s_pendingNear.Sort(s_vanillaOrder);
 
-                    CallCreateObjectsSorted(__instance, currentNearObjects, chunkCap, ref created);
-
-                    // No progress this chunk → all candidates filtered (zones not ready,
-                    // already created, etc). No point looping — exit and let next tick
-                    // re-evaluate with fresh sector data.
-                    if (created == beforeCreated) break;
+                    foreach (ZDO zdo in s_pendingNear)
+                    {
+                        if (created >= maxPerFrame || sw.ElapsedTicks >= budgetTicks) break;
+                        if (!ZoneSystem.instance.IsZoneReadyForType(zdo.GetSector(), zdo.Type)) continue;
+                        if (s_createObject(__instance, zdo) != null) created++;
+                    }
+                    s_pendingNear.Clear();
                 }
 
-                // Then distant list. Same loop shape; vanilla doesn't sort distant.
-                while (currentDistantObjects != null
-                    && currentDistantObjects.Count > 0
-                    && sw.ElapsedTicks < budgetTicks
-                    && created < maxPerFrame)
+                // Distant objects get what the near pass leaves, as in vanilla.
+                if (distantCount > 0)
                 {
-                    int beforeCreated = created;
-                    int chunkCap = Math.Min(ChunkSize, maxPerFrame - created);
-                    if (chunkCap <= 0) break;
-
-                    CallCreateDistantObjects(__instance, currentDistantObjects, chunkCap, ref created);
-
-                    if (created == beforeCreated) break;
+                    foreach (ZDO zdo in currentDistantObjects)
+                    {
+                        if (created >= maxPerFrame || sw.ElapsedTicks >= budgetTicks) break;
+                        if (zdo.Created) continue;
+                        if (s_createObject(__instance, zdo) != null) created++;
+                    }
                 }
             }
             catch (Exception ex)
             {
-                // Reverse-patch invocation or downstream Instantiate threw. Log
-                // once (not per-frame — Harmony will keep firing this prefix) and
-                // skip vanilla so we don't double-instantiate whatever we already
-                // committed this frame. Next frame either recovers or hits the
-                // same exception; that's the user's signal something's wrong.
-                LoggerOptions.LogWarning($"[AutoTune] Time-slice CreateObjects threw: {ex.Message}");
+                // Objects created before the throw are marked Created, so vanilla picks up exactly where this stopped.
+                s_pendingNear.Clear();
+                s_timeSliceDisabled = true;
+                LoggerOptions.LogWarning($"[AutoTune] Time-slice instantiation threw and is off for the rest of this session; vanilla instantiation takes over. {ex}");
+                return true;
             }
 
             return false;
@@ -185,7 +194,20 @@ namespace FiresGhettoNetworkMod.AutoTune
         // 10/100. Wires <see cref="EffectiveConfig.ZoneLoadBatchSize"/> in via
         // a runtime helper so config / tier changes take effect immediately.
 
+        private static readonly Dictionary<int, int> s_loggedBatchCaps = new Dictionary<int, int>();
+
         public static int ScaleBatchCap(int vanillaCap)
+        {
+            int cap = ScaledBatchCap(vanillaCap);
+            if (CapeCrashDiagnostics.Enabled && (!s_loggedBatchCaps.TryGetValue(vanillaCap, out int logged) || logged != cap))
+            {
+                s_loggedBatchCaps[vanillaCap] = cap;
+                CapeCrashDiagnostics.Log($"Per-frame creation cap {vanillaCap} is now {cap} (Zone Load Batch Size {EffectiveConfig.ZoneLoadBatchSize()})");
+            }
+            return cap;
+        }
+
+        private static int ScaledBatchCap(int vanillaCap)
         {
             try
             {
