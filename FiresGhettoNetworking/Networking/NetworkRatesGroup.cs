@@ -522,7 +522,7 @@ namespace FiresGhettoNetworkMod
             var code = new List<CodeInstruction>(instructions);
             int patchedCount = 0;
 
-            int newLimit = GetConfiguredQueueLimit();
+            MethodInfo liveQueueLimit = AccessTools.Method(typeof(NetworkingRatesGroup), nameof(ZdoSendQueueCapBytes));
 
             for (int i = 0; i < code.Count; i++)
             {
@@ -547,21 +547,21 @@ namespace FiresGhettoNetworkMod
 
                     if (isQueueLimit)
                     {
-                        LoggerOptions.LogInfo($"Overriding ZDOMan.SendZDOs queue limit #{patchedCount + 1}: original {constant} → {newLimit} bytes");
-                        code[i].opcode = OpCodes.Ldc_I4;
-                        code[i].operand = newLimit;
+                        code[i].opcode = OpCodes.Call;
+                        code[i].operand = liveQueueLimit;
                         patchedCount++;
                     }
                 }
             }
 
+            s_queueLimitPatched = patchedCount > 0;
             if (patchedCount == 0)
             {
                 LoggerOptions.LogWarning("No queue limit constants found in ZDOMan.SendZDOs — queue size config not applied (game update may have changed IL).");
             }
             else
             {
-                LoggerOptions.LogInfo($"Successfully patched {patchedCount} queue limit constant(s).");
+                LoggerOptions.LogInfo($"ZDOMan.SendZDOs: {patchedCount} queue limit constant(s) now follow Queue Size (currently {ZdoSendQueueCapBytes()} bytes).");
             }
 
             return code.AsEnumerable();
@@ -569,7 +569,16 @@ namespace FiresGhettoNetworkMod
 
         private const int VanillaQueueLimitBytes = 10240;
 
-        /// <summary>Runs once at patch time, so a tier change mid-session does not move the queue limit until reload.</summary>
-        private static int GetConfiguredQueueLimit() => EffectiveConfig.QueueSizeBytes(VanillaQueueLimitBytes);
+        private static bool s_queueLimitPatched;
+
+        /// <summary>
+        /// The send-queue cap ZDOMan.SendZDOs checks, read on every call. Harmony re-runs this transpiler whenever another
+        /// patch lands on SendZDOs, so a value baked in at patch time depended on registration order relative to the
+        /// server auto-tune, and the congestion gate measured against a different cap than the one in force.
+        /// </summary>
+        public static int ZdoSendQueueCapBytes() => EffectiveConfig.QueueSizeBytes(VanillaQueueLimitBytes);
+
+        /// <summary>The cap actually in force: the live Queue Size once the transpiler has attached, vanilla's otherwise.</summary>
+        public static int ZdoSendQueueCapInForceBytes() => s_queueLimitPatched ? ZdoSendQueueCapBytes() : VanillaQueueLimitBytes;
     }
 }

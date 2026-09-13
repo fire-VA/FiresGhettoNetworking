@@ -41,25 +41,29 @@ Installing on both adds the client-side half:
 - Client-side interpolation and prediction — smooths other players' movement
 - Client auto-tune: zone-load batching, instantiation budget, receive-buffer sizing, destroy throttling
 - HyperBoost receive side (also needs FiresSteamworksPatcher)
+- **Boat damage fix** — every 2 seconds the server corrects each player's clock, and vanilla jumps the waves to match, which a boat with players aboard takes as slamming into the water. The mod eases those corrections in so the water never jumps. A ship is damaged by the game of whoever owns it (normally someone aboard), so every player who sails needs the mod
 
 ### Default settings
 
-Out of the box you get compression, all the send-rate / queue / buffer tuning, adaptive send rate, the bulk-transfer gate, auto-tune, and player-position priority.
+Out of the box you get compression, all the send-rate / queue / buffer tuning, adaptive send rate, the bulk-transfer gate, auto-tune, and player-position priority. A dedicated server also gets these traffic features, each behind its own toggle:
 
-**`Enable Server-Side Simulation` is OFF by default**, and it is the master gate — while it is off, the RPC router, area-of-interest filtering, AI LOD, ZDO throttling, server-side raids and the ship fixes are all inactive *even if their own toggles read true*. If you are running a busy server and wondering why those features do not seem to be doing anything, this is why.
+- **RPC router + area-of-interest filtering** — damage numbers, health bars and similar stop being broadcast to everyone and only go to players near the action. This is the big one for large fights
+- ZDO delta compression and distance-based ZDO throttling
+- AI LOD throttling and WearNTear server CPU skips. These only act on objects the server itself has loaded, so they have little to do unless Server-Side Simulation is on
+
+**`Enable Server-Side Simulation` is OFF by default.** It only controls the server simulating the world. The traffic features above follow their own toggles whether it is on or off.
 
 ### Server-Side Simulation ON
 
 Turning on the master switch activates:
 
-- **RPC router + area-of-interest filtering** — damage numbers, health bars and similar stop being broadcast to everyone and only go to players near the action. This is the big one for large fights
-- AI LOD throttling and distance-based ZDO throttling
-- ZDO delta compression, WearNTear server CPU skips
 - Server-driven spawning and raids / random events
 - Extended zone radius and predictive zone streaming, zone create/destroy authority
 - Ship steering fixes
 
 Note that mobs are still simulated by the nearest **client** at this point. The server decides when and where they spawn, and filters the traffic, but it is not running their brains.
+
+**With ValheimCommunityPatch on the server, Server-Side Simulation stays off** for that session and the server log says why. VCP replaces the server's object create/destroy pass with its own, built around the world origin, and removes everything the server creates for players, so the two would fight endlessly. The traffic features above keep working either way.
 
 ### ZDO ownership transfer — not recommended
 
@@ -123,7 +127,7 @@ These run on the dedicated server (the mod auto-detects). Effects are visible to
 | **ZDO delta compression** | On resyncs, only the fields that changed are sent — not the whole ZDO. Big savings on creatures/players where 1-2 fields change per tick. |
 | **Distance-based ZDO throttling** | Distant objects (creatures/structures beyond ~500m) update at a lower rate. Combat-range objects stay full speed. |
 | **AI LOD throttling** | Distant AI runs FixedUpdate at half speed. Server CPU saving with possible visible effect for nearby players depending on throttle distance. |
-| **WearNTear server optimization** | Skips structural support recalculation for full-health/Inf health or fully intact pieces. Big CPU win on servers with large built bases. |
+| **WearNTear server optimization** | Skips the wear and support update for pieces that cannot be damaged at all (Infinity Hammer / admin-flagged pieces). Every other piece wears, takes weather damage and collapses exactly like vanilla. |
 
 ## Server-authority patches
 
@@ -175,6 +179,7 @@ but im not smart enough to know how to hide the config to only clients while all
 - Designed to coexist with many mods, I use it on my own server with 60 other mods, and have tested it with many others
 - Works alongside any content mods that don't touch ZNetScene/ZDOMan internals. (doesn't work with most other networking mods, besides better z log and timeout limits, both highly recommended to go with this)
 - If you also run BetterNetworking, Serverside Simulations, or another networking mod — disable one. Running two networking mods at once will produce conflicting patches. This mod covers what those two do.
+- ValheimCommunityPatch works alongside it: where both do the same job, this mod stands down and lets VCP handle it (see Server-Side Simulation ON above).
 
 
 ## Credits

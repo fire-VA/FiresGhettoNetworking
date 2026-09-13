@@ -122,11 +122,9 @@ namespace FiresGhettoNetworkMod
 
             try
             {
-                int extendedRadius = RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
-
-                CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(extendedRadius));
-                FilterAndDedupeZdos(_cdoNearScratch, _cdoNearFiltered);
-                FilterAndDedupeZdos(_cdoDistantScratch, _cdoDistantFiltered);
+                CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(ExtendedZoneRadius()));
+                FilterAndDedupeZdos(_cdoNearScratch, _cdoNearFiltered, requireLoadedZone: true);
+                FilterAndDedupeZdos(_cdoDistantScratch, _cdoDistantFiltered, requireLoadedZone: false);
                 RecordCreateDestroyObjectsDiagnostics();
 
                 __instance.CreateObjects(_cdoNearFiltered, _cdoDistantFiltered);
@@ -171,11 +169,17 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        private static void FilterAndDedupeZdos(List<ZDO> source, List<ZDO> dest)
+        /// <summary>
+        /// A near object whose zone is not loaded on this server would spawn with no heightmap, water or terrain collider
+        /// under it, so it waits until LoadNextZoneAround has loaded that zone. Vanilla's own active-area gate only covers
+        /// the near band, not FGN's extended ring.
+        /// </summary>
+        private static void FilterAndDedupeZdos(List<ZDO> source, List<ZDO> dest, bool requireLoadedZone)
         {
             dest.Clear();
             _cdoSeenSet.Clear();
             ZNetScene scene = ZNetScene.instance;
+            var loadedZones = requireLoadedZone ? ZoneSystem.instance.m_zones : null;
             for (int i = 0; i < source.Count; i++)
             {
                 var zdo = source[i];
@@ -186,9 +190,12 @@ namespace FiresGhettoNetworkMod
                 // Leaving it out of the server's create sweep keeps it client-owned and intact.
                 int prefab = zdo.m_prefab;
                 if (prefab != 0 && scene != null && !scene.HasPrefab(prefab)) continue;
+                if (loadedZones != null && !loadedZones.ContainsKey(zdo.GetSector())) continue;
                 if (_cdoSeenSet.Add(zdo)) dest.Add(zdo);
             }
         }
+
+        private static int ExtendedZoneRadius() => RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
 
         private static void RecordCreateDestroyObjectsDiagnostics()
         {
@@ -329,9 +336,27 @@ namespace FiresGhettoNetworkMod
         public static void ZoneSystem_Update_Postfix(ZoneSystem __instance)
         {
             if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetPeers().Count == 0) return;
+            int radius = SimDistance.Near() + ExtendedZoneRadius();
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
                 if (peer.IsReady())
-                    __instance.CreateLocalZones(GetPredictedRefPos(peer));
+                    LoadNextZoneAround(__instance, GetPredictedRefPos(peer), radius);
+        }
+
+        /// <summary>
+        /// Vanilla CreateLocalZones out to FGN's widened radius: keeps every zone in range alive and spawns at most one
+        /// missing zone per call, so the extended ring the server creates objects in actually has terrain.
+        /// </summary>
+        private static void LoadNextZoneAround(ZoneSystem zoneSystem, Vector3 refPoint, int radius)
+        {
+            Vector2s centre = ZoneSystem.GetZone(refPoint);
+            if (zoneSystem.PokeLocalZone(centre)) return;
+            for (int y = centre.y - radius; y <= centre.y + radius; y++)
+                for (int x = centre.x - radius; x <= centre.x + radius; x++)
+                {
+                    var zone = new Vector2s(x, y);
+                    if (zone == centre || !SimDistance.ZoneInRadius(centre, zone, radius)) continue;
+                    if (zoneSystem.PokeLocalZone(zone)) return;
+                }
         }
 
         [HarmonyPatch(typeof(ZNetScene), "OutsideActiveArea", new[] { typeof(Vector3) })]
@@ -341,8 +366,7 @@ namespace FiresGhettoNetworkMod
             if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetPeers().Count == 0)
                 return true;
 
-            int extendedRadius = RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
-            int activeArea = SimDistance.Near() + extendedRadius;
+            int activeArea = SimDistance.Near() + ExtendedZoneRadius();
 
             __result = !IsPointInsideAnyPeerActiveArea(point, activeArea);
             return false;
@@ -376,17 +400,13 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool AudioMan_Update_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
-        // TerrainComp.Awake + OnDestroy MUST run on the dedicated server — they are NOT rendering work.
-        // Awake sets m_nview (GetComponent<ZNetView>()), registers the terrain-op RPC, and Loads saved
-        // terrain data; OnDestroy saves + unregisters. Previously both were skipped on the dedi, which left
-        // TerrainComp.m_nview NULL forever → vanilla + ExpandWorldData both NRE at
-        // hm.GetAndCreateTerrainCompiler().m_nview.GetZDO() during location placement (bulk pregen/zone reset
-        // flooded the log), and the server's terrain had no cultivation state (crops got wrongly reaped — see
-        // the Plant.SUpdate note below, which was a band-aid for this same skip). Only the per-frame Update
-        // (mesh/collision rebuild — pure render cost the headless server doesn't need) stays skipped.
-        [HarmonyPatch(typeof(TerrainComp), "Update")]
+        /// <summary>
+        /// The terrain render mesh is only ever drawn. Heights, collision and the paint mask are rebuilt without it,
+        /// so terrain edits synced from other peers still reach the server's physics, navmesh and crop checks.
+        /// </summary>
+        [HarmonyPatch(typeof(Heightmap), "RebuildRenderMesh")]
         [HarmonyPrefix]
-        public static bool TerrainComp_Update_Prefix() => !ServerClientUtils.ZNetIsDedicated();
+        public static bool Heightmap_RebuildRenderMesh_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
         [HarmonyPatch(typeof(ShieldDomeImageEffect), "Awake")]
         [HarmonyPrefix]

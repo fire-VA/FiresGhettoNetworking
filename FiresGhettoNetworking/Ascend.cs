@@ -11,12 +11,13 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     [BepInPlugin(PluginGUID, PluginName, PluginVersion)]
+    [BepInDependency(ValheimCommunityPatchCompat.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
 
     public class FiresGhettoNetworkMod : BaseUnityPlugin
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.12";
+        public const string PluginVersion = "1.4.15";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -63,6 +64,8 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<bool> ConfigEnableInvulnerableSupportSkip;
         public static ConfigEntry<bool> ConfigEnableInstanceOrphanPrune;
         public static ConfigEntry<bool> ConfigFixTeleportGhosts;
+        public static ConfigEntry<bool> ConfigFixSlowSleep;
+        public static ConfigEntry<bool> ConfigFixBoatDamageFromTimeSync;
         public static ConfigEntry<bool> ConfigFixGroundSnapThroughFloors;
         public static ConfigEntry<bool> ConfigEnableRpcRouter;
         public static ConfigEntry<bool> ConfigEnableRpcAoI;
@@ -139,6 +142,8 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogMessage($"{PluginName} v{PluginVersion} — Running on CLIENT or SINGLE-PLAYER/LISTEN SERVER, only client-safe features will be applied.");
             }
 
+            ValheimCommunityPatchCompat.Detect();
+
             // Always registered: harmless on clients, or needed before anything else.
             InvokeStaticInitByTypeName("FiresGhettoNetworkMod.CompressionGroup", "InitConfig", new object[] { Config });
             InvokeStaticInitByTypeName("FiresGhettoNetworkMod.NetworkingRatesGroup", "Init", new object[] { Config });
@@ -200,130 +205,165 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogWarning($"[TeleportGhostFix] could not be attached; vanilla behaviour is unchanged. {ex.Message}");
             }
 
+            Harmony.PatchAll(typeof(SleepTimeSkipFix));
+
+            if (!isDedicated)
+                Harmony.PatchAll(typeof(WaveClockSmoothing));
+
             // Auto-tune: probe on clients, self-tune on servers.
             Harmony.PatchAll(typeof(AutoTuneProbeHooks));
             Harmony.PatchAll(typeof(ZoneLoadPatches));
             ServerAutoTune.InitServerSide();
 
 
-            // Everything below runs only on a dedicated server with server authority on.
             // ClientLogRelay is excluded from the csproj until it ships as its own mod; its sources remain on disk.
-            if (isDedicated && ConfigEnableServerAuthority.Value)
+            if (isDedicated)
             {
-                if (ConfigEnableShipFixes.Value)
-                    Harmony.PatchAll(typeof(ShipFixesGroup));
+                ApplyServerTrafficPatches();
 
-                Harmony.PatchAll(typeof(ServerShipSimulationPatches));
-
-                Harmony.PatchAll(typeof(ZDOMemoryManager));
-
-                Harmony.PatchAll(typeof(ServerAuthorityPatches));
-                Harmony.PatchAll(typeof(ServerStabilityPatches));
-                Harmony.PatchAll(typeof(MonsterAIPatches));
-
-                if (ConfigEnableServerOwnershipSelective.Value)
+                bool simulationActive = false;
+                if (!ConfigEnableServerAuthority.Value)
                 {
-                    if (ConfigEnableServerOwnership.Value)
-                    {
-                        LoggerOptions.LogWarning(
-                            "Both 'Server ZDO Ownership Transfer' flags are ENABLED — selective (V3) takes precedence; broad (V2) is being ignored. Disable one to silence this warning.");
-                    }
-                    Harmony.PatchAll(typeof(ServerOwnershipPatchesV3));
-                    LoggerOptions.LogMessage(
-                        "Server ZDO ownership (V3 SELECTIVE) ENABLED — Character/Ship only; drops/voxel/interactables/carts stay peer-owned.");
+                    LoggerOptions.LogInfo("Server-side simulation disabled via ConfigEnableServerAuthority = false.");
                 }
-                else if (ConfigEnableServerOwnership.Value)
+                else if (ValheimCommunityPatchCompat.SchedulesSceneObjects)
                 {
-                    Harmony.PatchAll(typeof(ServerOwnershipPatches));
-                    LoggerOptions.LogMessage(
-                        "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED — every persistent ZDO in any peer's active area will be claimed by the server.");
-                    if (!ConfigEnableServerSideShipSimulation.Value)
-                        LoggerOptions.LogWarning(
-                            "V2 BROAD claims SHIPS as well, regardless of 'Server-Side Ship Simulation' being off — it is a "
-                            + "deliberate verbatim port with no per-prefab exclusions. A server-owned hull runs its own physics, "
-                            + "and ImpactEffect only fires for the owner, so boats can take phantom damage on calm water. "
-                            + "Use the Selective (V3) toggle instead if your players sail; it honours that setting.");
+                    LoggerOptions.LogWarning(
+                        "Server-Side Simulation is OFF for this session: ValheimCommunityPatch replaces the server's object "
+                        + "create/destroy pass with its own, built around world origin, and destroys every object FGN creates "
+                        + "for players. Remove ValheimCommunityPatch from the server to use Server-Side Simulation, or turn "
+                        + "'Enable Server-Side Simulation' off to silence this warning.");
                 }
                 else
                 {
-                    LoggerOptions.LogInfo(
-                        "Server ZDO ownership transfer disabled (both V2 and V3 flags = false). Vanilla peer ownership in effect.");
-                }
-                Harmony.PatchAll(typeof(ZDOThrottlingPatches));
-                Harmony.PatchAll(typeof(AILODPatches));
-
-                if (ConfigEnableBootPatchVerification.Value)
-                {
-                    DumpPatchInfo(typeof(BaseAI),       "UpdateAI");
-                    DumpPatchInfo(typeof(BaseAI),       "Awake");
-                    DumpPatchInfo(typeof(MonsterAI),    "UpdateAI");
-                    DumpPatchInfo(typeof(Character),    "CustomFixedUpdate");
-                    DumpPatchInfo(typeof(MonoUpdaters), "FixedUpdate");
-                    DumpPatchInfo(typeof(ZNetScene),    "CreateDestroyObjects");
-                    DumpPatchInfo(typeof(ZNetScene),    "CreateObject");
-                    DumpPatchInfo(typeof(ZoneSystem),   "IsActiveAreaLoaded");
-                    DumpPatchInfo(typeof(SpawnSystem),  "UpdateSpawning");
-                    DumpPatchInfo(typeof(ShieldDomeImageEffect), "Awake");
-                    DumpPatchInfo(typeof(TerrainComp),  "Update");
+                    ApplyServerSideSimulationPatches();
+                    simulationActive = true;
                 }
 
-                if (ConfigEnableRpcRouter.Value)
-                {
-                    Harmony.PatchAll(typeof(RpcRouterPatches));
-                    DamageTextHandler.Register();
-                    HealthChangedHandler.Register();
-                    WNTHealthChangedHandler.Register();
-                    SetTargetHandler.Register();
-                    AddNoiseHandler.Register();
-                    TriggerAnimationHandler.Register();
-                    TriggerOnDeathHandler.Register();
-                    TalkerSayHandler.Register();
-                    SpawnedZoneHandler.Register();
-                    VAGhettoLoadSummary.EmitRpcRouter(
-                        handlersRegistered: RoutedRpcManager.HandlerCount,
-                        aoiRadius: ConfigRpcAoIRadius?.Value ?? 256f,
-                        aoiEnabled: ConfigEnableRpcAoI?.Value ?? false);
-                    if (VAGhettoLoadSummary.VerboseEnabled)
-                        LoggerOptions.LogInfo("RPC Router enabled — handlers: " + string.Join(", ", RoutedRpcManager.HandlerMethodNames) + ".");
-                }
-
-                if (ConfigEnableZDODelta.Value)
-                {
-                    Harmony.PatchAll(typeof(ZDODeltaPatches));
-                    LoggerOptions.LogInfo("ZDO delta compression enabled.");
-                }
-
-                if (ConfigEnableWNTServerOptimization.Value)
-                {
-                    Harmony.PatchAll(typeof(WearNTearServerPatches));
-                    LoggerOptions.LogInfo("WearNTear server optimization enabled.");
-                }
-
-                string ownershipMode =
-                    ConfigEnableServerOwnershipSelective.Value ? "V3 selective"
-                    : ConfigEnableServerOwnership.Value ? "V2 broad"
-                    : "vanilla peer";
-                VAGhettoLoadSummary.EmitServerAuthority(
-                    ownership: ownershipMode,
-                    zdoThrottle: ConfigEnableZDOThrottling?.Value ?? false,
-                    aiLod: ConfigEnableAILOD?.Value ?? false,
-                    wntOpt: ConfigEnableWNTServerOptimization?.Value ?? false);
-                if (VAGhettoLoadSummary.VerboseEnabled)
-                    LoggerOptions.LogInfo("All server-side features and authority patches enabled.");
+                EmitServerFeatureSummary(simulationActive);
             }
             else
             {
-                if (!isDedicated)
-                {
-                    LoggerOptions.LogInfo("Server-side features skipped — not running on a dedicated server.");
-                }
-                else // isDedicated == true but config disabled
-                {
-                    LoggerOptions.LogInfo("Server-side features disabled via ConfigEnableServerAuthority = false.");
-                }
+                LoggerOptions.LogInfo("Server-side features skipped — not running on a dedicated server.");
             }
 
             StartCoroutine(EmitCompactBannerWhenZNetReady());
+        }
+
+        /// <summary>Dedicated-server traffic shaping. None of it needs Server-Side Simulation; each feature follows its own toggle.</summary>
+        private static void ApplyServerTrafficPatches()
+        {
+            Harmony.PatchAll(typeof(ZDOThrottlingPatches));
+            Harmony.PatchAll(typeof(AILODPatches));
+
+            if (ConfigEnableRpcRouter.Value)
+            {
+                Harmony.PatchAll(typeof(RpcRouterPatches));
+                DamageTextHandler.Register();
+                HealthChangedHandler.Register();
+                WNTHealthChangedHandler.Register();
+                SetTargetHandler.Register();
+                AddNoiseHandler.Register();
+                TriggerAnimationHandler.Register();
+                TriggerOnDeathHandler.Register();
+                TalkerSayHandler.Register();
+                SpawnedZoneHandler.Register();
+                VAGhettoLoadSummary.EmitRpcRouter(
+                    handlersRegistered: RoutedRpcManager.HandlerCount,
+                    aoiRadius: ConfigRpcAoIRadius?.Value ?? 256f,
+                    aoiEnabled: ConfigEnableRpcAoI?.Value ?? false);
+                if (VAGhettoLoadSummary.VerboseEnabled)
+                    LoggerOptions.LogInfo("RPC Router enabled — handlers: " + string.Join(", ", RoutedRpcManager.HandlerMethodNames) + ".");
+            }
+
+            if (ConfigEnableZDODelta.Value)
+            {
+                Harmony.PatchAll(typeof(ZDODeltaPatches));
+                LoggerOptions.LogInfo("ZDO delta compression enabled.");
+            }
+
+            if (ConfigEnableWNTServerOptimization.Value)
+            {
+                Harmony.PatchAll(typeof(WearNTearServerPatches));
+                LoggerOptions.LogInfo("WearNTear server optimization enabled.");
+            }
+        }
+
+        /// <summary>The server instantiating, owning and driving the world around every peer.</summary>
+        private static void ApplyServerSideSimulationPatches()
+        {
+            if (ConfigEnableShipFixes.Value)
+                Harmony.PatchAll(typeof(ShipFixesGroup));
+
+            Harmony.PatchAll(typeof(ServerShipSimulationPatches));
+
+            Harmony.PatchAll(typeof(ZDOMemoryManager));
+
+            Harmony.PatchAll(typeof(ServerAuthorityPatches));
+            Harmony.PatchAll(typeof(ServerStabilityPatches));
+            Harmony.PatchAll(typeof(MonsterAIPatches));
+
+            if (ConfigEnableServerOwnershipSelective.Value)
+            {
+                if (ConfigEnableServerOwnership.Value)
+                {
+                    LoggerOptions.LogWarning(
+                        "Both 'Server ZDO Ownership Transfer' flags are ENABLED — selective (V3) takes precedence; broad (V2) is being ignored. Disable one to silence this warning.");
+                }
+                Harmony.PatchAll(typeof(ServerOwnershipPatchesV3));
+                LoggerOptions.LogMessage(
+                    "Server ZDO ownership (V3 SELECTIVE) ENABLED — Character/Ship only; drops/voxel/interactables/carts stay peer-owned.");
+            }
+            else if (ConfigEnableServerOwnership.Value)
+            {
+                Harmony.PatchAll(typeof(ServerOwnershipPatches));
+                LoggerOptions.LogMessage(
+                    "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED — every persistent ZDO in any peer's active area will be claimed by the server.");
+                if (!ConfigEnableServerSideShipSimulation.Value)
+                    LoggerOptions.LogWarning(
+                        "V2 BROAD claims SHIPS as well, regardless of 'Server-Side Ship Simulation' being off — it is a "
+                        + "deliberate verbatim port with no per-prefab exclusions. A server-owned hull runs its own physics, "
+                        + "and ImpactEffect only fires for the owner, so boats can take phantom damage on calm water. "
+                        + "Use the Selective (V3) toggle instead if your players sail; it honours that setting.");
+            }
+            else
+            {
+                LoggerOptions.LogInfo(
+                    "Server ZDO ownership transfer disabled (both V2 and V3 flags = false). Vanilla peer ownership in effect.");
+            }
+
+            if (ConfigEnableBootPatchVerification.Value)
+            {
+                DumpPatchInfo(typeof(BaseAI),       "UpdateAI");
+                DumpPatchInfo(typeof(BaseAI),       "Awake");
+                DumpPatchInfo(typeof(MonsterAI),    "UpdateAI");
+                DumpPatchInfo(typeof(Character),    "CustomFixedUpdate");
+                DumpPatchInfo(typeof(MonoUpdaters), "FixedUpdate");
+                DumpPatchInfo(typeof(ZNetScene),    "CreateDestroyObjects");
+                DumpPatchInfo(typeof(ZNetScene),    "CreateObject");
+                DumpPatchInfo(typeof(ZoneSystem),   "IsActiveAreaLoaded");
+                DumpPatchInfo(typeof(SpawnSystem),  "UpdateSpawning");
+                DumpPatchInfo(typeof(ShieldDomeImageEffect), "Awake");
+                DumpPatchInfo(typeof(Heightmap),    "RebuildRenderMesh");
+            }
+
+            if (VAGhettoLoadSummary.VerboseEnabled)
+                LoggerOptions.LogInfo("All server-side simulation patches enabled.");
+        }
+
+        private static void EmitServerFeatureSummary(bool simulationActive)
+        {
+            string ownershipMode =
+                ConfigEnableServerOwnershipSelective.Value ? "V3 selective"
+                : ConfigEnableServerOwnership.Value ? "V2 broad"
+                : "vanilla peer";
+            VAGhettoLoadSummary.EmitServerAuthority(
+                simulation: simulationActive,
+                ownership: ownershipMode,
+                zdoDelta: ConfigEnableZDODelta?.Value ?? false,
+                zdoThrottle: ConfigEnableZDOThrottling?.Value ?? false,
+                aiLod: ConfigEnableAILOD?.Value ?? false,
+                wntOpt: ConfigEnableWNTServerOptimization?.Value ?? false);
         }
 
         // Waits for ZNetScene + ObjectDB to be live (same readiness
@@ -835,6 +875,9 @@ namespace FiresGhettoNetworkMod
                 new ConfigDescription(
                     "Makes the server fully authoritative over zones, ZDO ownership, monster AI, events, etc. (does NOT override your existing ship fixes).\n" +
                     "\n" +
+                    "The RPC router and RPC area-of-interest, ZDO delta compression, ZDO throttling, AI LOD and the\n" +
+                    "WearNTear server optimization do not need this: each follows its own toggle either way.\n" +
+                    "\n" +
                     "Disabled by default \u2014 enable manually on your DEDICATED SERVER if desired.\n" +
                     "\n" +
                     "WARNING: THIS IS A SERVER-ONLY FEATURE!\n" +
@@ -1068,11 +1111,9 @@ namespace FiresGhettoNetworkMod
                 "12 - Advanced",
                 "Enable WearNTear Server Optimization",
                 true,
-                "Skips structural support recalculation for building pieces that are at full health,\n" +
-                "not wet, and not in the Ashlands. Support cannot change for intact static pieces,\n" +
-                "so this is a safe CPU saving on servers with large player bases.\n" +
-                "Also short-circuits damaged-but-invulnerable pieces (Infinity Hammer, admin-flagged)\n" +
-                "since their support state can't change either.\n" +
+                "Skips the wear and support update for building pieces whose damage modifiers are all\n" +
+                "Immune or Ignore (Infinity Hammer, admin-flagged pieces), on the server that owns them.\n" +
+                "Every other piece updates exactly as in vanilla.\n" +
                 "SERVER-ONLY — no effect on client.");
 
             ConfigEnableInvulnerableSupportSkip = Config.Bind(
@@ -1117,6 +1158,29 @@ namespace FiresGhettoNetworkMod
                 "Stands down on its own when the game or another mod already fixes it, e.g.\n" +
                 "ValheimCommunityPatch's 'Fix Teleport Ghost Players' (deferred to while that is on).\n" +
                 "SERVER / LISTEN-HOST ONLY. No effect on a connecting client.");
+
+            ConfigFixSlowSleep = Config.Bind(
+                "12 - Advanced",
+                "Fix Slow Sleep On Busy Servers",
+                true,
+                "Vanilla moves the sleep time skip forward by one physics step per rendered frame, so the\n" +
+                "skip meant to last 12 seconds takes longer the lower the server's frame rate. A busy server\n" +
+                "can keep everyone in bed for a minute or more. With this on, the skip follows real time and\n" +
+                "morning arrives after about 12 seconds however busy the server is.\n" +
+                "SERVER / LISTEN-HOST ONLY. No effect on a connecting client.");
+
+            ConfigFixBoatDamageFromTimeSync = Config.Bind(
+                "12 - Advanced",
+                "Fix Boat Damage From Server Time Sync",
+                true,
+                "Every 2 seconds the server corrects each player's clock, and vanilla applies the correction at once.\n" +
+                "Waves are worked out from that clock, so every correction moves the water under a ship in a single\n" +
+                "physics step, and a boat with players aboard takes the jump as slamming into the water and loses hull\n" +
+                "health. The more a connection's timing wobbles, the bigger and more frequent the hits. With this on,\n" +
+                "waves follow a clock that eases each correction in over a few seconds, so the water never jumps.\n" +
+                "Corrections of 5 seconds or more (sleeping, reconnecting) still apply at once, as in vanilla.\n" +
+                "CLIENT-SIDE. A ship is damaged by the game of the player who owns it, normally someone aboard,\n" +
+                "so every player who sails needs this on. No effect on a dedicated server.");
 
             ConfigEnableFallThroughDiagnostics = Config.Bind(
                 "01 - General",
@@ -1175,6 +1239,9 @@ namespace FiresGhettoNetworkMod
         ConfigPredictionMaxLookaheadZones,
         ConfigEnableInvulnerableSupportSkip,
         ConfigEnableInstanceOrphanPrune,
+        ConfigFixTeleportGhosts,
+        ConfigFixSlowSleep,
+        ConfigFixBoatDamageFromTimeSync,
         ConfigEnableFallThroughDiagnostics,
         ConfigEnableBulkTransferBoost,
         ConfigBulkTransferBudgetPercent,

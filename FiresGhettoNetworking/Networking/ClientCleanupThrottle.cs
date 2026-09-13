@@ -41,6 +41,7 @@ namespace FiresGhettoNetworkMod
         {
             if (!__runOriginal) return false;
 
+            if (ValheimCommunityPatchCompat.SchedulesObjectRemoval) return true;
             if (ServerClientUtils.ZNetIsDedicated()) return true;
 
             int maxDestroysPerFrame = FiresGhettoNetworkMod.ConfigClientMaxDestroysPerFrame?.Value ?? 0;

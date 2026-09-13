@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -283,16 +285,43 @@ namespace FiresGhettoNetworkMod
             return payload;
         }
 
-        // Steamworks compression hooks
-        [HarmonyPatch(typeof(ZSteamSocket), "SendQueuedPackages")]
-        [HarmonyPrefix]
-        static bool Steam_SendCompressed(ref Queue<byte[]> ___m_sendQueue, ZSteamSocket __instance)
+        /// <summary>
+        /// Compresses each packet once, as ZSteamSocket.Send queues it. Rebuilding the queue on every SendQueuedPackages
+        /// call re-deflated each queued packet the header check could not skip (those Deflate did not shrink) on every
+        /// send, every frame and every flush, for as long as a backed-up peer kept it waiting.
+        /// </summary>
+        [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Send), new[] { typeof(ZPackage) })]
+        [HarmonyTranspiler]
+        static IEnumerable<CodeInstruction> Steam_CompressOnEnqueue(IEnumerable<CodeInstruction> instructions)
         {
-            if (!CompressionStatus.GetSendCompressionStarted(__instance))
-                return true;
+            MethodInfo getArray = AccessTools.Method(typeof(ZPackage), nameof(ZPackage.GetArray));
+            MethodInfo packetForQueue = AccessTools.Method(typeof(CompressionGroup), nameof(PacketForSendQueue));
+            var code = new List<CodeInstruction>(instructions);
+            int wrapped = 0;
 
-            ___m_sendQueue = new Queue<byte[]>(___m_sendQueue.Select(p => Compress(p)));
-            return true;
+            for (int i = 0; i < code.Count; i++)
+            {
+                if (!code[i].Calls(getArray)) continue;
+
+                var loadSocket = new CodeInstruction(OpCodes.Ldarg_0);
+                loadSocket.labels.AddRange(code[i].labels);
+                loadSocket.blocks.AddRange(code[i].blocks);
+                code[i] = loadSocket;
+                code.Insert(i + 1, new CodeInstruction(OpCodes.Call, packetForQueue));
+                i++;
+                wrapped++;
+            }
+
+            if (wrapped == 1) return code;
+
+            LoggerOptions.LogWarning($"Compression: ZSteamSocket.Send has {wrapped} GetArray calls instead of 1; outgoing packets stay uncompressed this session.");
+            return instructions;
+        }
+
+        public static byte[] PacketForSendQueue(ZPackage pkg, ZSteamSocket socket)
+        {
+            byte[] packet = pkg.GetArray();
+            return CompressionStatus.GetSendCompressionStarted(socket) ? Compress(packet) : packet;
         }
 
         // Decompress on the framing MAGIC, never on a per-socket flag — every packet is self-describing,

@@ -200,6 +200,9 @@
     <Compile Include="Networking\GroundSnapPatches.cs" />
     <Compile Include="Networking\OwnershipHandoffPatches.cs" />
     <Compile Include="Networking\TeleportGhostFix.cs" />
+    <Compile Include="Networking\SleepTimeSkipFix.cs" />
+    <Compile Include="Networking\WaveClockSmoothing.cs" />
+    <Compile Include="Networking\ValheimCommunityPatchCompat.cs" />
     <Compile Include="Networking\CompressionGroup.cs" />
     <Compile Include="Networking\CompressionRoundTripTest.cs" />
     <Compile Include="Networking\DedicatedServerGroup.cs" />
