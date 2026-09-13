@@ -9,13 +9,8 @@ namespace FiresGhettoNetworkMod
     /// </summary>
     public static class SendCongestion
     {
-        /// <summary>
-        /// Effective per-peer send-queue cap, mirrored from the same source the
-        /// NetworkingRatesGroup transpiler used (it can't be read back from the IL).
-        /// </summary>
-        private const int PatcherRaisedQueueCapBytes = 102400;
-
-        public static int EffectiveCapBytes() => AutoTune.EffectiveConfig.QueueSizeBytes(PatcherRaisedQueueCapBytes);
+        /// <summary>The per-peer send-queue cap ZDOMan.SendZDOs is enforcing right now.</summary>
+        public static int EffectiveCapBytes() => NetworkingRatesGroup.ZdoSendQueueCapInForceBytes();
 
         private static float ThresholdFraction()
         {

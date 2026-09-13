@@ -95,6 +95,11 @@ namespace FiresGhettoNetworkMod.AutoTune
             if (!EffectiveConfig.TimeSliceInstantiationEnabled())
                 return true;
 
+            // ValheimCommunityPatch creates from its own queue inside the CreateObjectsSorted / CreateDistantObjects
+            // prefixes and hands CreateObjects empty lists; the reverse-patched originals below would bypass it.
+            if (ValheimCommunityPatchCompat.SchedulesObjectCreation)
+                return true;
+
             // Cheap exits: nothing to do.
             int nearCount    = currentNearObjects    != null ? currentNearObjects.Count    : 0;
             int distantCount = currentDistantObjects != null ? currentDistantObjects.Count : 0;

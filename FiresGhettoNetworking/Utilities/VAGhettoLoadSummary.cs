@@ -32,18 +32,20 @@ namespace FiresGhettoNetworkMod
             });
         }
 
-        // 🏛 SERVER AUTHORITY — server-side patch group activation. Lists
-        // which sub-systems are active (ownership variant, ZDO throttle,
-        // AILOD, WNT optimization).
-        public static void EmitServerAuthority(string ownership, bool zdoThrottle, bool aiLod, bool wntOpt)
+        // 🏛 SERVER AUTHORITY — dedicated-server feature activation. Shows whether
+        // the server simulates the world (and its ownership variant), then the
+        // traffic features, which run with simulation on or off.
+        public static void EmitServerAuthority(bool simulation, string ownership, bool zdoDelta, bool zdoThrottle, bool aiLod, bool wntOpt)
         {
             EmitMiniBox("🏛 SERVER AUTH", new[]
             {
-                $"own: {ownership}",
-                $"zdo throttle: {(zdoThrottle ? "ON" : "off")}",
-                $"AILOD: {(aiLod ? "ON" : "off")} · WNT: {(wntOpt ? "ON" : "off")}",
+                simulation ? $"sim: ON · own: {ownership}" : "sim: off",
+                $"delta: {OnOff(zdoDelta)} · throttle: {OnOff(zdoThrottle)}",
+                $"AILOD: {OnOff(aiLod)} · WNT: {OnOff(wntOpt)}",
             });
         }
+
+        private static string OnOff(bool enabled) => enabled ? "ON" : "off";
 
         // ⚙ PATCHES — Harmony PatchAll summary for client-mode load.
         // Shows the count of patch classes attached on this side.

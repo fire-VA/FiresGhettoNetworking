@@ -1,3 +1,12 @@
+* v1.4.15 - boats, sleeping and server fixes
+  - boats no longer take constant damage while players are aboard
+  - sleeping on a busy server no longer takes a minute or more
+  - RPC filtering, ZDO throttling and AI LOD now work on servers with Server-Side Simulation off, each on its own toggle
+  - Server-Side Simulation stays off when ValheimCommunityPatch is on the server, since the two fight over the same objects
+  - with Server-Side Simulation on, the server keeps up with terrain edits again and stops loading areas without their ground
+  - buildings the server looks after wear down and collapse normally again
+  - the Queue Size setting and auto-tune queue sizes now actually apply, and compression uses less CPU
+
 * v1.4.12 - hotfix updates
   - graves, dropped items and tames no longer sink through floors when an area loads
   - waking up after sleeping on a dedicated server is quick again
