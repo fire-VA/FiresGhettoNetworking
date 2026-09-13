@@ -17,10 +17,19 @@ namespace FiresGhettoNetworkMod
 
         private const string SpawnQueuePatchType = "ValheimCommunityPatch.Patches.Performance.SpawnEventQueuePatch";
         private const string UnloadPatchType = "ValheimCommunityPatch.Patches.Performance.ZoneDiffRemovalPatch";
+        private const string TerrainRecoveryPatchType = "ValheimCommunityPatch.Patches.Terrain.TerrainCompNullHmapPatch";
+
+        private static bool s_terrainRecoveryAttached;
+        private static FieldInfo s_terrainRecoveryEnabled;
 
         public static bool SchedulesObjectCreation { get; private set; }
         public static bool SchedulesObjectRemoval { get; private set; }
         public static bool SchedulesSceneObjects => SchedulesObjectCreation || SchedulesObjectRemoval;
+
+        /// <summary>True while VCP's terrain compiler recovery is attached and its 'Fix Terrain Compiler Init Race' is on.</summary>
+        public static bool RecoversTerrainCompilers =>
+            s_terrainRecoveryAttached
+            && !(s_terrainRecoveryEnabled?.GetValue(null) is BepInEx.Configuration.ConfigEntry<bool> enabled && !enabled.Value);
 
         public static void Detect()
         {
@@ -28,6 +37,13 @@ namespace FiresGhettoNetworkMod
                 AccessTools.DeclaredMethod(typeof(ZNetScene), "CreateDestroyObjects", Type.EmptyTypes), SpawnQueuePatchType);
             SchedulesObjectRemoval = HasPrefixFrom(
                 AccessTools.DeclaredMethod(typeof(ZNetScene), "RemoveObjects", new[] { typeof(List<ZDO>), typeof(List<ZDO>) }), UnloadPatchType);
+            s_terrainRecoveryAttached = HasPrefixFrom(
+                AccessTools.DeclaredMethod(typeof(TerrainComp), "Update", Type.EmptyTypes), TerrainRecoveryPatchType);
+            if (s_terrainRecoveryAttached)
+            {
+                Type recovery = AccessTools.TypeByName(TerrainRecoveryPatchType);
+                s_terrainRecoveryEnabled = recovery != null ? AccessTools.Field(recovery, "Enabled") : null;
+            }
 
             if (SchedulesSceneObjects)
                 LoggerOptions.LogMessage(

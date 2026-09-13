@@ -225,7 +225,8 @@ namespace FiresGhettoNetworkMod
                     LoggerOptions.LogMessage($"[AdaptiveRate] peer {peer.m_uid} {branch}: cap {oldTarget / BytesPerMegabyte}->{peerState.Target / BytesPerMegabyte} MB/s, "
                         + $"delivered {delivered / (float)BytesPerMegabyte:F1} MB/s, pingAge {pingAge:F1}/{BadConnectionSecs:F0}s, "
                         + $"queue {queue / (float)BytesPerMegabyte:F1}/{highWater / BytesPerMegabyte} MB"
-                        + (pinned.HasValue ? (pinned.Value ? " [pin ok]" : " [PIN FAILED]") : ""));
+                        + (pinned.HasValue ? (pinned.Value ? " [pin ok]" : " [PIN FAILED]") : "")
+                        + DescribeSteamSide(peer.m_socket));
             }
 
             if (s_state.Count > s_seen.Count)
@@ -234,6 +235,17 @@ namespace FiresGhettoNetworkMod
                 foreach (var kv in s_state) if (!s_seen.Contains(kv.Key)) s_stale.Add(kv.Key);
                 for (int i = 0; i < s_stale.Count; i++) s_state.Remove(s_stale[i]);
             }
+        }
+
+        // Steam's side of the same peer: the rate it is actually pacing at, how long newly queued data waits there, what
+        // it has sent that is still unacknowledged, and the share of our packets the peer reports receiving.
+        private static string DescribeSteamSide(ISocket socket)
+        {
+            if (!NetworkStats.TryGameServerStatus(socket, out Steamworks.SteamNetConnectionRealTimeStatus_t status)) return "";
+            return $" | steam: pacing {status.m_nSendRateBytesPerSecond / (float)BytesPerMegabyte:F1} MB/s, "
+                + $"wait {(long)status.m_usecQueueTime / 1000L} ms, unacked {status.m_cbSentUnackedReliable / (float)BytesPerMegabyte:F1} MB, "
+                + $"pending {status.m_cbPendingReliable / (float)BytesPerMegabyte:F1} MB, "
+                + $"delivered to peer {(status.m_flConnectionQualityRemote < 0f ? "n/a" : (status.m_flConnectionQualityRemote * 100f).ToString("F0") + "%")}";
         }
     }
 }

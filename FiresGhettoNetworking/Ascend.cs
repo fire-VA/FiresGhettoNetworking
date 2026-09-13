@@ -17,7 +17,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.15";
+        public const string PluginVersion = "1.4.23";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -50,6 +50,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<int> ConfigSendCongestionThresholdPct;
         public static ConfigEntry<bool> ConfigEnableSendHeartbeatLog;
         public static ConfigEntry<bool> ConfigEnableFallThroughDiagnostics;
+        public static ConfigEntry<bool> ConfigEnableCapeCrashDiagnostics;
         public static ConfigEntry<int> ConfigZoneLoadBatchSize;
         public static ConfigEntry<int> ConfigZPackageReceiveBufferSize;
         public static ConfigEntry<bool>  ConfigEnableTimeSliceInstantiation;
@@ -65,6 +66,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<bool> ConfigEnableInstanceOrphanPrune;
         public static ConfigEntry<bool> ConfigFixTeleportGhosts;
         public static ConfigEntry<bool> ConfigFixSlowSleep;
+        public static ConfigEntry<bool> ConfigKeepaliveFirst;
         public static ConfigEntry<bool> ConfigFixBoatDamageFromTimeSync;
         public static ConfigEntry<bool> ConfigFixGroundSnapThroughFloors;
         public static ConfigEntry<bool> ConfigEnableRpcRouter;
@@ -179,6 +181,8 @@ namespace FiresGhettoNetworkMod
 
             Harmony.PatchAll(typeof(AdaptiveSendRate));
 
+            Harmony.PatchAll(typeof(KeepaliveFirst));
+
             Harmony.PatchAll(typeof(ZdoFloodTest));
 
             WackyDatabaseCompatibilityPatch.Init(Harmony);
@@ -205,10 +209,27 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogWarning($"[TeleportGhostFix] could not be attached; vanilla behaviour is unchanged. {ex.Message}");
             }
 
+            try
+            {
+                Harmony.PatchAll(typeof(TerrainCompInitRace));
+            }
+            catch (System.Exception ex)
+            {
+                LoggerOptions.LogWarning($"[TerrainComp] could not be attached; vanilla behaviour is unchanged. {ex.Message}");
+            }
+
             Harmony.PatchAll(typeof(SleepTimeSkipFix));
 
             if (!isDedicated)
                 Harmony.PatchAll(typeof(WaveClockSmoothing));
+
+            if (!isDedicated && ConfigEnableCapeCrashDiagnostics.Value)
+            {
+                Harmony.PatchAll(typeof(CapeCrashDiagnostics));
+                Harmony.PatchAll(typeof(MagicaColliderRegistrationDiagnostics));
+                Harmony.PatchAll(typeof(MagicaClothLifecycleDiagnostics));
+                LoggerOptions.LogWarning("[CapeDiag] Cape crash diagnostics are ON; turn 'Enable Cape Crash Diagnostics' off once the crash is found.");
+            }
 
             // Auto-tune: probe on clients, self-tune on servers.
             Harmony.PatchAll(typeof(AutoTuneProbeHooks));
@@ -297,8 +318,6 @@ namespace FiresGhettoNetworkMod
 
             Harmony.PatchAll(typeof(ServerShipSimulationPatches));
 
-            Harmony.PatchAll(typeof(ZDOMemoryManager));
-
             Harmony.PatchAll(typeof(ServerAuthorityPatches));
             Harmony.PatchAll(typeof(ServerStabilityPatches));
             Harmony.PatchAll(typeof(MonsterAIPatches));
@@ -381,11 +400,64 @@ namespace FiresGhettoNetworkMod
             }
             yield return new WaitForEndOfFrame();
 
+            // A dedicated server also prints the address players type into the join dialog, under the banner. Steam
+            // reports the public IP shortly after the server logs on, so wait a little for it.
+            string joinAddress = null;
+            bool dedicated = ServerClientUtils.IsDedicatedServerDetected;
+            if (dedicated)
+            {
+                float giveUpAt = Time.realtimeSinceStartup + JoinAddressWaitSeconds;
+                while (!TryGetJoinAddress(out joinAddress) && Time.realtimeSinceStartup < giveUpAt)
+                    yield return new WaitForSecondsRealtime(0.5f);
+            }
+
             try { VAGhettoBanner.Print(); }
             catch (Exception ex)
             {
                 Logger.LogInfo($"{PluginName} v{PluginVersion} loaded. (banner failed: {ex.Message})");
             }
+
+            if (dedicated)
+            {
+                Logger.LogInfo(joinAddress != null
+                    ? $"Join address: {joinAddress}"
+                    : $"Join address: this server's public IP, port {ServerPort()} (Steam did not report the public IP within {JoinAddressWaitSeconds:0} s).");
+            }
+        }
+
+        private const float JoinAddressWaitSeconds = 60f;
+
+        private static bool TryGetJoinAddress(out string address)
+        {
+            address = null;
+            int port = ServerPort();
+            if (port <= 0) return false;
+            try
+            {
+                if (!Steamworks.SteamGameServer.BLoggedOn()) return false;
+                Steamworks.SteamIPAddress_t publicIp = Steamworks.SteamGameServer.GetPublicIP();
+                if (!publicIp.IsSet()) return false;
+                System.Net.IPAddress ip = publicIp.ToIPAddress();
+                address = ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? $"[{ip}]:{port}" : $"{ip}:{port}";
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        // FejdStartup reads -port (default 2456) and hands it to the Steam and PlayFab sockets. ZNet.GetHostPort is no
+        // help here: on a Steam socket it only answers 1 for a host.
+        private static int ServerPort()
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (string.Equals(args[i], "-port", StringComparison.OrdinalIgnoreCase) && int.TryParse(args[i + 1], out int port) && port > 0)
+                    return port;
+            }
+            return 2456;
         }
 
         private void OnApplicationQuit()
@@ -569,7 +641,9 @@ namespace FiresGhettoNetworkMod
                 "04 - Networking",
                 "Enable Compression",
                 true,
-                "Enable ZSTD network compression (highly recommended).");
+                "Enable Deflate network compression (highly recommended). It is negotiated per player, so it only\n" +
+                "engages with players whose FGN uses the same compression format. Data Valheim already compresses\n" +
+                "(terrain edits, tar pits, map tables) is sent as is rather than compressed again.");
 
             ConfigUpdateRate = Config.Bind(
                 "04 - Networking",
@@ -1057,16 +1131,6 @@ namespace FiresGhettoNetworkMod
                 "server. Useful when investigating lag, but writes ~1 line per player per\n" +
                 "10s to the log. Leave OFF for normal play. SERVER-ONLY.");
 
-            ZDOMemoryManager.ConfigMaxZDOs = Config.Bind(
-                "12 - Advanced",
-                "Max Active ZDOs",
-                500000,
-                new ConfigDescription(
-                    "If the number of active ZDOs exceeds this value, the mod will force cleanup of orphan non-persistent ZDOs and run garbage collection.\n" +
-                    "Set to 0 to disable. Useful on very long-running servers with high entity counts.\n" +
-                    "Default: 500000 (vanilla rarely goes above ~200k).",
-                    new AcceptableValueRange<int>(0, 1000000)));
-
             ConfigEnableBootPatchVerification = Config.Bind(
                 "12 - Advanced",
                 "Enable Boot Patch Verification",
@@ -1169,6 +1233,15 @@ namespace FiresGhettoNetworkMod
                 "morning arrives after about 12 seconds however busy the server is.\n" +
                 "SERVER / LISTEN-HOST ONLY. No effect on a connecting client.");
 
+            ConfigKeepaliveFirst = Config.Bind(
+                "12 - Advanced",
+                "Keep Busy Connections Alive",
+                true,
+                "Valheim disconnects a player whose keepalive goes unanswered for 30 seconds, and its keepalives\n" +
+                "wait behind everything already queued to send. A large transfer, such as a big base loading in,\n" +
+                "could time a player out while data was still arriving. With this on, keepalives go ahead of the\n" +
+                "queue. Works on whichever side has it; install on server and clients to cover both directions.");
+
             ConfigFixBoatDamageFromTimeSync = Config.Bind(
                 "12 - Advanced",
                 "Fix Boat Damage From Server Time Sync",
@@ -1181,6 +1254,18 @@ namespace FiresGhettoNetworkMod
                 "Corrections of 5 seconds or more (sleeping, reconnecting) still apply at once, as in vanilla.\n" +
                 "CLIENT-SIDE. A ship is damaged by the game of the player who owns it, normally someone aboard,\n" +
                 "so every player who sails needs this on. No effect on a dedicated server.");
+
+            ConfigEnableCapeCrashDiagnostics = Config.Bind(
+                "01 - General",
+                "Enable Cape Crash Diagnostics",
+                false,
+                "Temporary client diagnostic for the crash in cape cloth setup. Logs taking and leaving ship controls, shoulder\n" +
+                "item changes, every cloth collider handed to MagicaCloth2, every cloth built or destroyed, a per-frame check of\n" +
+                "each cape collider list, object creation bursts, data overwriting the local player, auto-tune probe steps, server\n" +
+                "clock corrections, every Steam setting FGN applies and a 5 second heartbeat with memory and compression totals.\n" +
+                "Each line is written before its step runs, so the last line before a crash names the step. Takes effect on the\n" +
+                "next start. Leave OFF for normal play.\n" +
+                "CLIENT-SIDE.");
 
             ConfigEnableFallThroughDiagnostics = Config.Bind(
                 "01 - General",
@@ -1220,7 +1305,6 @@ namespace FiresGhettoNetworkMod
         ConfigAILODNearDistance,
         ConfigAILODFarDistance,
         ConfigAILODThrottleFactor,
-        ZDOMemoryManager.ConfigMaxZDOs,
         ConfigEnableZDODelta,
         ConfigShowAILODInServerStatus,
         ConfigEnableBootPatchVerification,
@@ -1241,6 +1325,7 @@ namespace FiresGhettoNetworkMod
         ConfigEnableInstanceOrphanPrune,
         ConfigFixTeleportGhosts,
         ConfigFixSlowSleep,
+        ConfigKeepaliveFirst,
         ConfigFixBoatDamageFromTimeSync,
         ConfigEnableFallThroughDiagnostics,
         ConfigEnableBulkTransferBoost,

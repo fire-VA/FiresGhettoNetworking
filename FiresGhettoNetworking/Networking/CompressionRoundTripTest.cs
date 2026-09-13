@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
 using UnityEngine;
@@ -6,11 +7,11 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Admin console test for the Deflate round-trip in CompressionGroup. 'fgn_comptest [count] [sizeKB]'
-    /// first compresses and decompresses a compressible payload (gains the FGD1 magic) and an incompressible
-    /// one (passes through raw), then has the server burst N packets at the caller alternating between the
-    /// two. Alternating is the point: it crosses every compressed-to-raw boundary, which is where the old
-    /// start-boundary bug corrupted the stream. Each packet carries a nonce, sequence and FNV checksum.
+    /// Admin console test for network compression. 'fgn_comptest [count] [sizeKB]' first runs the real send policy and
+    /// PacketFrame locally on a compressible payload (deflated), an incompressible one (sent as is), one mixing compressible
+    /// bytes with Valheim-style gzip arrays (deflated beside them), a payload that begins with the frame marker (framed so it
+    /// cannot be misread) and a damaged frame (rejected). The server then bursts N packets at the caller cycling through the
+    /// first three kinds, which crosses every boundary between frame types; each carries a nonce, sequence and FNV checksum.
     /// </summary>
     [HarmonyPatch]
     public static class CompressionRoundTripTest
@@ -26,6 +27,11 @@ namespace FiresGhettoNetworkMod
         private const int DefaultSizeKB = 64;
         private const int MaxCount = 10000;
         private const int MaxSizeKB = 128;
+        private const int GzipPartBytes = 2048;
+        private const int PlainPartBytes = 4096;
+
+        private enum PayloadKind { Compressible, Incompressible, WithGzip }
+        private const int KindCount = 3;
 
         private static bool s_commandRegistered;
         private static long s_nonceSeq;
@@ -34,11 +40,9 @@ namespace FiresGhettoNetworkMod
         private static long s_expectNonce;
         private static int s_expectCount;
         private static int s_received, s_corrupt, s_outOfOrder, s_lastSeq;
-        private static int s_recvComp, s_recvRaw;
+        private static readonly int[] s_receivedByKind = new int[KindCount];
 
         // Incompressible block (fixed seed so the server's generate and the client's verify match).
-        // Odd-seq packets are filled from this — Deflate can't shrink it, so it crosses the wire raw
-        // (no FGD1 magic), while even-seq packets compress and DO carry the magic.
         private static byte[] s_rawBlock;
         private static byte[] RawBlock
         {
@@ -57,7 +61,7 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        private static bool IsRawSeq(int seq) => (seq & 1) == 1;   // odd = incompressible, even = compressible
+        private static PayloadKind KindOf(int seq) => (PayloadKind)(seq % KindCount);
 
         [HarmonyPatch(typeof(ZNet), "Start")]
         [HarmonyPostfix]
@@ -71,10 +75,10 @@ namespace FiresGhettoNetworkMod
             if (s_commandRegistered) return;
             s_commandRegistered = true;
             new Terminal.ConsoleCommand("fgn_comptest",
-                "[count] [sizeKB] — FGN diagnostic: round-trip-test Deflate compression. Local "
-                + "Compress/Decompress check (both compressible and incompressible), then the server "
-                + "bursts N packets ALTERNATING compressible/incompressible (default 100 x 64KB, up to "
-                + "10000 x 128KB) and verifies every one survived the magic boundary intact.",
+                "[count] [sizeKB] - FGN diagnostic: test network compression. Runs the send policy and frame checks locally "
+                + "(compressible, incompressible, mixed with gzip data, frame-marker escape, damaged frame), then the server "
+                + "bursts N packets cycling compressible / incompressible / mixed (default 100 x 64KB, up to 10000 x 128KB) and "
+                + "verifies every one arrived intact.",
                 new Terminal.ConsoleEvent(OnCommand));
         }
 
@@ -87,32 +91,59 @@ namespace FiresGhettoNetworkMod
             sizeKB = Mathf.Clamp(sizeKB, 1, MaxSizeKB);
             if (ZNet.instance == null || ZRoutedRpc.instance == null) { args.Context?.AddString("FGN: not connected."); return; }
 
-            // 1. Local sanity — round-trip BOTH a compressible (even seq, gets the magic + shrinks) and
-            //    an incompressible (odd seq, passes through raw) payload, so both receive paths are proven
-            //    before the wire test.
-            byte[] compressibleInput = MakePayload(sizeKB * 1024, 0);
-            byte[] compressibleWire = CompressionGroup.Compress(compressibleInput);
-            byte[] compressibleRoundTrip = CompressionGroup.Decompress(compressibleWire);
-            bool compressibleIntact = compressibleRoundTrip != null && Checksum(compressibleRoundTrip) == Checksum(compressibleInput);
+            // 1. Local: the same policy and frame code the sockets use, on each payload kind.
+            var results = new List<string>();
+            bool allIntact = true;
+            byte[] compressibleFrame = null;
+            for (int kind = 0; kind < KindCount; kind++)
+            {
+                byte[] payload = MakePayload(sizeKB * 1024, kind);
+                byte[] wire = CompressionGroup.FrameForPeer(payload, true, true, out SendOutcome outcome);
+                bool intact = RoundTrips(payload, wire);
+                allIntact &= intact;
+                if (kind == (int)PayloadKind.Compressible && wire != payload) compressibleFrame = wire;
+                results.Add($"{(PayloadKind)kind} {payload.Length}->{wire.Length} B {outcome} {(intact ? "OK" : "MISMATCH")}");
+            }
 
-            byte[] incompressibleInput = MakePayload(sizeKB * 1024, 1);
-            byte[] incompressibleWire = CompressionGroup.Compress(incompressibleInput);
-            byte[] incompressibleRoundTrip = CompressionGroup.Decompress(incompressibleWire);
-            bool incompressibleIntact = incompressibleRoundTrip != null && Checksum(incompressibleRoundTrip) == Checksum(incompressibleInput);
+            byte[] marked = MakePayload(sizeKB * 1024, (int)PayloadKind.Incompressible);
+            marked[0] = (byte)(PacketFrame.Magic & 0xFF);
+            marked[1] = (byte)((PacketFrame.Magic >> 8) & 0xFF);
+            marked[2] = (byte)((PacketFrame.Magic >> 16) & 0xFF);
+            marked[3] = (byte)((PacketFrame.Magic >> 24) & 0xFF);
+            byte[] markedWire = CompressionGroup.FrameForPeer(marked, true, true, out SendOutcome markedOutcome);
+            bool markedIntact = RoundTrips(marked, markedWire) && markedWire != marked;
+            allIntact &= markedIntact;
+            results.Add($"marker-prefixed {marked.Length}->{markedWire.Length} B {markedOutcome} {(markedIntact ? "OK" : "MISMATCH")}");
 
-            args.Context?.AddString($"FGN comptest local {sizeKB}KB: compressible {(compressibleIntact ? "OK" : "MISMATCH")} "
-                + $"({compressibleInput.Length}->{compressibleWire.Length}, magic={(compressibleWire.Length < compressibleInput.Length ? "yes" : "no")}); "
-                + $"incompressible {(incompressibleIntact ? "OK" : "MISMATCH")} ({incompressibleInput.Length}->{incompressibleWire.Length}, magic={(incompressibleWire.Length < incompressibleInput.Length ? "yes" : "no")}).");
+            if (compressibleFrame != null)
+            {
+                byte[] damaged = (byte[])compressibleFrame.Clone();
+                damaged[damaged.Length - 1] ^= 0x5A;
+                PacketFrame.DecodeResult damagedResult = PacketFrame.TryDecode(damaged, out _);
+                bool rejected = damagedResult != PacketFrame.DecodeResult.Decoded;
+                allIntact &= rejected;
+                results.Add($"damaged frame {(rejected ? "rejected" : "ACCEPTED")} ({damagedResult})");
+            }
 
-            // 2. Wire burst (server -> client), alternating compressible / incompressible every packet.
+            args.Context?.AddString($"FGN comptest local {sizeKB}KB {(allIntact ? "PASS" : "FAIL")}: " + string.Join("; ", results) + ".");
+
+            // 2. Wire burst (server -> client), cycling payload kinds every packet.
             s_expectNonce = ++s_nonceSeq;
             s_expectCount = count; s_received = 0; s_corrupt = 0; s_outOfOrder = 0; s_lastSeq = -1;
-            s_recvComp = 0; s_recvRaw = 0;
+            for (int i = 0; i < KindCount; i++) s_receivedByKind[i] = 0;
             ZRoutedRpc.instance.InvokeRoutedRPC(RpcStart, count, sizeKB, s_expectNonce);
             float cap = ReportDelay(count, sizeKB);
-            args.Context?.AddString($"FGN comptest wire: requested {count} x {sizeKB}KB packets (alternating compressible/incompressible). Reports as soon as all arrive (up to ~{cap:F0}s — the pipe is send-rate limited, so a big incompressible burst takes a while). DISCONNECT mid-test = the bug.");
+            args.Context?.AddString($"FGN comptest wire: requested {count} x {sizeKB}KB packets (cycling compressible / incompressible / mixed with gzip). Reports as soon as all arrive (up to ~{cap:F0}s — the pipe is send-rate limited, so a big incompressible burst takes a while). DISCONNECT mid-test = the bug.");
             if (FiresGhettoNetworkMod.Instance != null)
                 FiresGhettoNetworkMod.Instance.StartCoroutine(ReportAfter(cap, args.Context));
+        }
+
+        private static bool RoundTrips(byte[] payload, byte[] wire)
+        {
+            if (wire == payload) return true;
+            return PacketFrame.TryDecode(wire, out byte[] decoded) == PacketFrame.DecodeResult.Decoded
+                && decoded.Length == payload.Length
+                && Checksum(decoded) == Checksum(payload);
         }
 
         // SAFETY CAP only — the report fires as soon as all packets actually arrive (ReportAfter polls).
@@ -134,7 +165,7 @@ namespace FiresGhettoNetworkMod
             string verdict = pass ? "PASS" : (completed ? "FAIL" : "INCOMPLETE");
             string tail;
             if (pass)
-                tail = "Both compressed and raw packets round-tripped across every magic boundary — the fix holds.";
+                tail = "Every packet round-tripped across every boundary between frame types.";
             else if (!completed)
                 tail = $"Only {s_received}/{s_expectCount} arrived by the {maxSeconds:F0}s cap — the pipe is send-rate limited, NOT lossy (ZSteamSocket re-queues, never drops; what arrived is intact). Give it longer or lower count/size.";
             else if (s_corrupt > 0)
@@ -142,7 +173,8 @@ namespace FiresGhettoNetworkMod
             else
                 tail = "Out-of-order delivery on a reliable channel — investigate.";
             string msg = $"[CompTest] {verdict} — received {s_received}/{s_expectCount} "
-                + $"(compressible {s_recvComp}, incompressible {s_recvRaw}), corrupt={s_corrupt}, out-of-order={s_outOfOrder}. {tail}";
+                + $"(compressible {s_receivedByKind[0]}, incompressible {s_receivedByKind[1]}, mixed with gzip {s_receivedByKind[2]}), "
+                + $"corrupt={s_corrupt}, out-of-order={s_outOfOrder}. {tail}";
             ctx?.AddString(msg);
             LoggerOptions.LogMessage(msg);
         }
@@ -223,7 +255,7 @@ namespace FiresGhettoNetworkMod
                 if (seq != s_lastSeq + 1) s_outOfOrder++;
                 s_lastSeq = seq;
                 s_received++;
-                if (IsRawSeq(seq)) s_recvRaw++; else s_recvComp++;
+                s_receivedByKind[(int)KindOf(seq)]++;
             }
             catch
             {
@@ -260,42 +292,73 @@ namespace FiresGhettoNetworkMod
             return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
         }
 
-        // Even seq → compressible (256-byte ramp; Deflate shrinks it, FGD1 magic gets added).
-        // Odd seq  → incompressible (slice of the high-entropy block; passes through raw, no magic).
-        // Each packet still varies by seq, and the alternation exercises both receive paths plus every
-        // compressed->raw and raw->compressed boundary in the stream.
+        // Compressible: a 256-byte ramp. Incompressible: a slice of the high-entropy block. With gzip: length-prefixed ramp
+        // chunks alternating with length-prefixed Utils.Compress output of high-entropy data, laid out exactly as ZPackage
+        // writes byte arrays, so the gzip parts travel as stored regions beside the deflated ramp.
         private static byte[] MakePayload(int size, int seq)
         {
-            byte[] payload = new byte[size];
-            if (IsRawSeq(seq))
+            switch (KindOf(seq))
             {
-                byte[] block = RawBlock;
-                int off = (seq * 7) % block.Length;
-                for (int i = 0; i < size; i++) payload[i] = block[(off + i) % block.Length];
+                case PayloadKind.Incompressible:
+                {
+                    byte[] payload = new byte[size];
+                    byte[] block = RawBlock;
+                    int off = (seq * 7) % block.Length;
+                    for (int i = 0; i < size; i++) payload[i] = block[(off + i) % block.Length];
+                    return payload;
+                }
+                case PayloadKind.WithGzip:
+                {
+                    var package = new ZPackage();
+                    byte[] block = RawBlock;
+                    for (int part = 0; package.Size() < size; part++)
+                    {
+                        if ((part & 1) == 0)
+                        {
+                            byte[] plain = new byte[Mathf.Min(PlainPartBytes, size)];
+                            for (int i = 0; i < plain.Length; i++) plain[i] = (byte)((i + seq + part) & 0xFF);
+                            package.Write(plain);
+                        }
+                        else
+                        {
+                            byte[] raw = new byte[GzipPartBytes];
+                            int off = (seq * 13 + part * 101) % (block.Length - GzipPartBytes);
+                            System.Buffer.BlockCopy(block, off, raw, 0, GzipPartBytes);
+                            package.Write(Utils.Compress(raw));
+                        }
+                    }
+                    return package.GetArray();
+                }
+                default:
+                {
+                    byte[] payload = new byte[size];
+                    for (int i = 0; i < size; i++) payload[i] = (byte)((i + seq) & 0xFF);
+                    return payload;
+                }
             }
-            else
-            {
-                for (int i = 0; i < size; i++) payload[i] = (byte)((i + seq) & 0xFF);
-            }
-            return payload;
         }
 
+        // Spot-checks the deterministic kinds on top of the checksum; the mixed kind is covered by the checksum alone.
         private static bool PayloadMatches(byte[] payload, int seq)
         {
             if (payload == null || payload.Length == 0) return false;
             int length = payload.Length;
             int[] probeOffsets = { 0, length / 3, length / 2, (2 * length) / 3, length - 1 };
-            if (IsRawSeq(seq))
+            switch (KindOf(seq))
             {
-                byte[] block = RawBlock;
-                int off = (seq * 7) % block.Length;
-                foreach (int i in probeOffsets) if (payload[i] != block[(off + i) % block.Length]) return false;
+                case PayloadKind.Incompressible:
+                {
+                    byte[] block = RawBlock;
+                    int off = (seq * 7) % block.Length;
+                    foreach (int i in probeOffsets) if (payload[i] != block[(off + i) % block.Length]) return false;
+                    return true;
+                }
+                case PayloadKind.Compressible:
+                    foreach (int i in probeOffsets) if (payload[i] != (byte)((i + seq) & 0xFF)) return false;
+                    return true;
+                default:
+                    return true;
             }
-            else
-            {
-                foreach (int i in probeOffsets) if (payload[i] != (byte)((i + seq) & 0xFF)) return false;
-            }
-            return true;
         }
 
         private static int Checksum(byte[] data)

@@ -335,7 +335,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             try
             {
                 ZPackage pkg = new ZPackage();
-                // Varied pattern, so the zstd layer cannot squash the sample and flatter the link.
+                // Varied pattern, so the compression layer cannot squash the sample and flatter the link.
                 byte[] payload = new byte[safeBytes];
                 for (int i = 0; i < safeBytes; i++)
                 {
@@ -382,6 +382,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 }
                 catch { actualBytes = requested; }
 
+                CapeCrashDiagnostics.Log($"AutoTune bandwidth response {seq}: {actualBytes} bytes after {sw.ElapsedMilliseconds} ms");
                 _bwResults[seq] = new BwResult { Bytes = actualBytes, Ms = sw.ElapsedMilliseconds };
                 _bwInflight.Remove(seq);
                 _bwRequested.Remove(seq);
@@ -480,6 +481,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 {
                     LoggerOptions.LogInfo($"[AutoTune] Using cached tier for {serverKey}: {cached.Tier} (probed {(int)(DateTime.UtcNow - cached.TimestampUtc).TotalDays}d ago)");
                     AutoTuneState.SetClient(cached.Tier, cached.PingMedianMs);
+                    CapeCrashDiagnostics.Log($"AutoTune using cached tier {cached.Tier}");
                     ApplyClientTier(cached.Tier);
                     SendTierReport(serverPeer, cached.Tier, cached.PingMedianMs);
                     _probeCompletedThisSession = true;
@@ -502,6 +504,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
 
             LoggerOptions.LogInfo($"[AutoTune] Starting probe — cores={cores}, RAM={ramMb}MB, GPU={gpu}");
+            CapeCrashDiagnostics.Log("AutoTune probe starting");
 
             // Stash session-scoped state so the rolling monitor can reuse it
             // without re-detecting hardware or re-resolving the cache key.
@@ -570,6 +573,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     _bwInflight[seq] = sw;
                     _bwRequested[seq] = payloadBytes;
 
+                    CapeCrashDiagnostics.Log($"AutoTune bandwidth sample {s + 1}/{sampleCount}: requesting {payloadBytes} bytes");
                     bool sent = TryInvoke(serverPeer, RpcBandwidthRequest, seq, payloadBytes);
                     if (!sent)
                     {
@@ -999,23 +1003,28 @@ namespace FiresGhettoNetworkMod.AutoTune
             // Steam send rates — re-apply through the existing path so the Steamworks side
             // picks up the new values. NetworkRatesGroup.ApplySendRates() reads through
             // EffectiveConfig now, so this is automatic.
+            CapeCrashDiagnostics.Log($"AutoTune applying client tier {tier}: send rates");
             try { NetworkingRatesGroup.ApplySendRates(); }
             catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] ApplySendRates failed: {ex.Message}"); }
 
             // Steam send buffer (per-connection outbound) — main lever for k_EResultLimitExceeded
+            CapeCrashDiagnostics.Log($"AutoTune applying client tier {tier}: send buffer");
             try { NetworkingRatesGroup.ApplySendBufferSize(); }
             catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] ApplySendBufferSize failed: {ex.Message}"); }
 
             // Steam recv buffer — set via the same reflection helper (no-op on Valheim's older Steamworks build)
+            CapeCrashDiagnostics.Log($"AutoTune applying client tier {tier}: recv buffer {EffectiveConfig.SteamRecvBufferBytes()} bytes");
             try { NetworkingRatesGroup.ApplyRecvBufferSize(); }
             catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] ApplyRecvBufferSize failed: {ex.Message}"); }
 
             // Steam per-message ceiling — must rise alongside the recv buffer or
             // large reliable messages still hit Steam's 512 KB default cap and get
             // rejected with "Reliable message size too large".
+            CapeCrashDiagnostics.Log($"AutoTune applying client tier {tier}: recv max message {EffectiveConfig.SteamRecvMaxMessageBytes()} bytes");
             try { NetworkingRatesGroup.ApplyRecvMaxMessageSize(); }
             catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] ApplyRecvMaxMessageSize failed: {ex.Message}"); }
 
+            CapeCrashDiagnostics.Log($"AutoTune client tier {tier} applied");
             LoggerOptions.LogInfo($"[AutoTune] Applied client tier {tier}");
         }
 

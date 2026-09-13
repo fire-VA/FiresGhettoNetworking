@@ -11,8 +11,8 @@ A comprehensive networking and server-authority mod for Valheim dedicated server
 Valheim's vanilla networking is built around small, friend-group sessions. It works fine for 4 people and starts visibly straining around 8+. This mod replaces the bottlenecks:
 
 - **Server pushes harder and smarter, and with more headroom** — bigger Steam send/recv buffers, higher max send rates, larger send queues, etc
-- **Server runs the world authoritatively** — server creates/destroys objects for all peers, runs AI, drives spawns, manages zones. Less work on each client.
-- **Server sends less garbage to clients** — filtering on broadcast RPCs, distance-based ZDO update throttling, AI LOD, WearNTear short-circuits for infinite health pieces.
+- **Server can run the world** — with Server-Side Simulation on, the server loads the world around every player, drives spawns and raids, and manages zones
+- **Server sends less garbage and does less busywork** — filtering on broadcast RPCs, closest-first ZDO sending when a connection backs up, AI LOD, WearNTear skips for unbreakable pieces.
 - **Client configs are tuned automatically** — built-in auto-tuner sends test on first login, picks a performance tier, and applies the right values per machine. No more having to read and understand config values
 
 You don't need to be a networking engineer to run a heavily-modded server with this. That's the point... 
@@ -37,7 +37,7 @@ Everything here is server-side and needs nothing installed on your players' mach
 
 Installing on both adds the client-side half:
 
-- **ZSTD packet compression** — negotiated per peer, so it only engages when both ends have the mod. A vanilla client simply never negotiates and stays uncompressed
+- **Deflate packet compression** — negotiated per peer, so it only engages when both ends have the mod. A vanilla client simply never negotiates and stays uncompressed
 - Client-side interpolation and prediction — smooths other players' movement
 - Client auto-tune: zone-load batching, instantiation budget, receive-buffer sizing, destroy throttling
 - HyperBoost receive side (also needs FiresSteamworksPatcher)
@@ -84,7 +84,7 @@ When a client connects to a server for the first time, the mod runs a brief netw
 2. **Hardware fingerprint** — CPU cores, RAM, GPU. Scored into a CPU tier.
 3. **Latency probe** — 10 ping RPCs, 200ms apart. performance computed over the trimmed samples (worst outlier dropped). Scores into a network tier.
 4. **Frame-time sample** — 5 seconds of testing afer the world settles. Scores into an FPS tier.
-5. **Bandwidth probe** — 3 × 32KB echo samples, peak wins. Only runs if latency tier is MED or HIGH (this is to keep clients on lower end machines from being effected by the tests).
+5. **Bandwidth probe** — 3 × 128KB echo samples, peak wins. Only runs if latency tier is MED or HIGH (this is to keep clients on lower end machines from being effected by the tests).
 
 The result is one of three tiers — **LOW**, **MED**, or **HIGH** — combining hardware capability and link quality. 
 The tier is cached per-server for 7 days; reconnecting picks up where you left off.
@@ -102,14 +102,21 @@ The cache is updated whenever consensus changes, so the next reconnect starts wi
 
 When the mod runs on a dedicated server with `Enable Server Auto-Tune = true` (the default), the server scores its own CPU/RAM at startup and applies a server-tier preset to:
 
+- Steam send rate (min and max) and ZDO send rate
+- Send queue size
+- Steam send buffer size (per-connection outbound during initial sync)
 - ZDO update throttle distance
 - AI LOD near/far distances
 - RPC Area-of-Interest radius
 - Extended zone pre-load radius
-- Send queue size
-- Steam send buffer size (per-connection outbound during initial sync)
 
-The send-rate **Min** stays at a safe baseline regardless of server tier so Steam can always back off 
+| Server tier | Send rate | Send buffer | Send queue | ZDO send rate | Throttle distance | AI LOD near / far | RPC AoI | Extended zones |
+|---|---|---|---|---|---|---|---|---|
+| LOW | 512 KB/s – 2 MB/s | 2 MB | vanilla (10 KB) | 100% | 350 m | 80 / 200 m | 192 m | +0 |
+| MED | 768 KB/s – 16 MB/s | 8 MB | 48 KB | 100% | 500 m | 100 / 300 m | 256 m | +1 |
+| HIGH | 1 MB/s – 32 MB/s | 32 MB | 80 KB | 150% | 700 m | 150 / 500 m | 384 m | +2 |
+
+Every tier stays at or above vanilla's values; the startup log confirms it with `AutoTune VanillaFloor self-check passed`. 
 
 The server also collects tier reports from connected clients and periodically logs the median client tier with suggestions, 
 so an admin can see at a glance whether the server's settings actually match the audience joining.
@@ -120,26 +127,26 @@ These run on the dedicated server (the mod auto-detects). Effects are visible to
 
 | Feature | What it does |
 |---------|--------------|
-| **ZSTD compression** | Compresses outbound traffic with a tuned dictionary. Significant bandwidth saving on busy servers, especially with large modded worlds. |
-| **Higher Steam send rates** | Vanilla caps at ~150 KB/s; we open Min/Max up to 1024 KB/s. Less waiting during big fights or zone bursts. |
-| **Larger send queue** | Default 80KB instead of vanilla ~10KB. Fewer dropped updates under burst load. |
-| **Steam SendBufferSize tuning** | Per-connection outbound buffer up to 2MB. Directly addresses errors during initial-sync floods with heavy modpacks. |
-| **ZDO delta compression** | On resyncs, only the fields that changed are sent — not the whole ZDO. Big savings on creatures/players where 1-2 fields change per tick. |
-| **Distance-based ZDO throttling** | Distant objects (creatures/structures beyond ~500m) update at a lower rate. Combat-range objects stay full speed. |
-| **AI LOD throttling** | Distant AI runs FixedUpdate at half speed. Server CPU saving with possible visible effect for nearby players depending on throttle distance. |
+| **Deflate compression** | Compresses traffic with each player who also has the mod (negotiated per player). Significant bandwidth saving on busy servers, especially with large modded worlds. |
+| **Higher Steam send rates** | Vanilla sends at a fixed ~150 KB/s. Auto-tune opens it up per server tier (table above); with auto-tune off the config default is 512 KB/s – 2 MB/s. Less waiting during big fights or zone bursts. |
+| **Larger send queue** | Vanilla stops queueing ZDO updates at ~10 KB. Auto-tune uses 10 / 48 / 80 KB by tier; the config default is 32 KB. Fewer delayed updates under burst load. |
+| **Steam SendBufferSize tuning** | Per-connection outbound buffer of 2 / 8 / 32 MB by tier. Directly addresses errors during initial-sync floods with heavy modpacks. |
+| **ZDO delta compression** | On resyncs, only the fields that changed are sent — not the whole ZDO. Big savings on creatures/players where 1-2 fields change per tick. Text and byte-array fields (chest contents, for example) are still sent whole. |
+| **Distance-based ZDO throttling** | While a player's connection is backing up, player positions are sent first and loose objects beyond the throttle distance (350 / 500 / 700 m by tier) go last. Buildings and terrain keep their place, and a healthy connection is left exactly as vanilla. |
+| **AI LOD throttling** | While a player's connection is backing up, creatures the server has loaded that are beyond the far distance (200 / 300 / 500 m by tier) from every player update at half speed (`AI LOD Throttle Factor`). Tames are never throttled, and a healthy server runs every creature at full rate. |
 | **WearNTear server optimization** | Skips the wear and support update for pieces that cannot be damaged at all (Infinity Hammer / admin-flagged pieces). Every other piece wears, takes weather damage and collapses exactly like vanilla. |
 
 ## Server-authority patches
 
-Vanilla Valheim relies on whichever client is "near" an object to simulate it. This mod makes the server authoritative instead:
+Vanilla Valheim relies on whichever client is "near" an object to simulate it. With **Server-Side Simulation** on, the server takes over more of that work:
 
-- **Server creates/destroys objects for all peers** — client CPU stays free, world state is consistent across all players.
-- **Zone management runs server-side** — server pre-loads zones around every connected player, including a configurable extended radius (default +1 layer). Smoother zone crossings.
-- **Server runs all AI** — monsters update even when no player is "owning" the zone. Recently adjusted to fix raids not firing with server authority on.
-- **RPC Router with area based filtering** — broadcast RPCs targeting a specific position only forward to peers within range. Massive bandwidth saving on busy servers (DamageText, HealthChanged, SetTarget, etc. don't get broadcast worldwide).
+- **Server loads the world around every player** — objects exist on the server wherever players are, including a configurable extended radius (default +1 zone layer).
+- **Spawning and raids run server-side** — the server decides when and where creatures and random events spawn, so raids fire and end properly with players spread out.
+- **Creatures are still simulated by the nearest player** unless ZDO ownership transfer is also enabled (see "What runs in each configuration").
 
-Server authority is **server-only** behavior. 
-Clients receive the results but don't run the simulation themselves.
+The **RPC Router with area based filtering** does not need Server-Side Simulation: broadcast RPCs targeting a specific position only forward to peers within range. Massive bandwidth saving on busy servers (DamageText, HealthChanged, SetTarget, etc. don't get broadcast worldwide).
+
+All of this is server-side; players don't need anything extra installed for it.
 
 ## Client-side settings (the only ones you should touch you heathens)
 
@@ -185,7 +192,7 @@ but im not smart enough to know how to hide the config to only clients while all
 ## Credits
 
 Built on the shoulders of BetterNetworking and Serverside Simulations. 
-The general approach to ZDO throttling, RPC routing/AoI filtering, and ZSTD wire compression took inspiration from those mods and from the Comfy Valheim 
+The general approach to ZDO throttling, RPC routing/AoI filtering, and wire compression took inspiration from those mods and from the Comfy Valheim 
 BetterZeeRouter pattern. The auto-tuner, rolling monitor, server self-tune, and Steam send-buffer tuning are original to this mod as far as I know...
 but theres only so many different ways to do networking mods in valheim 
 
