@@ -135,6 +135,10 @@ These run on the dedicated server (the mod auto-detects). Effects are visible to
 | **Distance-based ZDO throttling** | While a player's connection is backing up, player positions are sent first and loose objects beyond the throttle distance (350 / 500 / 700 m by tier) go last. Buildings and terrain keep their place, and a healthy connection is left exactly as vanilla. |
 | **AI LOD throttling** | While a player's connection is backing up, creatures the server has loaded that are beyond the far distance (200 / 300 / 500 m by tier) from every player update at half speed (`AI LOD Throttle Factor`). Tames are never throttled, and a healthy server runs every creature at full rate. |
 | **WearNTear server optimization** | Skips the wear and support update for pieces that cannot be damaged at all (Infinity Hammer / admin-flagged pieces). Every other piece wears, takes weather damage and collapses exactly like vanilla. |
+| **Every player sent each frame** | Vanilla works through one player per frame, so each player's world updates arrive at the frame rate divided by the number of players online. Every player now gets a turn each frame, inside a per-frame time budget. |
+| **Send window sized to the connection** | Each player's send window grows while their line is clear and shrinks when it backs up, instead of one fixed queue size for everyone. |
+| **Skipping unchanged areas** | Each world update rescans every object around a player for anything unsent, which in a big base is tens of thousands of objects many times a second. Areas where nothing has entered, left or changed since their last scan are skipped, and everything is rescanned every two seconds regardless. |
+| **Station inserts** | Ore, coal, food and ammo put into a smelter, kiln, fermenter, cooking station, fire, turret or shield generator are delivered to the station's real owner, so nothing is lost when someone else owns it or has just left. |
 
 ## Server-authority patches
 
@@ -142,7 +146,7 @@ Vanilla Valheim relies on whichever client is "near" an object to simulate it. W
 
 - **Server loads the world around every player** — objects exist on the server wherever players are, including a configurable extended radius (default +1 zone layer).
 - **Spawning and raids run server-side** — the server decides when and where creatures and random events spawn, so raids fire and end properly with players spread out.
-- **Creatures are still simulated by the nearest player** unless ZDO ownership transfer is also enabled (see "What runs in each configuration").
+- **Creatures go to the best-placed player** - the server measures each player's round trip and moves a creature to whoever is fighting it, or to a nearby player with clearly lower ping, so its movement, attacks and the hits on it are worked out on the machine best placed to do it. The current owner's game hands the creature over itself, the way vanilla hands over a chest someone opens, so no update already in flight can undo the move. Bosses, tames, ridden creatures and creatures mid-attack are never moved, and only players who also have the mod can hand one over. ZDO ownership transfer (see "What runs in each configuration") is a separate, heavier option.
 
 The **RPC Router with area based filtering** does not need Server-Side Simulation: broadcast RPCs targeting a specific position only forward to peers within range. Massive bandwidth saving on busy servers (DamageText, HealthChanged, SetTarget, etc. don't get broadcast worldwide).
 

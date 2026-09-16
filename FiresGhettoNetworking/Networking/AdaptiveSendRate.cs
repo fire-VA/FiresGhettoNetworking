@@ -1,251 +1,31 @@
-using System.Collections;
-using System.Collections.Generic;
 using BepInEx.Configuration;
-using HarmonyLib;
-using UnityEngine;
-using FiresGhettoNetworkMod.AutoTune;
 
 namespace FiresGhettoNetworkMod
 {
-    /// <summary>
-    /// Per-peer AIMD send-rate controller, server-side. The rate is pinned (min == max) so Steam cannot
-    /// drift inside it, climbs from the configured baseline toward the HYPERBOOST ceiling, and eases down
-    /// only while a peer's ping stays overdue for SustainTicks. It never eases below the baseline.
-    /// </summary>
-    [HarmonyPatch]
+    /// <summary>Settings for the per-player Steam send rate that LinkController steps on a server.</summary>
     public static class AdaptiveSendRate
     {
         public static ConfigEntry<bool> ConfigEnabled;
         public static ConfigEntry<bool> ConfigLog;
 
-        // Raised by the FGN socket stress tests while they drive the per-connection rate by hand, so the
-        // controller doesn't fight their override mid-test.
+        // Raised by the socket stress tests while they drive a connection's rate by hand.
         public static bool Suspend;
-
-        private const int   BytesPerMegabyte  = 1024 * 1024;
-        private const float TickSeconds       = 1.5f;
-        private const float HighWaterFraction = 0.70f;   // queue vs send-buffer ratio — logged only, NOT a trigger
-        private const int   SustainTicks      = 3;       // ticks the bad-connection warning must persist before we back off
-        private const float SlowStartFactor   = 2.00f;   // fast climb (double/tick) until the first bad-connection back-off
-        private const float CongAvoidFactor   = 1.10f;   // fine steps after that, so it re-approaches the edge gently
-        private const float BadConnectionSecs = 5.00f;   // ping reply overdue past this = Valheim's bad-connection icon flashes (ZNet.m_badConnectionPing); 1/3 of the 30s hard timeout
-        private const float BackoffStep       = 0.50f;   // halve the cap when the game says the connection is genuinely in trouble
-        private const int   MinStepBytes      = 1024 * 1024;
-
-        private sealed class PeerState
-        {
-            public uint Conn;          // resolved once, then reused (no per-tick reflection)
-            public int  Target;
-            public int  PressureTicks;
-            public bool SlowStart;     // fast-climb phase until the first back-off, then fine congestion-avoidance
-        }
-
-        private static readonly Dictionary<long, PeerState> s_state = new Dictionary<long, PeerState>();
-        private static readonly HashSet<long> s_seen = new HashSet<long>();
-        private static readonly List<long> s_stale = new List<long>();
-        private static bool s_running;
-        private static bool s_wasBoosting;
-        private static bool s_loggedConfig;
-        private static Coroutine s_loop;
 
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("06 - Auto-Tune", "Adaptive Send Rate", true,
-                "Server-side closed-loop send-rate controller. Each peer starts at the Auto-Tune/manual send "
-                + "rate and ramps UP toward the HYPERBOOST ceiling while it's delivering near that rate with a "
-                + "clear send-queue, easing back toward the real measured throughput (down to the tier's "
-                + "SendRateMin) only when the queue stays congested AND delivery can't keep up for several "
-                + "ticks. Pins SendRateMin = SendRateMax per connection so Steam's own sticky-down adapter "
-                + "can't park the peer near the floor — each client converges to its own real link capacity. "
-                + "Defers to HYPERBOOST while that's on. SERVER-SIDE only.");
+                "Pins each player's Steam send rate and steps it from that player's own connection. It starts at the Auto-Tune "
+                + "or manual Send Rate Max, rises while Steam is holding data back for that player, and backs off toward the rate "
+                + "actually getting through, never below Send Rate Min, when packets go missing or ping climbs. Defers to "
+                + "HYPERBOOST while that is on. SERVER-SIDE only.");
             ConfigLog = config.Bind("10 - Diagnostics", "Log Adaptive Send Rate Ticks", false,
-                "Verbose per-tick diagnostics for the Adaptive Send Rate controller — each managed peer's cap, "
-                + "delivered throughput, queue depth and the branch taken, every tick. Useful for tuning, noisy "
-                + "for normal play. OFF by default. SERVER-SIDE only.");
-            ConfigEnabled.SettingChanged += (_, __) => MaybeStart();
-        }
-
-        [HarmonyPatch(typeof(ZNet), "Start"), HarmonyPostfix]
-        static void OnZNetStart() => MaybeStart();
-
-        // The coroutine host (FiresGhettoNetworkMod.Instance) outlives ZNet, so without these the loop
-        // survives a world teardown suspended on its yield and can double-start or stick the next session off.
-        [HarmonyPatch(typeof(ZNet), "Shutdown"), HarmonyPostfix]
-        static void OnZNetShutdown() => Stop();
-
-        [HarmonyPatch(typeof(ZNet), "OnDestroy"), HarmonyPostfix]
-        static void OnZNetDestroy() => Stop();
-
-        private static void MaybeStart()
-        {
-            if (s_running) return;
-            if (ConfigEnabled == null || !ConfigEnabled.Value) return;
-            if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (FiresGhettoNetworkMod.Instance == null) return;
-            s_loop = FiresGhettoNetworkMod.Instance.StartCoroutine(ControlLoop());
-        }
-
-        private static void Stop()
-        {
-            if (s_loop != null && FiresGhettoNetworkMod.Instance != null)
-                FiresGhettoNetworkMod.Instance.StopCoroutine(s_loop);
-            s_loop = null;
-            s_running = false;
-            s_wasBoosting = false;
-            s_state.Clear();
-        }
-
-        private static IEnumerator ControlLoop()
-        {
-            s_running = true;
-            s_wasBoosting = false;
-            s_loggedConfig = false;
-            s_state.Clear();
-            var wait = new WaitForSeconds(TickSeconds);
-            LoggerOptions.LogMessage($"[AdaptiveRate] controller ON (tick {TickSeconds:F1}s, high-water "
-                + $"back off when bad-connection (ping>{BadConnectionSecs:F0}s) holds {SustainTicks} ticks, up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, down x{BackoffStep:F1}).");
-
-            while (ZNet.instance != null && ZNet.instance.IsServer() && ConfigEnabled != null && ConfigEnabled.Value)
+                "Logs each player's link once a second: ping, send window, data in flight, Steam wait, delivery, pacing, "
+                + "goodput and the send rate decision. Noisy, for tuning only. SERVER-SIDE only.");
+            ConfigEnabled.SettingChanged += (_, __) =>
             {
-                if (EffectiveConfig.HyperBoost())
-                {
-                    // HyperBoost owns the rate; our pins are stale -> drop them so we re-pin cleanly when it ends.
-                    if (!s_wasBoosting) { s_state.Clear(); s_wasBoosting = true; }
-                }
-                else
-                {
-                    // HyperBoost's toggle-off re-applies the tier's (unequal) Min/Max, UN-pinning every
-                    // connection. Clearing here makes Tick() re-create + re-pin each peer this same tick.
-                    if (s_wasBoosting) { s_state.Clear(); s_wasBoosting = false; }
-                    if (!Suspend)
-                    {
-                        try { Tick(); }
-                        catch (System.Exception e) { LoggerOptions.LogWarning($"[AdaptiveRate] tick failed: {e.Message}"); }
-                    }
-                }
-                yield return wait;
-            }
-
-            s_running = false;
-            s_loop = null;
-            s_state.Clear();
-            LoggerOptions.LogMessage("[AdaptiveRate] controller OFF.");
-        }
-
-        private static void Tick()
-        {
-            var peers = ZNet.instance.GetPeers();
-            if (peers == null) return;
-
-            int buffer = EffectiveConfig.SteamSendBufferBytes();
-            int highWater = (int)(buffer * HighWaterFraction);
-            int baseline = EffectiveConfig.SteamSendRateMax();   // the tier baseline = both the START and the hard FLOOR
-            int minRate = baseline;                              // NEVER ease below the baseline — only ramp UP from it toward the ceiling
-            int ceiling = EffectiveConfig.HyperBoostSendRateMaxBytes;
-
-            if (!s_loggedConfig && ConfigLog != null && ConfigLog.Value)
-            {
-                s_loggedConfig = true;
-                LoggerOptions.LogMessage($"[AdaptiveRate] effective: start={baseline / BytesPerMegabyte}MB floor={minRate / BytesPerMegabyte}MB "
-                    + $"ceiling={ceiling / (long)BytesPerMegabyte}MB sendBuf={buffer / BytesPerMegabyte}MB highWater={highWater / BytesPerMegabyte}MB "
-                    + $"(up x{SlowStartFactor:F1}/x{CongAvoidFactor:F2}, back off x{BackoffStep:F1} after badconn>{BadConnectionSecs:F0}s x{SustainTicks})");
-            }
-
-            s_seen.Clear();
-            for (int i = 0; i < peers.Count; i++)
-            {
-                var peer = peers[i];
-                if (peer == null || peer.m_socket == null) continue;
-
-                PeerState peerState;
-                if (!s_state.TryGetValue(peer.m_uid, out peerState))
-                {
-                    uint connection = NetworkingRatesGroup.GetConnectionHandle(peer);
-                    if (connection == 0u) continue;   // PlayFab / crossplay — no per-connection control
-                    peerState = new PeerState { Conn = connection, Target = baseline, SlowStart = true };
-                    s_state[peer.m_uid] = peerState;
-                    s_seen.Add(peer.m_uid);
-                    NetworkingRatesGroup.SetConnectionRatePinned(connection, peerState.Target, raising: true);
-                    continue;
-                }
-                s_seen.Add(peer.m_uid);
-
-                if (peerState.Target < minRate) peerState.Target = minRate;   // floor at the link-safe minimum, NOT the baseline
-
-                int queue = peer.m_socket.GetSendQueueSize();
-                if (queue < 0) continue;
-
-                float delivered = NetworkStats.PeerSendBytesPerSec(peer.m_socket);
-                int oldTarget = peerState.Target;
-                string branch;
-                bool? pinned = null;
-
-                // The ONLY back-off trigger is Valheim's own "bad connection" condition for this peer: its ping
-                // reply overdue past BadConnectionSecs — the exact value (ZNet.m_badConnectionPing = 5s) that
-                // flashes the on-screen disconnect icon, a third of the 30s hard timeout. Queue depth and
-                // throughput were red herrings. While the game says the link is healthy we keep ramping UP;
-                // only when it says the connection is in trouble, sustained for SustainTicks, do we ease down.
-                float pingAge = 0f;
-                bool badConn = false;
-                try { if (peer.IsReady() && peer.m_rpc != null) { pingAge = peer.m_rpc.GetTimeSinceLastPing(); badConn = pingAge > BadConnectionSecs; } } catch { }
-
-                if (badConn)
-                {
-                    branch = $"BADCONN {peerState.PressureTicks + 1}/{SustainTicks}";
-                    if (++peerState.PressureTicks >= SustainTicks)
-                    {
-                        peerState.PressureTicks = 0;
-                        peerState.SlowStart = false;
-                        int next = Mathf.Max(minRate, (int)(peerState.Target * BackoffStep));
-                        if (next < peerState.Target)
-                        {
-                            peerState.Target = next;
-                            pinned = NetworkingRatesGroup.SetConnectionRatePinned(peerState.Conn, peerState.Target, raising: false);
-                            branch = "BACKOFF";
-                        }
-                        else branch = "BACKOFF-floored";
-                    }
-                }
-                else
-                {
-                    peerState.PressureTicks = 0;
-                    if (peerState.Target < ceiling)
-                    {
-                        long next = (long)(peerState.Target * (peerState.SlowStart ? SlowStartFactor : CongAvoidFactor));
-                        if (next <= peerState.Target) next = peerState.Target + MinStepBytes;   // always make forward progress
-                        if (next > ceiling) next = ceiling;
-                        peerState.Target = (int)next;
-                        pinned = NetworkingRatesGroup.SetConnectionRatePinned(peerState.Conn, peerState.Target, raising: true);
-                        branch = peerState.SlowStart ? "RAISE-fast" : "RAISE";
-                    }
-                    else branch = "RAISE-ceiling";
-                }
-
-                if (ConfigLog != null && ConfigLog.Value)
-                    LoggerOptions.LogMessage($"[AdaptiveRate] peer {peer.m_uid} {branch}: cap {oldTarget / BytesPerMegabyte}->{peerState.Target / BytesPerMegabyte} MB/s, "
-                        + $"delivered {delivered / (float)BytesPerMegabyte:F1} MB/s, pingAge {pingAge:F1}/{BadConnectionSecs:F0}s, "
-                        + $"queue {queue / (float)BytesPerMegabyte:F1}/{highWater / BytesPerMegabyte} MB"
-                        + (pinned.HasValue ? (pinned.Value ? " [pin ok]" : " [PIN FAILED]") : "")
-                        + DescribeSteamSide(peer.m_socket));
-            }
-
-            if (s_state.Count > s_seen.Count)
-            {
-                s_stale.Clear();
-                foreach (var kv in s_state) if (!s_seen.Contains(kv.Key)) s_stale.Add(kv.Key);
-                for (int i = 0; i < s_stale.Count; i++) s_state.Remove(s_stale[i]);
-            }
-        }
-
-        // Steam's side of the same peer: the rate it is actually pacing at, how long newly queued data waits there, what
-        // it has sent that is still unacknowledged, and the share of our packets the peer reports receiving.
-        private static string DescribeSteamSide(ISocket socket)
-        {
-            if (!NetworkStats.TryGameServerStatus(socket, out Steamworks.SteamNetConnectionRealTimeStatus_t status)) return "";
-            return $" | steam: pacing {status.m_nSendRateBytesPerSecond / (float)BytesPerMegabyte:F1} MB/s, "
-                + $"wait {(long)status.m_usecQueueTime / 1000L} ms, unacked {status.m_cbSentUnackedReliable / (float)BytesPerMegabyte:F1} MB, "
-                + $"pending {status.m_cbPendingReliable / (float)BytesPerMegabyte:F1} MB, "
-                + $"delivered to peer {(status.m_flConnectionQualityRemote < 0f ? "n/a" : (status.m_flConnectionQualityRemote * 100f).ToString("F0") + "%")}";
+                LinkController.ResetRates();
+                if (!ConfigEnabled.Value) NetworkingRatesGroup.ApplyEffectiveRatesLiveToAllPeers();
+            };
         }
     }
 }

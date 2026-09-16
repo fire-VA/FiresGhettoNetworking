@@ -103,9 +103,7 @@ namespace FiresGhettoNetworkMod
             catch { return snap; }
             if (peers == null) return snap;
 
-            int cap = SendCongestion.EffectiveCapBytes();
-            float congestionThreshold = SendCongestion.CongestionThresholdBytes();
-            snap.CapBytes = cap;
+            snap.CapBytes = SendCongestion.EffectiveCapBytes();
 
             long totalQueue = 0L;
             int congested = 0;
@@ -128,7 +126,7 @@ namespace FiresGhettoNetworkMod
                 if (queue > 0)
                 {
                     totalQueue += queue;
-                    if (queue >= congestionThreshold) congested++;
+                    if (SendCongestion.IsCongested(peer, queue)) congested++;
                 }
 
                 try

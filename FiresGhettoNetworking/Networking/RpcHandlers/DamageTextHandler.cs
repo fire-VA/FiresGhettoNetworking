@@ -1,28 +1,40 @@
+using UnityEngine;
+
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Drops DamageText RPCs from being routed to other clients.
-    /// 
-    /// DamageText is purely visual - each client generates their own damage numbers
-    /// from the damage event. Routing these RPCs to all clients is wasted bandwidth.
-    /// 
-    /// Based on BetterZeeRouter.DamageTextHandler.
+    /// Relays damage numbers only to players near them. The owner of whatever was hit raises RPC_DamageText to everybody,
+    /// and each receiver throws away any number more than 30 m from its camera.
     /// </summary>
     public sealed class DamageTextHandler : RpcMethodHandler
     {
-        private static readonly DamageTextHandler _instance = new DamageTextHandler();
+        private static readonly DamageTextHandler s_instance = new DamageTextHandler();
 
         private DamageTextHandler() { }
 
-        public static void Register()
-        {
-            RoutedRpcManager.AddHandler("DamageText", _instance);
-        }
+        public static void Register() => RoutedRpcManager.AddHandler("RPC_DamageText", s_instance);
 
         public override bool Process(ZRoutedRpc.RoutedRPCData routedRpcData)
         {
-            // Block - DamageText is client-only visual, no need to route
-            return false;
+            var parameters = routedRpcData.m_parameters;
+            if (parameters == null) return true;
+            int saved = parameters.GetPos();
+            try
+            {
+                parameters.SetPos(0);
+                var text = parameters.ReadPackage();
+                text.ReadInt();
+                Vector3 position = text.ReadVector3();
+                RoutedRpcManager.SetPositionHint(position, RoutedRpcManager.PositionRadius());
+            }
+            catch
+            {
+            }
+            finally
+            {
+                parameters.SetPos(saved);
+            }
+            return true;
         }
     }
 }

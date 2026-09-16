@@ -20,13 +20,6 @@ namespace FiresGhettoNetworkMod
             return Mathf.Clamp(pct, 10, 100) / 100f;
         }
 
-        /// <summary>
-        /// Absolute send-queue byte level at which a peer counts as congested — the
-        /// same cap × threshold the throttling gate uses. Exposed so external readers
-        /// (e.g. NetworkStats) classify congestion identically to the gate itself.
-        /// </summary>
-        public static float CongestionThresholdBytes() => EffectiveCapBytes() * ThresholdFraction();
-
         public static int GetQueueSize(ZDOMan.ZDOPeer peer)
         {
             if (peer == null || peer.m_peer == null || peer.m_peer.m_socket == null) return -1;
@@ -34,13 +27,16 @@ namespace FiresGhettoNetworkMod
             catch { return -1; }
         }
 
-        /// <summary>True when this peer's send queue has backed up past the threshold.</summary>
+        /// <summary>True when this peer's send queue has backed up past the threshold of its own send window.</summary>
         public static bool IsPeerCongested(ZDOMan.ZDOPeer peer)
         {
             int queueBytes = GetQueueSize(peer);
             if (queueBytes < 0) return false;
-            return queueBytes >= EffectiveCapBytes() * ThresholdFraction();
+            return queueBytes >= LinkController.WindowBytes(peer) * ThresholdFraction();
         }
+
+        public static bool IsCongested(ZNetPeer peer, int queueBytes)
+            => queueBytes >= LinkController.WindowBytes(peer) * ThresholdFraction();
 
         // Global "is ANY peer congested" signal for subsystems that don't hold a peer
         // handle (AI LOD runs per-mob in CustomFixedUpdate). Cached for a short window
@@ -59,14 +55,13 @@ namespace FiresGhettoNetworkMod
             s_cached = false;
             if (ZNet.instance == null) return false;
 
-            float thresholdBytes = EffectiveCapBytes() * ThresholdFraction();
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
             {
                 if (peer == null || peer.m_socket == null) continue;
                 int queueBytes;
                 try { queueBytes = peer.m_socket.GetSendQueueSize(); }
                 catch { continue; }
-                if (queueBytes >= thresholdBytes) { s_cached = true; break; }
+                if (IsCongested(peer, queueBytes)) { s_cached = true; break; }
             }
             return s_cached;
         }
