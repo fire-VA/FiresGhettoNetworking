@@ -275,7 +275,7 @@
   <!-- Copies the built DLL and PDB into the r2modman 'BlueHills' test profile. Gated on Exists so a
        missing profile skips instead of failing the build. -->
   <PropertyGroup>
-    <BlueHillsPluginDir>C:\Users\travi\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\BlueHills\BepInEx\plugins\VerdantsAscent-FiresGhettoNetworking\</BlueHillsPluginDir>
+    <BlueHillsPluginDir>$(AppData)\r2modmanPlus-local\Valheim\profiles\BlueHills\BepInEx\plugins\VerdantsAscent-FiresGhettoNetworking\</BlueHillsPluginDir>
   </PropertyGroup>
   <Target Name="DeployToBlueHills" AfterTargets="Build" Condition="Exists('$(BlueHillsPluginDir)')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BlueHillsPluginDir)" OverwriteReadOnlyFiles="true" />
