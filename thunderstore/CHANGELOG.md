@@ -1,5 +1,10 @@
-* v1.4.23 - connection fix
-  - players no longer get disconnected while a lot of data is being sent to them, like a big base loading in (new setting "Keep Busy Connections Alive", on by default)
+* v1.4.31 - fairer sending, station fixes and lighter servers
+  - the server sizes each player's connection to what it actually carries, and opens it back up once the line clears
+  - chat, effects and damage numbers only go to the players who can see them, instead of everyone on the server
+  - monsters are handed to the player with the best connection, so they stop rubber-banding for everyone else, and whoever is fighting one keeps it
+  - slow server frames are broken down in the log, so a stall can be traced to what actually caused it
+
+* v1.4.23 - optimization fixes
 
 * v1.4.22 - compression rebuild and server fixes
   - compression rebuilt: less CPU for the same or better savings, and damaged packets are caught instead of loaded

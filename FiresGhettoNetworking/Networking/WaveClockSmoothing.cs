@@ -8,12 +8,9 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Every two seconds the server overwrites each client's clock (ZNet.RPC_NetTime), and vanilla samples wave height
-    /// straight from that clock, so each correction moves the water under a ship within one physics step.
-    /// Ship.UpdateWaterForce reads a fast enough change as the hull slamming into the water and damages the ship while
-    /// players are aboard. Waves here follow a clock that absorbs each correction and pays it back gradually, so the
-    /// water only ever moves continuously. A correction too large to be network timing (sleep, reconnect) applies at
-    /// once, as in vanilla. Clients only: nothing corrects a server's clock.
+    /// Every two seconds the server overwrites each client's clock (ZNet.RPC_NetTime); vanilla reads wave height straight from
+    /// it, so a correction moves the water under a ship in one physics step and Ship.UpdateWaterForce reads that as a hull slam.
+    /// Waves here follow a clock that pays corrections back gradually, unless one is too large to be network timing.
     /// </summary>
     [HarmonyPatch]
     public static class WaveClockSmoothing
@@ -31,7 +28,10 @@ namespace FiresGhettoNetworkMod
 
         private static double s_carriedSeconds;
         private static int s_reportCount;
-        private static double s_reportLargestSeconds;
+        private static double s_reportLargestBehindSeconds;
+        private static double s_reportLargestAheadSeconds;
+        private static float s_reportLongestFrameSeconds;
+        private static DateTime s_reportLongestFrameEnded;
         private static float s_nextReportTime;
 
         private static bool Enabled => FiresGhettoNetworkMod.ConfigFixBoatDamageFromTimeSync?.Value ?? false;
@@ -50,13 +50,19 @@ namespace FiresGhettoNetworkMod
             s_carriedSeconds = Math.Max(-MaxCarriedSeconds, Math.Min(MaxCarriedSeconds, s_carriedSeconds - correction));
             if (Math.Abs(correction) >= ReportThresholdSeconds)
                 CapeCrashDiagnostics.Log($"Server clock correction {correction * 1000:0} ms, carried {s_carriedSeconds * 1000:0} ms");
-            Report(Math.Abs(correction));
+            Report(correction);
         }
 
         [HarmonyPatch(typeof(ZNet), "UpdateNetTime")]
         [HarmonyPostfix]
         public static void ZNet_UpdateNetTime_Postfix(float dt)
         {
+            float frameSeconds = Time.unscaledDeltaTime;
+            if (frameSeconds > s_reportLongestFrameSeconds)
+            {
+                s_reportLongestFrameSeconds = frameSeconds;
+                s_reportLongestFrameEnded = DateTime.Now;
+            }
             if (s_carriedSeconds == 0.0) return;
 
             double payback = dt * PaybackRate;
@@ -117,20 +123,24 @@ namespace FiresGhettoNetworkMod
 
         private static void Report(double correctionSeconds)
         {
-            if (correctionSeconds < ReportThresholdSeconds) return;
+            if (Math.Abs(correctionSeconds) < ReportThresholdSeconds) return;
 
             s_reportCount++;
-            if (correctionSeconds > s_reportLargestSeconds) s_reportLargestSeconds = correctionSeconds;
+            if (correctionSeconds > s_reportLargestBehindSeconds) s_reportLargestBehindSeconds = correctionSeconds;
+            if (-correctionSeconds > s_reportLargestAheadSeconds) s_reportLargestAheadSeconds = -correctionSeconds;
             if (Time.realtimeSinceStartup < s_nextReportTime) return;
 
             LoggerOptions.LogInfo(
                 $"[WaveClock] Eased in {s_reportCount} server clock correction(s) of {ReportThresholdSeconds * 1000:F0} ms or more "
-                + $"since the last report, the largest {s_reportLargestSeconds * 1000:F0} ms. Vanilla applies each one at once, "
-                + "which moves the water under ships in a single step and can damage a boat with players aboard. "
-                + $"Next report in {ReportIntervalSec / 60f:F0} min at the earliest.");
+                + $"since the last report: the largest {s_reportLargestBehindSeconds * 1000:F0} ms with this client's clock behind the "
+                + $"server's, {s_reportLargestAheadSeconds * 1000:F0} ms with it ahead; this client's longest frame was "
+                + $"{s_reportLongestFrameSeconds * 1000:F0} ms, ending at {s_reportLongestFrameEnded:HH:mm:ss}. Vanilla applies each one at once, which moves the water under ships in "
+                + $"a single step and can damage a boat with players aboard. Next report in {ReportIntervalSec / 60f:F0} min at the earliest.");
 
             s_reportCount = 0;
-            s_reportLargestSeconds = 0.0;
+            s_reportLargestBehindSeconds = 0.0;
+            s_reportLargestAheadSeconds = 0.0;
+            s_reportLongestFrameSeconds = 0f;
             s_nextReportTime = Time.realtimeSinceStartup + ReportIntervalSec;
         }
     }

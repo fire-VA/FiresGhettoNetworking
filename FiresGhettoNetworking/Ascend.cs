@@ -17,7 +17,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.23";
+        public const string PluginVersion = "1.4.31";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -152,6 +152,11 @@ namespace FiresGhettoNetworkMod
             InvokeStaticInitByTypeName("FiresGhettoNetworkMod.DedicatedServerGroup", "Init", new object[] { Config });
             SendQueueHeadroomMonitor.InitConfig(Config);
             AdaptiveSendRate.InitConfig(Config);
+            LinkController.InitConfig(Config);
+            SendScheduler.InitConfig(Config);
+            StationRouter.InitConfig(Config);
+            CreatureOwnership.InitConfig(Config);
+            SectorChangeTracker.InitConfig(Config);
 
             Harmony.PatchAll(typeof(CompressionGroup));
             Harmony.PatchAll(typeof(NetworkingRatesGroup));
@@ -179,7 +184,13 @@ namespace FiresGhettoNetworkMod
 
             Harmony.PatchAll(typeof(SendQueueHeadroomMonitor));
 
-            Harmony.PatchAll(typeof(AdaptiveSendRate));
+            Harmony.PatchAll(typeof(LinkController));
+
+            Harmony.PatchAll(typeof(SendScheduler));
+
+            Harmony.PatchAll(typeof(ConnectionEcho));
+
+            Harmony.PatchAll(typeof(CreatureOwnership));
 
             Harmony.PatchAll(typeof(KeepaliveFirst));
 
@@ -274,25 +285,20 @@ namespace FiresGhettoNetworkMod
         /// <summary>Dedicated-server traffic shaping. None of it needs Server-Side Simulation; each feature follows its own toggle.</summary>
         private static void ApplyServerTrafficPatches()
         {
+            Harmony.PatchAll(typeof(ServerFrameProfile));
+            Harmony.PatchAll(typeof(SectorChangeTracker));
             Harmony.PatchAll(typeof(ZDOThrottlingPatches));
             Harmony.PatchAll(typeof(AILODPatches));
 
-            if (ConfigEnableRpcRouter.Value)
+            if (ConfigEnableRpcRouter.Value || StationRouter.ConfigEnabled.Value)
             {
                 Harmony.PatchAll(typeof(RpcRouterPatches));
+                Harmony.PatchAll(typeof(StationRouter));
                 DamageTextHandler.Register();
-                HealthChangedHandler.Register();
-                WNTHealthChangedHandler.Register();
-                SetTargetHandler.Register();
-                AddNoiseHandler.Register();
-                TriggerAnimationHandler.Register();
-                TriggerOnDeathHandler.Register();
-                TalkerSayHandler.Register();
-                SpawnedZoneHandler.Register();
                 VAGhettoLoadSummary.EmitRpcRouter(
                     handlersRegistered: RoutedRpcManager.HandlerCount,
-                    aoiRadius: ConfigRpcAoIRadius?.Value ?? 256f,
-                    aoiEnabled: ConfigEnableRpcAoI?.Value ?? false);
+                    aoiRadius: RoutedRpcManager.PositionRadius(),
+                    aoiEnabled: RoutedRpcManager.FilteringEnabled());
                 if (VAGhettoLoadSummary.VerboseEnabled)
                     LoggerOptions.LogInfo("RPC Router enabled — handlers: " + string.Join(", ", RoutedRpcManager.HandlerMethodNames) + ".");
             }
@@ -330,12 +336,14 @@ namespace FiresGhettoNetworkMod
                         "Both 'Server ZDO Ownership Transfer' flags are ENABLED — selective (V3) takes precedence; broad (V2) is being ignored. Disable one to silence this warning.");
                 }
                 Harmony.PatchAll(typeof(ServerOwnershipPatchesV3));
+                CreatureOwnership.ServerOwnsCreatures = true;
                 LoggerOptions.LogMessage(
                     "Server ZDO ownership (V3 SELECTIVE) ENABLED — Character/Ship only; drops/voxel/interactables/carts stay peer-owned.");
             }
             else if (ConfigEnableServerOwnership.Value)
             {
                 Harmony.PatchAll(typeof(ServerOwnershipPatches));
+                CreatureOwnership.ServerOwnsCreatures = true;
                 LoggerOptions.LogMessage(
                     "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED — every persistent ZDO in any peer's active area will be claimed by the server.");
                 if (!ConfigEnableServerSideShipSimulation.Value)
@@ -649,13 +657,13 @@ namespace FiresGhettoNetworkMod
                 "04 - Networking",
                 "ZDO Send Rate",
                 UpdateRateOptions._100,
-                "How often the server SENDS ZDO updates to clients. This is a NETWORK send-cadence\n" +
-                "setting ONLY — it does NOT change the world/game tick, day length, smelter/cook timers,\n" +
-                "cooldowns, or any simulation speed. Higher = other players/creatures look smoother to\n" +
-                "you, at the cost of more bandwidth.\n" +
-                "100% (20 sends/sec) matches vanilla and is the safe default. 150% (30 sends/sec) can look\n" +
-                "smoother on high-pop servers with bandwidth headroom; lower it if bandwidth is tight.\n" +
-                "SERVER-ONLY.");
+                "How many times a second each player is sent world updates (and a client sends its own). This is a\n" +
+                "NETWORK send-cadence setting ONLY: it does NOT change the world tick, day length, smelter or cooking\n" +
+                "timers, cooldowns or any simulation speed. Higher = other players and creatures look smoother, at the\n" +
+                "cost of more bandwidth and server CPU.\n" +
+                "100% (20 per second) is vanilla's intended rate. Vanilla only reaches it with one or two players, because\n" +
+                "it serves one player per frame; 'Send To Every Player Each Frame' gives every player this rate.\n" +
+                "150% (30 per second) can look smoother when bandwidth and CPU allow. Never goes below vanilla.");
 
             ConfigSendRateMin = Config.Bind(
                 "05 - Networking - Steamworks",
@@ -691,7 +699,9 @@ namespace FiresGhettoNetworkMod
                 "04 - Networking",
                 "Queue Size",
                 QueueSizeOptions._32KB,
-                "Send queue size. Higher helps high-player servers.");
+                "The largest single package of world updates sent to one player at a time, and the starting send window\n" +
+                "for each player. With 'Adaptive Send Window' off, or for crossplay players, it is also the fixed limit on\n" +
+                "data in flight to each player. Vanilla is 10 KB.");
 
             ConfigForceCrossplay = Config.Bind(
                 "09 - Dedicated Server",
@@ -800,10 +810,11 @@ namespace FiresGhettoNetworkMod
                 "10 - Server Authority",
                 "Enable RPC Router",
                 true,
-                "Server-side RPC filtering \u2014 drops unnecessary DamageText/HealthChanged RPCs before routing\n" +
-                "and prevents SetTarget exploits (targeting players/tamed creatures).\n" +
-                "Saves bandwidth and hardens server security.\n" +
-                "SERVER-ONLY \u2014 no effect on client.");
+                "Server-side relay for the messages players broadcast. Vanilla sends every footstep, swing, damage number and\n" +
+                "destroyed object to every player on the server. With 'Enable RPC Area-of-Interest' on, a message about an\n" +
+                "object only goes to players the server has sent that object, and a damage number only to players near it.\n" +
+                "Nothing is dropped that a player could have used. Requires restart.\n" +
+                "DEDICATED SERVER ONLY.");
 
             ConfigEnableShipFixes = Config.Bind(
                 "11 - Ship Fixes",
@@ -829,19 +840,18 @@ namespace FiresGhettoNetworkMod
                 "10 - Server Authority",
                 "Enable RPC Area-of-Interest",
                 true,
-                "When enabled, broadcast RPCs targeting a specific ZDO are only forwarded to peers\n" +
-                "within the configured radius of that ZDO. Massively reduces bandwidth on busy servers.\n" +
-                "RPCs without a target ZDO (global RPCs) are always broadcast to all peers.\n" +
-                "Requires Enable RPC Router = true. SERVER-ONLY.");
+                "Relays a broadcast about an object only to players who have that object, destroyed objects only to players\n" +
+                "who held them, and damage numbers only to players within 'RPC AoI Radius'. Each of those players would\n" +
+                "discard the message anyway. Broadcasts with no object or position still go to everyone.\n" +
+                "Requires Enable RPC Router = true. DEDICATED SERVER ONLY.");
 
             ConfigRpcAoIRadius = Config.Bind(
                 "10 - Server Authority",
                 "RPC AoI Radius",
                 256f,
                 new ConfigDescription(
-                    "Distance (meters) from the target ZDO within which peers will receive the RPC.\n" +
-                    "Vanilla active area is ~7 zones × 64m = ~448m. Default 256m covers nearby players.\n" +
-                    "Set higher if players report missing interactions at distance.",
+                    "Distance in meters within which players are sent messages that carry only a position, such as damage\n" +
+                    "numbers (each player shows those within 30 m of their camera). Auto-Tune sets it when it is on.",
                     new AcceptableValueRange<float>(64f, 1024f)));
 
             ConfigClientMaxDestroysPerFrame = Config.Bind(

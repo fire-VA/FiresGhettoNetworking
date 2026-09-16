@@ -14,6 +14,7 @@
     <FileAlignment>512</FileAlignment>
     <CodePage>65001</CodePage>
     <Deterministic>true</Deterministic>
+    <PathMap>$(MSBuildProjectDirectory)=/_/</PathMap>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
@@ -179,7 +180,7 @@
       <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.UIModule.dll</HintPath>
     </Reference>
     <Reference Include="UnityEngine.UnityWebRequestModule">
-      <HintPath>..\..\..\ValheimDll\UnityEngine.UnityWebRequestModule.dll</HintPath>
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\UnityEngine.UnityWebRequestModule.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>
@@ -214,6 +215,14 @@
     <Compile Include="Networking\SocketStressTests.cs" />
     <Compile Include="Networking\SendQueueHeadroomMonitor.cs" />
     <Compile Include="Networking\AdaptiveSendRate.cs" />
+    <Compile Include="Networking\LinkController.cs" />
+    <Compile Include="Networking\SendScheduler.cs" />
+    <Compile Include="Networking\StationRouter.cs" />
+    <Compile Include="Networking\ServerFrameProfile.cs" />
+    <Compile Include="Networking\SectorChangeTracker.cs" />
+    <Compile Include="Networking\ConnectionEcho.cs" />
+    <Compile Include="Networking\CreatureOwnership.cs" />
+    <Compile Include="Networking\VanillaAccess.cs" />
     <Compile Include="Networking\KeepaliveFirst.cs" />
     <Compile Include="Networking\AdminConsoleEcho.cs" />
     <Compile Include="Networking\ZdoFloodTest.cs" />
@@ -223,15 +232,7 @@
     <Compile Include="Networking\NetworkStats.cs" />
     <Compile Include="Networking\PlayerPositionSyncPatches.cs" />
     <Compile Include="Networking\RoutedRpcManager.cs" />
-    <Compile Include="Networking\RpcHandlers\AddNoiseHandler.cs" />
     <Compile Include="Networking\RpcHandlers\DamageTextHandler.cs" />
-    <Compile Include="Networking\RpcHandlers\HealthChangedHandler.cs" />
-    <Compile Include="Networking\RpcHandlers\SetTargetHandler.cs" />
-    <Compile Include="Networking\RpcHandlers\SpawnedZoneHandler.cs" />
-    <Compile Include="Networking\RpcHandlers\TalkerSayHandler.cs" />
-    <Compile Include="Networking\RpcHandlers\TriggerAnimationHandler.cs" />
-    <Compile Include="Networking\RpcHandlers\TriggerOnDeathHandler.cs" />
-    <Compile Include="Networking\RpcHandlers\WNTHealthChangedHandler.cs" />
     <Compile Include="Networking\RpcMethodHandler.cs" />
     <Compile Include="Networking\RenderLimitsCompat.cs" />
     <Compile Include="Networking\RpcRouterPatches.cs" />

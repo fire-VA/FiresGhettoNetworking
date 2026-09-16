@@ -1,211 +1,224 @@
 using System.Collections.Generic;
+using FiresGhettoNetworkMod.AutoTune;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Server-side replacement for ZRoutedRpc.RPC_RoutedRPC. Each registered handler gets a look at the RPC
-    /// first (it can rewrite the package, drop the call, or set a position hint), then the survivor is routed,
-    /// optionally only to peers within a radius of the target ZDO or that hint. Vanilla's dispatch rules are
-    /// preserved exactly: our own id handles locally and stops, target 0 handles locally and forwards,
-    /// anything else forwards only.
+    /// Server-side relay for routed RPCs, which vanilla broadcasts to every player. A broadcast about an object goes only to
+    /// players the server has sent that object, a destroy only to players who held one (captured before vanilla forgets them),
+    /// and a damage number only to players near it.
     /// </summary>
     public static class RoutedRpcManager
     {
-        public static readonly Dictionary<int, string> HashCodeToMethodNameCache
-            = new Dictionary<int, string>();
+        public static readonly Dictionary<int, string> HashCodeToMethodNameCache = new Dictionary<int, string>();
 
-        private static readonly Dictionary<int, List<RpcMethodHandler>> _rpcMethodHandlers
-            = new Dictionary<int, List<RpcMethodHandler>>();
-
-        // Reused per call. RPC routing is main-thread single-threaded; safe.
-        private static readonly ZRoutedRpc.RoutedRPCData _routedRpcData
-            = new ZRoutedRpc.RoutedRPCData();
-
-        // Per-RPC AoI radius override — set by a handler before returning true,
-        // consumed by ProcessRoutedRPC on the same call. -1 = use config radius.
-        private static float _aoiRadiusOverride = -1f;
-
-        /// <summary>World-wide RPCs that must never be narrowed to a radius. "Say" is deliberately absent: its range is filtered on purpose.</summary>
-        private static readonly HashSet<int> _aoiExemptMethodHashes = new HashSet<int>
+        private static readonly Dictionary<int, List<RpcMethodHandler>> s_handlers = new Dictionary<int, List<RpcMethodHandler>>();
+        private static readonly ZRoutedRpc.RoutedRPCData s_data = new ZRoutedRpc.RoutedRPCData();
+        private static readonly int s_destroyZdoHash = "DestroyZDO".GetStableHashCode();
+        private static readonly HashSet<int> s_worldWide = new HashSet<int>
         {
             "SleepStart".GetStableHashCode(),
             "SleepStop".GetStableHashCode(),
         };
+        private static readonly List<ZNetPeer> s_recipients = new List<ZNetPeer>();
+        private static readonly List<ZDOID> s_ids = new List<ZDOID>();
+        private static readonly List<ZNetPeer> s_serverRecipients = new List<ZNetPeer>();
+        private static readonly List<ZDOID> s_serverIds = new List<ZDOID>();
+        private static readonly List<ZNetPeer> s_serverDestroyRecipients = new List<ZNetPeer>();
+        private static bool s_serverDestroyCaptured;
+        private static bool s_hasPositionHint;
+        private static Vector3 s_positionHint;
+        private static float s_radiusHint;
 
-        public static void SetAoIRadiusOverride(float radius)
-        {
-            _aoiRadiusOverride = radius;
-        }
-
-        public static int HandlerCount => _rpcMethodHandlers.Count;
+        public static int HandlerCount => s_handlers.Count;
 
         public static IEnumerable<string> HandlerMethodNames => HashCodeToMethodNameCache.Values;
 
         public static void AddHandler(string methodName, RpcMethodHandler handler)
         {
-            int methodHashCode = methodName.GetStableHashCode();
-            HashCodeToMethodNameCache[methodHashCode] = methodName;
-
-            LoggerOptions.LogInfo($"[RpcRouter] Registering handler for {methodName} ({methodHashCode}): {handler.GetType().Name}");
-
-            List<RpcMethodHandler> handlers;
-            if (!_rpcMethodHandlers.TryGetValue(methodHashCode, out handlers))
+            int hash = methodName.GetStableHashCode();
+            HashCodeToMethodNameCache[hash] = methodName;
+            if (!s_handlers.TryGetValue(hash, out var handlers))
             {
                 handlers = new List<RpcMethodHandler>();
-                _rpcMethodHandlers[methodHashCode] = handlers;
+                s_handlers[hash] = handlers;
             }
-            handlers.Add(handler);
+            if (!handlers.Contains(handler)) handlers.Add(handler);
         }
 
-        /// <summary>
-        /// Entry point from the ZRoutedRpc.RPC_RoutedRPC prefix patch.
-        /// Mirrors vanilla's local-vs-forward gating, then runs handlers and
-        /// performs (optionally AoI-filtered) forwarding.
-        /// </summary>
+        public static void SetPositionHint(Vector3 position, float radius)
+        {
+            s_hasPositionHint = true;
+            s_positionHint = position;
+            s_radiusHint = radius;
+        }
+
+        internal static bool RouterEnabled()
+            => FiresGhettoNetworkMod.ConfigEnableRpcRouter != null && FiresGhettoNetworkMod.ConfigEnableRpcRouter.Value;
+
+        internal static bool FilteringEnabled()
+            => RouterEnabled() && FiresGhettoNetworkMod.ConfigEnableRpcAoI != null && FiresGhettoNetworkMod.ConfigEnableRpcAoI.Value;
+
+        internal static float PositionRadius() => Mathf.Clamp(EffectiveConfig.RpcAoIRadius(), 64f, 1024f);
+
         public static void ProcessRoutedRPC(ZRoutedRpc routedRpc, ZRpc rpc, ZPackage package)
         {
-            _routedRpcData.Deserialize(package);
+            var data = s_data;
+            data.Deserialize(package);
+            long target = data.m_targetPeerID;
+            CreatureOwnership.ObserveRoutedRpc(data);
 
-            long target = _routedRpcData.m_targetPeerID;
-            long selfId = routedRpc.m_id;
-
-            if (target == selfId)
+            if (target == VanillaAccess.RoutedRpcId(routedRpc))
             {
-                routedRpc.HandleRoutedRPC(_routedRpcData);
-                ClearTransientState();
+                VanillaAccess.HandleRoutedRpc(routedRpc, data);
                 return;
             }
 
-            if (target == 0L)
-            {
-                routedRpc.HandleRoutedRPC(_routedRpcData);
-            }
+            if (StationRouter.TryRoute(routedRpc, data)) return;
 
-            if (!ProcessHandlers(_routedRpcData))
+            bool filtering = FilteringEnabled();
+            if (target == 0L && filtering && data.m_methodHash == s_destroyZdoHash && CollectDestroyHolders(data, s_recipients))
             {
-                ClearTransientState();
+                VanillaAccess.HandleRoutedRpc(routedRpc, data);
+                SendTo(data, s_recipients);
                 return;
             }
 
-            ForwardRpc(routedRpc, target);
-            ClearTransientState();
-        }
+            if (target == 0L) VanillaAccess.HandleRoutedRpc(routedRpc, data);
 
-        // Forwards the RPC to the appropriate peer(s). For broadcasts with AoI
-        // enabled, narrows to peers within radius of the target ZDO (or the
-        // handler-provided position hint). Otherwise calls vanilla RouteRPC,
-        // which knows how to handle both the broadcast and the specific-peer
-        // cases.
-        private static void ForwardRpc(ZRoutedRpc routedRpc, long target)
-        {
-            bool isBroadcast = target == 0L;
-            bool aoiEnabled = FiresGhettoNetworkMod.ConfigEnableRpcAoI != null
-                              && FiresGhettoNetworkMod.ConfigEnableRpcAoI.Value;
-
-            if (!isBroadcast || !aoiEnabled || _aoiExemptMethodHashes.Contains(_routedRpcData.m_methodHash))
+            try
             {
-                routedRpc.RouteRPC(_routedRpcData);
-                return;
+                if (RouterEnabled() && !ProcessHandlers(data)) return;
+                if (target != 0L || !filtering || s_worldWide.Contains(data.m_methodHash)
+                    || !CollectRecipients(routedRpc, data, s_recipients, s_ids))
+                {
+                    VanillaAccess.RouteRpc(routedRpc, data);
+                    return;
+                }
+                SendTo(data, s_recipients);
             }
-
-            float radius = _aoiRadiusOverride > 0f
-                ? _aoiRadiusOverride
-                : FiresGhettoNetworkMod.ConfigRpcAoIRadius.Value;
-
-            if (!_routedRpcData.m_targetZDO.IsNone())
+            finally
             {
-                RouteRPCWithAoIFromZDO(routedRpc, _routedRpcData, radius);
-                return;
-            }
-
-            if (SpawnedZonePositionHint.HasHint)
-            {
-                RouteRPCWithAoIFromPosition(routedRpc, _routedRpcData,
-                    SpawnedZonePositionHint.Position, radius);
-                return;
-            }
-
-            routedRpc.RouteRPC(_routedRpcData);
-        }
-
-        private static void ClearTransientState()
-        {
-            _aoiRadiusOverride = -1f;
-            SpawnedZonePositionHint.Clear();
-        }
-
-        // AoI broadcast filtered by the target ZDO's world position.
-        // Falls back to a plain broadcast if the ZDO can't be resolved.
-        private static void RouteRPCWithAoIFromZDO(
-            ZRoutedRpc routedRpc,
-            ZRoutedRpc.RoutedRPCData rpcData,
-            float radius)
-        {
-            ZDO targetZdo;
-            if (!ZDOMan.instance.m_objectsByID.TryGetValue(rpcData.m_targetZDO, out targetZdo))
-            {
-                routedRpc.RouteRPC(rpcData);
-                return;
-            }
-            RouteRPCWithAoIFromPosition(routedRpc, rpcData, targetZdo.m_position, radius);
-        }
-
-        // AoI broadcast filtered by explicit world position.
-        // Serialise once, peek each peer's refpos, invoke RoutedRPC manually
-        // for peers within radius — bypasses vanilla RouteRPC, since vanilla
-        // has no AoI hook.
-        private static void RouteRPCWithAoIFromPosition(
-            ZRoutedRpc routedRpc,
-            ZRoutedRpc.RoutedRPCData rpcData,
-            Vector3 worldPos,
-            float radius)
-        {
-            float radiusSqr = radius * radius;
-
-            ZPackage pkg = new ZPackage();
-            rpcData.Serialize(pkg);
-
-            foreach (ZNetPeer peer in routedRpc.m_peers)
-            {
-                if (rpcData.m_senderPeerID == peer.m_uid || !peer.IsReady()) continue;
-
-                Vector3 peerPos = peer.GetRefPos();
-                float dx = peerPos.x - worldPos.x;
-                float dz = peerPos.z - worldPos.z;
-
-                if (dx * dx + dz * dz <= radiusSqr)
-                    peer.m_rpc.Invoke("RoutedRPC", (object)pkg);
+                s_hasPositionHint = false;
             }
         }
 
-        // Runs every registered handler. Each handler can drop the RPC by
-        // returning false; AND-semantics so any one drop blocks forwarding.
-        public static bool ProcessHandlers(ZRoutedRpc.RoutedRPCData routedRpcData)
+        internal static bool TryRelayServerBroadcast(ZRoutedRpc routedRpc, ZRoutedRpc.RoutedRPCData data)
         {
-            List<RpcMethodHandler> handlers;
-            if (!_rpcMethodHandlers.TryGetValue(routedRpcData.m_methodHash, out handlers))
+            if (s_worldWide.Contains(data.m_methodHash)) return false;
+            if (data.m_methodHash == s_destroyZdoHash)
+            {
+                if (!s_serverDestroyCaptured) return false;
+                s_serverDestroyCaptured = false;
+                SendTo(data, s_serverDestroyRecipients);
                 return true;
-
-            bool result = true;
-            foreach (RpcMethodHandler handler in handlers)
-                result &= handler.Process(routedRpcData);
-            return result;
+            }
+            try
+            {
+                ProcessHandlers(data);
+                if (!CollectRecipients(routedRpc, data, s_serverRecipients, s_serverIds)) return false;
+                SendTo(data, s_serverRecipients);
+                return true;
+            }
+            finally
+            {
+                s_hasPositionHint = false;
+            }
         }
 
-        public static string MethodHashToString(int methodHash)
+        internal static void CaptureServerDestroyHolders()
         {
-            string methodName;
-            if (HashCodeToMethodNameCache.TryGetValue(methodHash, out methodName))
-                return methodName;
-            return string.Format("RPC_{0}", methodHash);
+            s_serverDestroyCaptured = false;
+            if (ZDOMan.instance == null) return;
+            var pending = VanillaAccess.DestroySendList(ZDOMan.instance);
+            if (pending.Count == 0 || ZRoutedRpc.instance == null) return;
+            CollectHolders(pending, VanillaAccess.RoutedRpcId(ZRoutedRpc.instance), s_serverDestroyRecipients);
+            s_serverDestroyCaptured = true;
         }
 
-        public static void Reset()
+        internal static void ClearServerDestroyHolders() => s_serverDestroyCaptured = false;
+
+        private static bool ProcessHandlers(ZRoutedRpc.RoutedRPCData data)
         {
-            _rpcMethodHandlers.Clear();
-            HashCodeToMethodNameCache.Clear();
-            _aoiRadiusOverride = -1f;
+            if (!s_handlers.TryGetValue(data.m_methodHash, out var handlers)) return true;
+            bool relay = true;
+            foreach (var handler in handlers) relay &= handler.Process(data);
+            return relay;
+        }
+
+        private static bool CollectRecipients(ZRoutedRpc routedRpc, ZRoutedRpc.RoutedRPCData data, List<ZNetPeer> recipients, List<ZDOID> ids)
+        {
+            recipients.Clear();
+            if (!data.m_targetZDO.IsNone())
+            {
+                ids.Clear();
+                ids.Add(data.m_targetZDO);
+                CollectHolders(ids, data.m_senderPeerID, recipients);
+                return true;
+            }
+            if (!s_hasPositionHint) return false;
+
+            float radiusSqr = s_radiusHint * s_radiusHint;
+            foreach (var peer in VanillaAccess.RoutedRpcPeers(routedRpc))
+            {
+                if (peer.m_uid == data.m_senderPeerID || !peer.IsReady()) continue;
+                Vector3 position = peer.GetRefPos();
+                float dx = position.x - s_positionHint.x;
+                float dz = position.z - s_positionHint.z;
+                if (dx * dx + dz * dz <= radiusSqr) recipients.Add(peer);
+            }
+            return true;
+        }
+
+        private static bool CollectDestroyHolders(ZRoutedRpc.RoutedRPCData data, List<ZNetPeer> recipients)
+        {
+            var parameters = data.m_parameters;
+            int saved = parameters.GetPos();
+            try
+            {
+                parameters.SetPos(0);
+                var ids = parameters.ReadPackage();
+                int count = ids.ReadInt();
+                s_ids.Clear();
+                for (int i = 0; i < count; i++) s_ids.Add(ids.ReadZDOID());
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                parameters.SetPos(saved);
+            }
+            CollectHolders(s_ids, data.m_senderPeerID, recipients);
+            return true;
+        }
+
+        private static void CollectHolders(List<ZDOID> ids, long sender, List<ZNetPeer> recipients)
+        {
+            recipients.Clear();
+            if (ZDOMan.instance == null) return;
+            foreach (var zdoPeer in VanillaAccess.ZdoPeers(ZDOMan.instance))
+            {
+                var peer = zdoPeer.m_peer;
+                if (peer == null || peer.m_uid == sender || !peer.IsReady()) continue;
+                for (int i = 0; i < ids.Count; i++)
+                {
+                    if (!zdoPeer.m_zdos.ContainsKey(ids[i])) continue;
+                    recipients.Add(peer);
+                    break;
+                }
+            }
+        }
+
+        private static void SendTo(ZRoutedRpc.RoutedRPCData data, List<ZNetPeer> recipients)
+        {
+            if (recipients.Count == 0) return;
+            var package = new ZPackage();
+            data.Serialize(package);
+            foreach (var peer in recipients)
+                if (peer.IsReady()) peer.m_rpc.Invoke("RoutedRPC", (object)package);
         }
     }
 }

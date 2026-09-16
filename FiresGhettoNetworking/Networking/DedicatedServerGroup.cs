@@ -60,6 +60,7 @@ namespace FiresGhettoNetworkMod
         static void LogBackendAtZNetStart()
         {
             LoggerOptions.LogInfo($"[Crossplay] ZNet.Start — online backend is now {ZNet.m_onlineBackend} (dedi={isDedicatedDetected}).");
+            if (isDedicatedDetected) LoggerOptions.LogMessage($"Player limit: {DescribePlayerLimit()}.");
         }
 
         // ====================== CLIENT-SIDE FORCE ======================
@@ -110,75 +111,59 @@ namespace FiresGhettoNetworkMod
         }
 
         // ====================== PLAYER LIMIT OVERRIDE ======================
-        // Stealing Azumatt's proven pattern outright (updated for current Valheim as of late 2025)
+        // FGN only touches the player cap when its own Player Limit has been changed from vanilla's 10, and never while
+        // Azumatt's MaxPlayerCount is loaded: that mod feeds the same constant into its own formula and prefixes the same
+        // Steam call, so both acting at once either lowers its cap or adds the two together.
+        private const int VanillaPlayerLimit = 10;
+        private const string MaxPlayerCountGuid = "Azumatt.MaxPlayerCount";
+
+        private static bool MaxPlayerCountLoaded() => BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(MaxPlayerCountGuid);
+
+        private static int ConfiguredPlayerLimit()
+        {
+            int limit = FiresGhettoNetworkMod.ConfigPlayerLimit.Value;
+            return limit == VanillaPlayerLimit || MaxPlayerCountLoaded() ? 0 : limit;
+        }
+
+        internal static string DescribePlayerLimit()
+        {
+            if (MaxPlayerCountLoaded()) return "left to MaxPlayerCount, which is installed (FGN's Player Limit is ignored)";
+            int limit = ConfiguredPlayerLimit();
+            return limit > 0 ? $"{limit} (FGN Player Limit)" : "vanilla 10 (FGN's Player Limit is at its default)";
+        }
+
         [HarmonyPatch(typeof(ZNet), "RPC_PeerInfo")]
         [HarmonyTranspiler]
         static IEnumerable<CodeInstruction> OverridePlayerLimit(IEnumerable<CodeInstruction> instructions)
         {
-            if (!isDedicatedDetected) return instructions;
+            int newLimit = ConfiguredPlayerLimit();
+            if (!isDedicatedDetected || newLimit <= 0) return instructions;
 
             var codeList = new List<CodeInstruction>(instructions);
-            bool patched = false;
-
             for (int i = 0; i < codeList.Count; i++)
             {
-                // Find the call to ZNet.GetNrOfPlayers()
-                if (codeList[i].opcode == OpCodes.Call &&
-                    codeList[i].operand is MethodInfo method &&
-                    method.Name == "GetNrOfPlayers")
+                if (!(codeList[i].opcode == OpCodes.Call && codeList[i].operand is MethodInfo method && method.Name == "GetNrOfPlayers")) continue;
+                for (int j = i + 1; j < codeList.Count && j <= i + 2; j++)
                 {
-                    // Look for the following constant load (the vanilla max player check)
-                    for (int j = i + 1; j < codeList.Count; j++)
-                    {
-                        if (codeList[j].opcode == OpCodes.Ldc_I4_S ||
-                            codeList[j].opcode == OpCodes.Ldc_I4 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_0 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_1 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_2 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_3 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_4 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_5 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_6 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_7 ||
-                            codeList[j].opcode == OpCodes.Ldc_I4_8)
-                        {
-                            int newLimit = FiresGhettoNetworkMod.ConfigPlayerLimit.Value;
-
-                            // PlayFab often needs +1 (host counts extra) – matches Azumatt's logic
-                            if (ZNet.m_onlineBackend == OnlineBackendType.PlayFab)
-                            {
-                                newLimit += 1;
-                                LoggerOptions.LogInfo("Applied +1 player limit for PlayFab backend.");
-                            }
-
-                            LoggerOptions.LogInfo($"Overriding player limit constant → {newLimit}");
-
-                            // Use full Ldc_I4 for safety (supports values >127 without cast issues)
-                            codeList[j] = new CodeInstruction(OpCodes.Ldc_I4, newLimit);
-                            patched = true;
-                            break;
-                        }
-                    }
-
-                    if (patched) break; // Only one player limit check in the method
+                    if (!IsIntConstantLoad(codeList[j])) continue;
+                    codeList[j].opcode = OpCodes.Ldc_I4;
+                    codeList[j].operand = newLimit;
+                    LoggerOptions.LogInfo($"Player limit: ZNet.RPC_PeerInfo now turns players away at {newLimit}.");
+                    return codeList;
                 }
             }
-
-            if (!patched)
-            {
-                LoggerOptions.LogWarning("Player limit constant not found in ZNet.RPC_PeerInfo. Patch skipped – possible game update or conflicting mod.");
-            }
-
+            LoggerOptions.LogWarning("Player limit constant not found in ZNet.RPC_PeerInfo. Patch skipped – possible game update or conflicting mod.");
             return codeList;
         }
 
         // ====================== ADVERTISED MAX OVERRIDE ======================
-        // ConfigAdvertisedPlayerLimit when set, otherwise ConfigPlayerLimit. Steam entry points are prefixed
-        // below; the PlayFab stores are rewritten further down.
+        // ConfigAdvertisedPlayerLimit when set, otherwise a changed ConfigPlayerLimit; 0 leaves every listing alone. Steam
+        // entry points are prefixed below; the PlayFab stores are rewritten further down.
         private static int ResolveAdvertisedLimit()
         {
+            if (MaxPlayerCountLoaded()) return 0;
             int advertised = FiresGhettoNetworkMod.ConfigAdvertisedPlayerLimit?.Value ?? 0;
-            return advertised > 0 ? advertised : FiresGhettoNetworkMod.ConfigPlayerLimit.Value;
+            return advertised > 0 ? advertised : ConfiguredPlayerLimit();
         }
 
         private static bool IsIntConstantLoad(CodeInstruction ins)
@@ -193,9 +178,9 @@ namespace FiresGhettoNetworkMod
                 || op == OpCodes.Ldc_I4_8;
         }
 
-        // A transpiler on ZSteamMatchmaking.RegisterServer broke the CreateLobby callback chain (v1.3.0), so
-        // the Steam SDK entry points are prefixed instead. The game does not call SetMaxPlayerCount today;
-        // that prefix is inert until something does.
+        // A transpiler on ZSteamMatchmaking.RegisterServer broke the CreateLobby callback chain (v1.3.0), so the Steam SDK
+        // entry points are prefixed instead. The dedicated build lists itself through SetMaxPlayerCount (10 in RegisterServer,
+        // 64 in SteamManager.Awake); CreateLobby is the client build's path.
 
         [HarmonyPatch(typeof(Steamworks.SteamMatchmaking), nameof(Steamworks.SteamMatchmaking.CreateLobby))]
         [HarmonyPrefix]
@@ -261,7 +246,7 @@ namespace FiresGhettoNetworkMod
         private static IEnumerable<CodeInstruction> RewriteMaxPlayersStore(
             IEnumerable<CodeInstruction> instructions, string patchedMethod, string fieldId, string capacityGetter)
         {
-            if (!isDedicatedDetected) return instructions;
+            if (!isDedicatedDetected || ResolveAdvertisedLimit() <= 0) return instructions;
 
             var code = new List<CodeInstruction>(instructions);
             var capacity = AccessTools.Method(typeof(DedicatedServerGroup), capacityGetter);

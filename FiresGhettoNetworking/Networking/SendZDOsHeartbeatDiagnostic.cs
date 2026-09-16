@@ -27,8 +27,6 @@ namespace FiresGhettoNetworkMod
         private const int VanillaMinBudgetBytes = 2048;
         private const float RollupSeconds = 10f;
 
-        private static int EffectiveCapBytes() => SendCongestion.EffectiveCapBytes();
-
         [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
         [HarmonyPrefix]
         [HarmonyPriority(Priority.Last)]
@@ -44,7 +42,7 @@ namespace FiresGhettoNetworkMod
             try { queueSize = peer.m_peer.m_socket.GetSendQueueSize(); }
             catch { return; }
 
-            int cap = EffectiveCapBytes();
+            int cap = LinkController.WindowBytes(peer);
             int budget = cap - queueSize;
             bool wouldBail = !flush && queueSize > cap;
             bool budgetTooSmall = budget < VanillaMinBudgetBytes;

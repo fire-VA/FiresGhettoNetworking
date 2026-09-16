@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
+using Steamworks;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -240,21 +241,36 @@ namespace FiresGhettoNetworkMod
         // Pin a connection's send rate: SendRateMin == SendRateMax == rateBytes, so Steam has no adaptive
         // window to drift inside (its sticky-down adapter is what otherwise leaves peers parked near Min).
         // Order the two writes so Min never momentarily exceeds Max: raising -> Max first; lowering -> Min first.
-        public static bool SetConnectionRatePinned(uint conn, int rateBytes, bool raising)
+        public static bool PinConnectionRate(uint conn, int rateBytes, bool raising)
         {
             if (conn == 0u) return false;
-            bool a, b;
-            if (raising)
-            {
-                a = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
-                b = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
-            }
-            else
-            {
-                a = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateBytes, conn);
-                b = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateBytes, conn);
-            }
+            var first = raising ? ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax : ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin;
+            var second = raising ? ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin : ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax;
+            bool a = SetConnectionInt32(first, conn, rateBytes);
+            bool b = SetConnectionInt32(second, conn, rateBytes);
             return a && b;
+        }
+
+        private static IntPtr s_int32Value;
+
+        private static bool SetConnectionInt32(ESteamNetworkingConfigValue setting, uint conn, int value)
+        {
+            try
+            {
+                if (s_int32Value == IntPtr.Zero) s_int32Value = Marshal.AllocHGlobal(4);
+                Marshal.WriteInt32(s_int32Value, value);
+                var scope = ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection;
+                var dataType = ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32;
+                var handle = new IntPtr((long)conn);
+                return ZNet.instance != null && ZNet.instance.IsDedicated()
+                    ? SteamGameServerNetworkingUtils.SetConfigValue(setting, scope, handle, dataType, s_int32Value)
+                    : SteamNetworkingUtils.SetConfigValue(setting, scope, handle, dataType, s_int32Value);
+            }
+            catch (Exception e)
+            {
+                LoggerOptions.LogWarning($"Steam per-connection {setting} = {value} on connection {conn} failed: {e.Message}");
+                return false;
+            }
         }
 
         public static void RestoreConnection(ZNetPeer peer)
@@ -416,6 +432,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         static void AdjustUpdateInterval(ref float dt)
         {
+            if (SendScheduler.Active()) return;
             switch (EffectiveConfig.UpdateRate())
             {
                 case UpdateRateOptions._150:
@@ -520,58 +537,71 @@ namespace FiresGhettoNetworkMod
             ApplyRecvMaxMessageSize();
         }
 
-        // ====================== QUEUE SIZE PATCH - WORKING ON CURRENT VALHEIM ======================
+        // Vanilla SendZDOs: skip the peer while queue > 10240, budget = 10240 - queue, skip under 2048. The queue check
+        // becomes the peer's own window (recording when the window held the peer back), the budget uses the same window,
+        // and the package it fills is clamped to Queue Size so a wide window never means one huge package.
         [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
         [HarmonyTranspiler]
-        static IEnumerable<CodeInstruction> SendZDOs_QueueLimitTranspiler(IEnumerable<CodeInstruction> instructions)
+        static IEnumerable<CodeInstruction> SendZDOs_WindowTranspiler(IEnumerable<CodeInstruction> instructions)
         {
             var code = new List<CodeInstruction>(instructions);
-            int patchedCount = 0;
+            var gate = AccessTools.Method(typeof(LinkController), nameof(LinkController.SendGateWindow));
+            var window = AccessTools.Method(typeof(LinkController), nameof(LinkController.WindowBytes), new[] { typeof(ZDOMan.ZDOPeer) });
+            var budget = AccessTools.Method(typeof(LinkController), nameof(LinkController.PackageBudget));
 
-            MethodInfo liveQueueLimit = AccessTools.Method(typeof(NetworkingRatesGroup), nameof(ZdoSendQueueCapBytes));
-
-            for (int i = 0; i < code.Count; i++)
+            int gates = 0, windows = 0, clamps = 0;
+            int queueCall = code.FindIndex(ins => (ins.opcode == OpCodes.Callvirt || ins.opcode == OpCodes.Call)
+                && ins.operand is MethodInfo mi && mi.Name == "GetSendQueueSize");
+            for (int i = queueCall < 0 ? code.Count : queueCall + 1; i < code.Count && i <= queueCall + QueueSiteSearchSpan; i++)
             {
-                // Find large constants (>=10240) that are likely queue limits
-                if ((code[i].opcode == OpCodes.Ldc_I4 || code[i].opcode == OpCodes.Ldc_I4_S) &&
-                    code[i].operand is int constant &&
-                    constant >= 10240)
+                if (!(code[i].opcode == OpCodes.Ldc_I4 && code[i].operand is int constant && constant >= VanillaQueueLimitBytes)) continue;
+
+                if (code[i - 1].IsLdloc() && i + 1 < code.Count && IsCompareBranch(code[i + 1].opcode))
                 {
-                    bool isQueueLimit = false;
+                    code[i].opcode = code[i - 1].opcode;
+                    code[i].operand = code[i - 1].operand;
+                    code.Insert(i + 1, new CodeInstruction(OpCodes.Ldarg_1));
+                    code.Insert(i + 2, new CodeInstruction(OpCodes.Call, gate));
+                    gates++;
+                    i += 2;
+                    continue;
+                }
 
-                    // Check nearby for GetSendQueueSize call (using string literal to avoid any compile issues)
-                    for (int j = Math.Max(0, i - 15); j < Math.Min(code.Count, i + 15); j++)
-                    {
-                        if (code[j].opcode == OpCodes.Callvirt &&
-                            code[j].operand is MethodInfo mi &&
-                            mi.Name == "GetSendQueueSize")
-                        {
-                            isQueueLimit = true;
-                            break;
-                        }
-                    }
-
-                    if (isQueueLimit)
-                    {
-                        code[i].opcode = OpCodes.Call;
-                        code[i].operand = liveQueueLimit;
-                        patchedCount++;
-                    }
+                code[i].opcode = OpCodes.Ldarg_1;
+                code[i].operand = null;
+                code.Insert(i + 1, new CodeInstruction(OpCodes.Call, window));
+                windows++;
+                i += 1;
+                if (i + 2 < code.Count && code[i + 1].IsLdloc() && code[i + 2].opcode == OpCodes.Sub)
+                {
+                    code.Insert(i + 3, new CodeInstruction(OpCodes.Ldarg_1));
+                    code.Insert(i + 4, new CodeInstruction(OpCodes.Call, budget));
+                    clamps++;
+                    i += 4;
                 }
             }
 
-            s_queueLimitPatched = patchedCount > 0;
-            if (patchedCount == 0)
-            {
-                LoggerOptions.LogWarning("No queue limit constants found in ZDOMan.SendZDOs — queue size config not applied (game update may have changed IL).");
-            }
+            s_queueLimitPatched = gates + windows > 0;
+            if (!s_queueLimitPatched)
+                LoggerOptions.LogWarning("ZDOMan.SendZDOs has no send-queue limit this FGN version recognises (game update or another mod); "
+                    + "per-player send windows and Queue Size are not applied.");
+            else if (gates != 1 || windows != 1 || clamps != 1)
+                LoggerOptions.LogWarning($"ZDOMan.SendZDOs changed shape: {gates} queue check(s), {windows} budget(s), {clamps} package clamp(s) "
+                    + "attached where 1 of each was expected. Per-player windows still apply where attached.");
             else
-            {
-                LoggerOptions.LogInfo($"ZDOMan.SendZDOs: {patchedCount} queue limit constant(s) now follow Queue Size (currently {ZdoSendQueueCapBytes()} bytes).");
-            }
-
-            return code.AsEnumerable();
+                LoggerOptions.LogInfo("ZDOMan.SendZDOs: send-queue limit follows each player's send window, packages capped at Queue Size.");
+            return code;
         }
+
+        private static bool IsCompareBranch(OpCode opcode)
+        {
+            return opcode == OpCodes.Ble || opcode == OpCodes.Ble_S || opcode == OpCodes.Ble_Un || opcode == OpCodes.Ble_Un_S
+                || opcode == OpCodes.Bgt || opcode == OpCodes.Bgt_S || opcode == OpCodes.Bgt_Un || opcode == OpCodes.Bgt_Un_S
+                || opcode == OpCodes.Bge || opcode == OpCodes.Bge_S || opcode == OpCodes.Bge_Un || opcode == OpCodes.Bge_Un_S
+                || opcode == OpCodes.Blt || opcode == OpCodes.Blt_S || opcode == OpCodes.Blt_Un || opcode == OpCodes.Blt_Un_S;
+        }
+
+        private const int QueueSiteSearchSpan = 24;
 
         private const int VanillaQueueLimitBytes = 10240;
 
