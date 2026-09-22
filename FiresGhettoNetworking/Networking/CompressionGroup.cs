@@ -303,9 +303,10 @@ namespace FiresGhettoNetworkMod
                          && enabled
                          && CompressionStatus.ourStatus.compressionEnabled;
             status.sendingCompressed = agree;
-            LoggerOptions.LogMessage($"Compression {(agree ? "ACTIVE" : "off")} with {GetPeerName(peer)} "
-                + $"(us v{CompressionStatus.ourStatus.version} enabled={CompressionStatus.ourStatus.compressionEnabled}, "
-                + $"peer v{version} enabled={enabled}).");
+            if (!NetworkingRatesGroup.IsCrossplay(peer))
+                LoggerOptions.LogMessage($"Compression {(agree ? "ACTIVE" : "off")} with {GetPeerName(peer)} "
+                    + $"(us v{CompressionStatus.ourStatus.version} enabled={CompressionStatus.ourStatus.compressionEnabled}, "
+                    + $"peer v{version} enabled={enabled}).");
 
             // Reply exactly once so the initiator learns our (version, enabled) too.
             if (!status.helloSent)
@@ -458,6 +459,9 @@ namespace FiresGhettoNetworkMod
             interval.Rejected = s_session.Rejected - s_reported.Rejected;
             interval.DecodeTicks = s_session.DecodeTicks - s_reported.DecodeTicks;
             s_session.CopyTo(s_reported);
+
+            foreach (string line in UploadBreakdown.TakeReport(period))
+                LoggerOptions.LogInfo(line);
 
             if (interval.Sent.All(tally => tally.Packets == 0) && interval.Decoded.Packets == 0 && interval.Rejected == 0) return;
             foreach (string line in DescribeTotals(interval, period))

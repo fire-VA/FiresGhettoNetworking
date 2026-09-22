@@ -17,7 +17,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.31";
+        public const string PluginVersion = "1.4.49";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -156,11 +156,15 @@ namespace FiresGhettoNetworkMod
             SendScheduler.InitConfig(Config);
             StationRouter.InitConfig(Config);
             CreatureOwnership.InitConfig(Config);
+            HelmOwnership.InitConfig(Config);
             SectorChangeTracker.InitConfig(Config);
+            SyncListRefPosPatches.InitConfig(Config);
 
             Harmony.PatchAll(typeof(CompressionGroup));
             Harmony.PatchAll(typeof(NetworkingRatesGroup));
             Harmony.PatchAll(typeof(DedicatedServerGroup));
+            Harmony.PatchAll(typeof(SyncListRefPosPatches));
+            Harmony.PatchAll(typeof(UploadBreakdown));
 
             Harmony.PatchAll(typeof(SendZDOsHeartbeatDiagnostic));
 
@@ -192,7 +196,18 @@ namespace FiresGhettoNetworkMod
 
             Harmony.PatchAll(typeof(CreatureOwnership));
 
+            Harmony.PatchAll(typeof(HelmOwnership));
+
             Harmony.PatchAll(typeof(KeepaliveFirst));
+
+            try
+            {
+                Harmony.PatchAll(typeof(RoundTripTrace));
+            }
+            catch (System.Exception ex)
+            {
+                LoggerOptions.LogWarning($"[RoundTrip] could not be attached; round trips are still timed, without the per-stage breakdown. {ex.Message}");
+            }
 
             Harmony.PatchAll(typeof(ZdoFloodTest));
 
@@ -247,8 +262,6 @@ namespace FiresGhettoNetworkMod
             Harmony.PatchAll(typeof(ZoneLoadPatches));
             ServerAutoTune.InitServerSide();
 
-
-            // ClientLogRelay is excluded from the csproj until it ships as its own mod; its sources remain on disk.
             if (isDedicated)
             {
                 ApplyServerTrafficPatches();
@@ -337,6 +350,7 @@ namespace FiresGhettoNetworkMod
                 }
                 Harmony.PatchAll(typeof(ServerOwnershipPatchesV3));
                 CreatureOwnership.ServerOwnsCreatures = true;
+                HelmOwnership.ServerOwnsShips = ConfigEnableServerSideShipSimulation.Value;
                 LoggerOptions.LogMessage(
                     "Server ZDO ownership (V3 SELECTIVE) ENABLED — Character/Ship only; drops/voxel/interactables/carts stay peer-owned.");
             }
@@ -344,6 +358,7 @@ namespace FiresGhettoNetworkMod
             {
                 Harmony.PatchAll(typeof(ServerOwnershipPatches));
                 CreatureOwnership.ServerOwnsCreatures = true;
+                HelmOwnership.ServerOwnsShips = true;
                 LoggerOptions.LogMessage(
                     "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED — every persistent ZDO in any peer's active area will be claimed by the server.");
                 if (!ConfigEnableServerSideShipSimulation.Value)
@@ -466,14 +481,6 @@ namespace FiresGhettoNetworkMod
                     return port;
             }
             return 2456;
-        }
-
-        private void OnApplicationQuit()
-        {
-            // Previously called ServerHeartbeat.OnServerStop() from the
-            // ClientLogRelay module.  That module is excluded from the build
-            // until it's spun out as its own standalone mod; nothing to do here
-            // for now.
         }
 
         // Compatibility patch for WackyDatabase — safely skips SnapshotItem for broken/null items
@@ -700,8 +707,8 @@ namespace FiresGhettoNetworkMod
                 "Queue Size",
                 QueueSizeOptions._32KB,
                 "The largest single package of world updates sent to one player at a time, and the starting send window\n" +
-                "for each player. With 'Adaptive Send Window' off, or for crossplay players, it is also the fixed limit on\n" +
-                "data in flight to each player. Vanilla is 10 KB.");
+                "for each player. With 'Adaptive Send Window' off it is also the fixed limit on data in flight to each\n" +
+                "player. Crossplay players are sized by Crossplay In-Flight KB instead.");
 
             ConfigForceCrossplay = Config.Bind(
                 "09 - Dedicated Server",
@@ -711,7 +718,10 @@ namespace FiresGhettoNetworkMod
                 "vanilla = respect the command-line -crossplay flag (DEFAULT — does NOT change how your server connects).\n" +
                 "steamworks = force Steam-only; DISABLES crossplay. Best performance for an all-Steam playerbase, " +
                 "but Xbox / Game Pass / PlayStation players cannot join.\n" +
-                "playfab = force crossplay ENABLED (PlayFab matchmaking) regardless of the -crossplay flag.");
+                "playfab = force crossplay ENABLED (PlayFab matchmaking) regardless of the -crossplay flag. Players then join with\n" +
+                "the join code the server prints.\n" +
+                "On a client it only changes worlds you host. Joining a server by address ignores playfab, because Valheim already\n" +
+                "joins over crossplay when it finds a crossplay server at that address. Leave clients on vanilla.");
 
             ConfigPlayerLimit = Config.Bind(
                 "09 - Dedicated Server",

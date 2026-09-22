@@ -34,6 +34,11 @@ namespace FiresGhettoNetworkMod
         public const int MaxSkipPackets = 1024;
         public const int MaxTrackedRpcs = 512;
 
+        // A frame that saves less than this share of the bytes it deflated still goes out, since its CPU is spent, but counts
+        // as a failure for its RPC: already-compressed payloads such as asset bundles cost milliseconds per packet for a few
+        // percent.
+        public const int MinWorthwhileSavingPercent = 15;
+
         // RoutedRPC packets: outer method hash, package length, message id, sender, target, target ZDO (long + uint), then the
         // routed method hash.
         private const int RoutedMethodHashOffset = 44;
@@ -103,7 +108,7 @@ namespace FiresGhettoNetworkMod
                 return null;
             }
 
-            Learn(rpc, result);
+            Learn(rpc, frame != null && !SavedEnough(packet.Length, frame.Length) ? PacketFrame.EncodeResult.DidNotShrink : result);
             switch (result)
             {
                 case PacketFrame.EncodeResult.Deflated: outcome = SendOutcome.Deflated; break;
@@ -112,6 +117,14 @@ namespace FiresGhettoNetworkMod
                 default: outcome = SendOutcome.DidNotShrink; break;
             }
             return frame;
+        }
+
+        // Gzip regions the encoder kept out of the deflate stream are not counted: only the deflated bytes had a chance to shrink.
+        private bool SavedEnough(int packetBytes, int frameBytes)
+        {
+            long deflatedBytes = packetBytes;
+            foreach (PacketFrame.Region region in _regions) deflatedBytes -= region.Length;
+            return (long)(packetBytes - frameBytes) * 100 >= deflatedBytes * MinWorthwhileSavingPercent;
         }
 
         // Which RPC a packet carries, for remembering RPCs that do not compress. ZDO packets mix every kind of object, so they

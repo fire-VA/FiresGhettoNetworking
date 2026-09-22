@@ -1,4 +1,16 @@
-* v1.4.31 - fairer sending, station fixes and lighter servers
+* v1.4.49 - smarter auto-tune, ships follow the helmsman, crossplay fixes, faster logins
+  - auto-tune waits for your connection to settle before measuring, measures one player at a time, and remembers the result per server address
+  - fast PCs and good connections are no longer rated Low because of a few slow frames or a noisy ping
+  - whoever takes the helm gets the ship, so steering answers right away
+  - the server picks what to send each player from where they are now, not where they were a moment ago
+  - crossplay (PlayFab) players get a properly sized send window, and playfab servers and clients can join by IP again
+  - compression skips data that barely shrinks, and servers use less memory
+  - new admin diagnostics: fgn_rtt, and an [Upload] summary of what a client sends
+  - joining a server is about half a second faster
+  - messages that another mod blocks are no longer passed on anyway
+  - update the server and every client to the same version
+
+ v1.4.31 - fairer sending, station fixes and lighter servers
   - the server sizes each player's connection to what it actually carries, and opens it back up once the line clears
   - chat, effects and damage numbers only go to the players who can see them, instead of everyone on the server
   - monsters are handed to the player with the best connection, so they stop rubber-banding for everyone else, and whoever is fighting one keeps it

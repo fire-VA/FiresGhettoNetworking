@@ -30,7 +30,7 @@ Everything here is server-side and needs nothing installed on your players' mach
 - Steam send rate / send buffer, send queue size, ZDO send rate
 - Per-peer adaptive send rate (each client ramps toward its own real link capacity)
 - **Bulk-transfer gate** — raises the 20 KB queue limit inside every loaded ServerSync / ServerCharacters copy, so large config syncs on join stop stalling and dropping peers. This is one of the biggest real-world wins and it is entirely server-side
-- Server-side auto-tune, plus all diagnostics and admin commands (`fgn_headroom`, `fgn_flood`, `fgn_socketramp`, `fgn_comptest`, `fgn_zdoflood`)
+- Server-side auto-tune, plus all diagnostics and admin commands (`fgn_headroom`, `fgn_flood`, `fgn_socketramp`, `fgn_comptest`, `fgn_zdoflood`, `fgn_links`)
 - Everything under **Server-Side Simulation**, if you enable it (see below)
 
 ### Server + client
@@ -42,6 +42,7 @@ Installing on both adds the client-side half:
 - Client auto-tune: zone-load batching, instantiation budget, receive-buffer sizing, destroy throttling
 - HyperBoost receive side (also needs FiresSteamworksPatcher)
 - **Boat damage fix** — every 2 seconds the server corrects each player's clock, and vanilla jumps the waves to match, which a boat with players aboard takes as slamming into the water. The mod eases those corrections in so the water never jumps. A ship is damaged by the game of whoever owns it (normally someone aboard), so every player who sails needs the mod
+- **The ship follows its helmsman** — whoever takes the helm gets the ship, so steering answers right away instead of going through another player's game (`Give The Ship To Its Helmsman`, on by default). Only the ship's current owner needs the mod
 
 ### Default settings
 
@@ -80,14 +81,16 @@ The mod now ships with an auto-tuner that handles config adjustments. Most users
 
 When a client connects to a server for the first time, the mod runs a brief network/hardware probe:
 
-1. **30-second delay** after spawn — lets Valheim's initial-sync flood drain 
+1. **Waits for the connection to settle** — downloads finished, no stalls, zones loaded, the link steady for a few seconds (up to 5 minutes on a heavy join). Then it asks the server for the measuring slot, so only one player is measured at a time.
 2. **Hardware fingerprint** — CPU cores, RAM, GPU. Scored into a CPU tier.
 3. **Latency probe** — 10 ping RPCs, 200ms apart. performance computed over the trimmed samples (worst outlier dropped). Scores into a network tier.
-4. **Frame-time sample** — 5 seconds of testing afer the world settles. Scores into an FPS tier.
-5. **Bandwidth probe** — 3 × 128KB echo samples, peak wins. Only runs if latency tier is MED or HIGH (this is to keep clients on lower end machines from being effected by the tests).
+4. **Frame-time sample** — 5 seconds of testing afer the world settles, ignoring the slowest 2% of frames. Scores into an FPS tier.
+5. **Bandwidth probe** — 3 × 128KB echo samples, peak wins. A link that moves 500 KB/s or more is never rated LOW, even with a high ping.
 
 The result is one of three tiers — **LOW**, **MED**, or **HIGH** — combining hardware capability and link quality. 
-The tier is cached per-server for 7 days; reconnecting picks up where you left off.
+The tier is cached per server address for 7 days; reconnecting picks up where you left off, even after a dedicated server restarts.
+A measurement taken while the connection is still busy can raise your tier but never lower it, and an interrupted one retries instead of leaving you on LOW.
+The timing is tunable under `[07 - Auto-Tune - Probe]`, but the defaults are what you want.
 
 ### How the rolling monitor works
 
@@ -136,7 +139,8 @@ These run on the dedicated server (the mod auto-detects). Effects are visible to
 | **AI LOD throttling** | While a player's connection is backing up, creatures the server has loaded that are beyond the far distance (200 / 300 / 500 m by tier) from every player update at half speed (`AI LOD Throttle Factor`). Tames are never throttled, and a healthy server runs every creature at full rate. |
 | **WearNTear server optimization** | Skips the wear and support update for pieces that cannot be damaged at all (Infinity Hammer / admin-flagged pieces). Every other piece wears, takes weather damage and collapses exactly like vanilla. |
 | **Every player sent each frame** | Vanilla works through one player per frame, so each player's world updates arrive at the frame rate divided by the number of players online. Every player now gets a turn each frame, inside a per-frame time budget. |
-| **Send window sized to the connection** | Each player's send window grows while their line is clear and shrinks when it backs up, instead of one fixed queue size for everyone. |
+| **Send window sized to the connection** | Each player's send window grows while their line is clear and shrinks when it backs up, instead of one fixed queue size for everyone. Crossplay (PlayFab) players are held to a real 20 KB in flight (`Crossplay In-Flight KB`), because PlayFab only reports part of what it has queued. |
+| **Live player positions** | The server picks what to send each player from where their character is now, not where it was up to 2 seconds ago (`Live Player Positions`). |
 | **Skipping unchanged areas** | Each world update rescans every object around a player for anything unsent, which in a big base is tens of thousands of objects many times a second. Areas where nothing has entered, left or changed since their last scan are skipped, and everything is rescanned every two seconds regardless. |
 | **Station inserts** | Ore, coal, food and ammo put into a smelter, kiln, fermenter, cooking station, fire, turret or shield generator are delivered to the station's real owner, so nothing is lost when someone else owns it or has just left. |
 
@@ -179,10 +183,19 @@ The mod automatically disables server-only features on clients regardless of wha
 so that you can't manually toggle `Enable Server-Side Simulation` on your client,
 but im not smart enough to know how to hide the config to only clients while allowing admins and servers to see it. 
 
+## Reading the log
+
+Every 5 minutes the mod writes a short report, so you can see what it is doing without guessing:
+
+- `[Compression]` — how much traffic compression saved, sent and received.
+- `[Links]` (dedicated server) — each player's connection: send window, queue, and round trip broken into stages. `fgn_links` prints it on demand.
+- `[Upload]` (clients, with `Log Level` set to Info) — what your game sent to the server, by message and by object type.
+- `fgn_rtt` in a client console times a round trip to the server stage by stage.
+
 ## Installation
 
 1. Install BepInEx (a recent BepInExPack_Valheim from Thunderstore is recommended).
-2. Drop `VAGhettoNetworking.dll` into `BepInEx/plugins/` on every machine that should have it.
+2. Drop `VAGhettoNetworking.dll` into `BepInEx/plugins/` on every machine that should have it. Keep the server and every client on the same version.
 3. Start Valheim or your dedicated server. The mod auto-detects which side it's running on and enables the appropriate features.
 
 ## Compatibility

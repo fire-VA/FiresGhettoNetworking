@@ -27,6 +27,10 @@ namespace FiresGhettoNetworkMod.AutoTune
         public const string RpcBandwidthRequest      = "FiresGhetto.AutoTune.BwReq";
         public const string RpcBandwidthResponse     = "FiresGhetto.AutoTune.BwResp";
         public const string RpcTierReport = "FiresGhetto.AutoTune.TierReport";
+        public const string RpcProbeSlotRequest = "FiresGhetto.AutoTune.SlotReq";
+        public const string RpcProbeSlotGrant   = "FiresGhetto.AutoTune.SlotGo";
+
+        private const float FixedSettleFallbackSeconds = 10f;
 
         private const int BwPayloadMinBytes = 1024;
         private const int BwPayloadMaxBytes = 256 * 1024;
@@ -37,6 +41,12 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         private const float DefaultPlayerArrivalTimeoutSeconds = 180f;
         private const float DefaultPingTimeoutSeconds = 5f;
+
+        // Retries for a latency probe that aborted because the client was still
+        // loading rather than because the link is bad. Spaced far enough apart to
+        // clear a heavy zone-population burst.
+        private const int LatencyProbeMaxRetries = 3;
+        private const float LatencyProbeRetryDelaySeconds = 45f;
         private const float FrameSampleSeconds = 5f;
         private const int BandwidthSampleCount = 3;
         private const float BandwidthTimeoutFactor = 1.5f;
@@ -55,7 +65,8 @@ namespace FiresGhettoNetworkMod.AutoTune
         private const int MediumTierJitterMs = 50;
 
         private const float HighTierMedianFrameMs = 16.7f;
-        private const float HighTierP95FrameMs = 25f;
+        private const float HighTierP95FrameMs = 33.4f;
+        private const int FrameOutlierTrimPercent = 2;
         private const float MediumTierMedianFrameMs = 33.4f;
         private const float MediumTierP95FrameMs = 50f;
 
@@ -69,6 +80,12 @@ namespace FiresGhettoNetworkMod.AutoTune
         private const float BandwidthSampleGapSeconds = 0.5f;
         private const float LatencyWarmupSettleSeconds = 0.3f;
         private const float LatencyPingGapSeconds = 0.2f;
+
+        private const string RoundTripCommand = "fgn_rtt";
+        private const int ManualTracePingCount = 20;
+        private const int ManualTraceMaxPings = 100;
+        private static bool _roundTripCommandRegistered;
+        private static bool _manualTraceRunning;
 
         // Outstanding probe RPCs the client is waiting for. Keyed by seq id.
         private static readonly Dictionary<int, Stopwatch> _pingInflight = new Dictionary<int, Stopwatch>();
@@ -87,6 +104,8 @@ namespace FiresGhettoNetworkMod.AutoTune
         private static int _nextSeq = 1;
         private static bool _probeRunning;
         private static bool _probeCompletedThisSession;
+        private static bool _sampleWasUnsettled;
+        private static bool _probeSlotGranted;
 
         // Set true when Game.m_playerInitialSpawn fires — the canonical "player has
         // arrived in the world for the first time this session" event raised from
@@ -160,6 +179,14 @@ namespace FiresGhettoNetworkMod.AutoTune
 
                 // Server-side: receive client tier reports (handled by ServerAutoTune)
                 peer.m_rpc.Register<int, int>(RpcTierReport, ServerAutoTune.OnTierReport);
+
+                // Server-side: hand out probe slots so two clients never measure each other.
+                peer.m_rpc.Register(RpcProbeSlotRequest, ServerAutoTune.OnProbeSlotRequest);
+
+                // Client-side: the server's go-ahead for this client's probe.
+                peer.m_rpc.Register(RpcProbeSlotGrant, OnRpcProbeSlotGrant);
+
+                peer.m_rpc.Register<ZPackage>(RoundTripTrace.RpcProbeStages, RoundTripTrace.OnProbeStages);
             }
             catch (Exception ex)
             {
@@ -308,6 +335,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             _bwRequested.Clear();
             _pingResultsMs.Clear();
             _bwResults.Clear();
+            RoundTripTrace.ClearProbes();
 
             // Drop the arrival flag + handler so the next world entry starts from a clean
             // slate. Game.m_playerInitialSpawn is one-shot per Game instance, so a fresh
@@ -322,9 +350,14 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         private static void OnRpcPing(ZRpc rpc, int seq)
         {
-            // Just echo back. Server-side cost is one packet; we don't even allocate.
+            RoundTripTrace.AnswerLeg leg = RoundTripTrace.BeginAnswerLeg(rpc);
             try { rpc.Invoke(RpcPong, seq); }
-            catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] Ping echo failed: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                LoggerOptions.LogWarning($"[AutoTune] Ping echo failed: {ex.Message}");
+                return;
+            }
+            RoundTripTrace.SendAnswerLeg(rpc, RoundTripTrace.RpcProbeStages, seq, leg);
         }
 
         private static void OnRpcBwReq(ZRpc rpc, int seq, int requestedBytes)
@@ -357,6 +390,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         private static void OnRpcPong(ZRpc rpc, int seq)
         {
+            RoundTripTrace.NotePongReceived(rpc, seq);
             Stopwatch sw;
             if (_pingInflight.TryGetValue(seq, out sw))
             {
@@ -364,6 +398,48 @@ namespace FiresGhettoNetworkMod.AutoTune
                 _pingResultsMs[seq] = sw.ElapsedMilliseconds;
                 _pingInflight.Remove(seq);
             }
+        }
+
+        private static void OnRpcProbeSlotGrant(ZRpc rpc)
+        {
+            _probeSlotGranted = true;
+        }
+
+        /// <summary>
+        /// Asks the server to hand this client the probe slot and waits for the go-ahead, so two
+        /// clients settling at the same moment cannot measure each other's probe traffic. A server
+        /// without this mod never answers; the client proceeds once the timeout elapses and treats
+        /// the sample as unsettled.
+        /// </summary>
+        private static IEnumerator WaitForProbeSlot(ZNetPeer serverPeer)
+        {
+            _probeSlotGranted = false;
+            if (!TryInvoke(serverPeer, RpcProbeSlotRequest))
+            {
+                _sampleWasUnsettled = true;
+                yield break;
+            }
+
+            float grantTimeout = AutoTuneConfig.ProbeSlotGrantTimeoutSeconds?.Value ?? AutoTuneConfig.DefaultProbeSlotGrantTimeoutSeconds;
+            float waitedForGrant = 0f;
+            while (!_probeSlotGranted && waitedForGrant < grantTimeout)
+            {
+                if (_probeAborted || ZNet.instance == null) yield break;
+                if (serverPeer == null || serverPeer.m_rpc == null) yield break;
+                yield return null;
+                waitedForGrant += Time.unscaledDeltaTime;
+            }
+
+            if (_probeSlotGranted)
+            {
+                LoggerOptions.LogInfo($"[AutoTune] Server granted the probe slot after {waitedForGrant:0.0}s.");
+                yield break;
+            }
+
+            LoggerOptions.LogInfo(
+                $"[AutoTune] No probe slot granted within {grantTimeout:0}s — the server may not run this mod. "
+                + "Probing anyway; this sample may not lower the applied tier.");
+            _sampleWasUnsettled = true;
         }
 
         private static void OnRpcBwResp(ZRpc rpc, int seq, ZPackage pkg)
@@ -425,19 +501,33 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
 
             // ---- 2. Post-arrival settle ----
-            //
-            // Short window after the player arrives, to let the immediate post-spawn burst
-            // (inventory equip, ZDO zone-load for the spawn point, post-spawn mod work)
-            // subside before we start sampling latency. ProbeStartDelaySeconds is the
-            // user-tunable knob for this; 30s is the safe default.
-            float spawnDelay = AutoTuneConfig.ProbeStartDelaySeconds?.Value ?? 10f;
-            float waited = 0f;
-            while (waited < spawnDelay)
+            _sampleWasUnsettled = false;
+
+            if (AutoTuneConfig.EnableSettleDetection?.Value ?? true)
             {
-                if (_probeAborted || ZNet.instance == null) { ProbeAbort("aborted (disconnect/shutdown) during post-arrival settle"); yield break; }
-                if (serverPeer == null || serverPeer.m_rpc == null) { ProbeAbort("peer dropped during post-arrival settle"); yield break; }
-                yield return null;
-                waited += Time.unscaledDeltaTime;
+                yield return ProbeSettleDetector.WaitForQuietLink(serverPeer);
+                if (_probeAborted || ZNet.instance == null) { ProbeAbort("aborted (disconnect/shutdown) while the link settled"); yield break; }
+                if (ProbeSettleDetector.LastOutcome == SettleOutcome.LinkLost) { ProbeAbort("peer dropped while the link settled"); yield break; }
+                if (ProbeSettleDetector.LastOutcome == SettleOutcome.ForcedAtCeiling) _sampleWasUnsettled = true;
+            }
+            else
+            {
+                float fixedSettleSeconds = AutoTuneConfig.ProbeStartDelaySeconds?.Value ?? FixedSettleFallbackSeconds;
+                float settleWaited = 0f;
+                while (settleWaited < fixedSettleSeconds)
+                {
+                    if (_probeAborted || ZNet.instance == null) { ProbeAbort("aborted (disconnect/shutdown) during post-arrival settle"); yield break; }
+                    if (serverPeer == null || serverPeer.m_rpc == null) { ProbeAbort("peer dropped during post-arrival settle"); yield break; }
+                    yield return null;
+                    settleWaited += Time.unscaledDeltaTime;
+                }
+            }
+
+            if (AutoTuneConfig.EnableProbeSlotHandshake?.Value ?? true)
+            {
+                yield return WaitForProbeSlot(serverPeer);
+                if (_probeAborted || ZNet.instance == null) { ProbeAbort("aborted (disconnect/shutdown) while waiting for a probe slot"); yield break; }
+                if (serverPeer == null || serverPeer.m_rpc == null) { ProbeAbort("peer dropped while waiting for a probe slot"); yield break; }
             }
 
             // ---- 2. Hardware fingerprint ----
@@ -512,19 +602,41 @@ namespace FiresGhettoNetworkMod.AutoTune
             _sessionHwHash    = hwHash;
 
             // ---- 4. Latency probe ----
-            yield return DoLatencyProbe(serverPeer);
-
-            if (_latencyProbeAborted)
+            // A stalling main thread cannot process a ping echo, so the samples
+            // measure the stall rather than the link — a 54 ms connection has been
+            // seen reporting [392,112,308,214,983,621,1615,2864,4384]. Treating
+            // that first abort as the answer pinned a good client to LOW for the
+            // whole session. An abort now means "ask again later", and only a
+            // client that cannot answer across several attempts is really LOW.
+            int latencyAttempt = 0;
+            while (true)
             {
-                LoggerOptions.LogInfo($"[AutoTune] Initial latency probe aborted (raw=[{string.Join(",", _latencyRawSamplesMs)}]) — defaulting to LOW tier, skipping bandwidth probe.");
-                Finalize(serverKey, hwHash, Tier.Low, _latencyMedianMs, serverPeer);
-                yield break;
+                yield return DoLatencyProbe(serverPeer, "probe");
+                if (!_latencyProbeAborted) break;
+
+                latencyAttempt++;
+                if (latencyAttempt > LatencyProbeMaxRetries)
+                {
+                    LoggerOptions.LogInfo($"[AutoTune] Latency probe aborted on all {latencyAttempt} attempt(s) (raw=[{string.Join(",", _latencyRawSamplesMs)}]) — defaulting to LOW tier, skipping bandwidth probe.");
+                    Finalize(serverKey, hwHash, Tier.Low, _latencyMedianMs, serverPeer);
+                    yield break;
+                }
+
+                LoggerOptions.LogInfo($"[AutoTune] Latency probe attempt {latencyAttempt} aborted (raw=[{string.Join(",", _latencyRawSamplesMs)}]) — " +
+                                      $"the main thread is still busy loading; retrying in {LatencyProbeRetryDelaySeconds:0}s.");
+                yield return new WaitForSeconds(LatencyProbeRetryDelaySeconds);
+
+                if (_probeAborted || ZNet.instance == null) yield break;
+                if (serverPeer == null || serverPeer.m_rpc == null) yield break;
             }
 
             int  pingMedian = _latencyMedianMs;
             Tier netTier    = _latencyTier;
 
-            LoggerOptions.LogInfo($"[AutoTune] Latency: raw=[{string.Join(",", _latencyRawSamplesMs)}] trimmed→ median={pingMedian}ms p95={_latencyP95Ms}ms iqrJitter={_latencyJitterMs}ms → {netTier}");
+            LoggerOptions.LogInfo(
+                $"[AutoTune] Latency: raw=[{string.Join(",", _latencyRawSamplesMs)}] trimmed→ median={pingMedian}ms "
+                + $"p95={_latencyP95Ms}ms iqrJitter={_latencyJitterMs}ms → {netTier} "
+                + $"(transport ping {DescribeTransportPing(serverPeer)})");
 
             // ---- 5. Frame-time sample (5s passive) ----
             Tier fpsTier = Tier.Medium;
@@ -541,21 +653,26 @@ namespace FiresGhettoNetworkMod.AutoTune
 
                 if (frameMs.Count > 0)
                 {
-                    float fpsMedian = MedianFloat(frameMs);
-                    float fpsP95    = P95Float(frameMs);
+                    int droppedFrames = frameMs.Count * FrameOutlierTrimPercent / 100;
+                    List<float> trimmedFrameMs = TrimWorstFloat(frameMs, droppedFrames);
+                    float rawP95    = P95Float(frameMs);
+                    float fpsMedian = MedianFloat(trimmedFrameMs);
+                    float fpsP95    = P95Float(trimmedFrameMs);
                     fpsTier         = ScoreFpsTier(fpsMedian, fpsP95);
-                    LoggerOptions.LogInfo($"[AutoTune] Frame time: median={fpsMedian:0.0}ms p95={fpsP95:0.0}ms → {fpsTier}");
+                    LoggerOptions.LogInfo(
+                        $"[AutoTune] Frame time: median={fpsMedian:0.0}ms p95={fpsP95:0.0}ms "
+                        + $"(raw p95={rawP95:0.0}ms, dropped {droppedFrames}/{frameMs.Count} worst) → {fpsTier}");
                 }
             }
 
-            // ---- 6. Bandwidth probe (gated) ----
-            // Only run if latency tier is MED or HIGH. LOW already proved fragile.
-            // Bandwidth confirms rather than decides: the sample is bounded by the server's send cap, so
-            // it can only pull the result one step below min(machine, latency).
+            // ---- 6. Bandwidth probe ----
+            // Runs whatever the latency tier is. Gating it behind a MED/HIGH latency meant a LOW reading
+            // suppressed the one measurement able to contradict it, and a LOW reading is exactly the case
+            // worth a second opinion: a round trip inflated by frame scheduling looks identical to a bad
+            // path until throughput says otherwise.
             float bwKbPerSec = -1f;
             bool bwProbeCompleted = false;
 
-            if (netTier != Tier.Low)
             {
                 // Peak of several samples: one alone can land while the server is busy with another peer.
                 int payloadBytes = AutoTuneConfig.ProbeBandwidthPayloadBytes?.Value ?? DefaultBwPayloadBytes;
@@ -668,7 +785,20 @@ namespace FiresGhettoNetworkMod.AutoTune
             {
                 Tier bwTier = ScoreBwTier(bwKbPerSec);
                 if ((int)bwTier < (int)linkTier)
+                {
                     linkTier = StepTowardLow(linkTier, 1);
+                }
+                else if (linkTier == Tier.Low && bwTier == Tier.High)
+                {
+                    // A link that just sustained a high-throughput transfer is not a bad path, whatever the
+                    // round trip said: on a fast link the RPC round trip is dominated by frame scheduling
+                    // and send queueing. Medium is enough to stop the downgrade without claiming the link
+                    // is pristine — a genuinely bad path cannot produce this throughput to begin with.
+                    linkTier = Tier.Medium;
+                    LoggerOptions.LogMessage(
+                        $"[AutoTune] Latency scored Low but the link sustained {bwKbPerSec:0} KB/s — treating the link as Medium. "
+                        + "A round trip inflated by scheduling is not a bad connection.");
+                }
             }
 
             // Only a bad (Low) link triggers a downgrade. MED/HIGH link → machine tier stands.
@@ -685,6 +815,28 @@ namespace FiresGhettoNetworkMod.AutoTune
             int target = (int)tier - System.Math.Max(0, steps);
             int floor = (int)Tier.Low;
             return (Tier)System.Math.Max(floor, target);
+        }
+
+        /// <summary>
+        /// The transport's own round-trip figure, for comparison against the RPC round trip measured
+        /// above. A large gap between them means the delay is in frame scheduling and send queueing
+        /// rather than the path. ZSteamSocket reports Steam's real ping; a crossplay link inherits
+        /// ZNetStats, which always reports zero, so there is nothing to compare there.
+        /// </summary>
+        private static string DescribeTransportPing(ZNetPeer serverPeer)
+        {
+            if (serverPeer == null) return "n/a";
+            if (NetworkingRatesGroup.IsCrossplay(serverPeer)) return "n/a, crossplay reports none";
+            try
+            {
+                ISocket socket = NetworkingRatesGroup.UnwrapSocket(serverPeer.m_socket);
+                if (socket == null) return "n/a";
+                float localQuality, remoteQuality, outBytesPerSecond, inBytesPerSecond;
+                int transportPingMs;
+                socket.GetConnectionQuality(out localQuality, out remoteQuality, out transportPingMs, out outBytesPerSecond, out inBytesPerSecond);
+                return transportPingMs + "ms";
+            }
+            catch { return "n/a"; }
         }
 
         private static Tier ScoreBwTier(float kbPerSec)
@@ -705,7 +857,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         /// the worst sample is trimmed, jitter is the IQR rather than the range, and a LOW abort needs two
         /// bad pings instead of one straggler.
         /// </summary>
-        private static IEnumerator DoLatencyProbe(ZNetPeer serverPeer)
+        private static IEnumerator DoLatencyProbe(ZNetPeer serverPeer, string traceLabel)
         {
             int   pingCount      = AutoTuneConfig.ProbePingCount?.Value ?? 10;
             float pingTimeoutSec = AutoTuneConfig.ProbePingTimeoutSeconds?.Value ?? 5f;
@@ -733,6 +885,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 yield return new WaitForSeconds(LatencyWarmupSettleSeconds);
             }
 
+            var tracedSeqs = new List<int>(pingCount);
             int badSamples = 0;
             for (int i = 0; i < pingCount; i++)
             {
@@ -747,6 +900,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 if (_probeAborted || ZNet.instance == null) break;
 
                 int seq = NextSeq();
+                RoundTripTrace.NotePingSent(seq, serverPeer);
                 Stopwatch sw = Stopwatch.StartNew();
                 _pingInflight[seq] = sw;
 
@@ -755,6 +909,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     _pingInflight.Remove(seq);
                     break;
                 }
+                tracedSeqs.Add(seq);
 
                 float waitedSec = 0f;
                 while (_pingInflight.ContainsKey(seq) && waitedSec < pingTimeoutSec)
@@ -789,11 +944,13 @@ namespace FiresGhettoNetworkMod.AutoTune
                     _latencyMedianMs = (int)ComputeMedian(_latencyRawSamplesMs);
                     _latencyP95Ms    = pingAbortMs;
                     _latencyJitterMs = pingAbortMs;
+                    RoundTripTrace.Report(tracedSeqs, traceLabel);
                     yield break;
                 }
 
                 yield return new WaitForSeconds(LatencyPingGapSeconds);
             }
+            RoundTripTrace.Report(tracedSeqs, traceLabel);
 
             if (_latencyRawSamplesMs.Count == 0)
             {
@@ -812,6 +969,71 @@ namespace FiresGhettoNetworkMod.AutoTune
             _latencyP95Ms    = (int)ComputeP95(trimmed);
             _latencyJitterMs = ComputeIqrJitter(trimmed);
             _latencyTier     = ScoreNetTier(_latencyMedianMs, _latencyP95Ms, _latencyJitterMs);
+        }
+
+        internal static void RegisterRoundTripCommand()
+        {
+            if (_roundTripCommandRegistered) return;
+            _roundTripCommandRegistered = true;
+            new Terminal.ConsoleCommand(RoundTripCommand,
+                $"[count] FGN diagnostic: time round trips to the server (default {ManualTracePingCount}) and split each into its "
+                + "stages: this client's send queue, the server's wait for its next frame, the reply's queue on the server and this "
+                + "client's wait for its own frame. Results go to this console and LogOutput.log.",
+                new Terminal.ConsoleEvent(OnRoundTripCommand));
+        }
+
+        private static void OnRoundTripCommand(Terminal.ConsoleEventArgs args)
+        {
+            ZNetPeer serverPeer = ZNet.instance != null && !ZNet.instance.IsServer() ? ZNet.instance.GetServerPeer() : null;
+            if (serverPeer?.m_rpc == null || FiresGhettoNetworkMod.Instance == null)
+            {
+                args.Context?.AddString($"{RoundTripCommand}: run this on a client connected to a server.");
+                return;
+            }
+            if (_manualTraceRunning)
+            {
+                args.Context?.AddString($"{RoundTripCommand}: already timing round trips; the results follow when it finishes.");
+                return;
+            }
+
+            int pingCount = args.TryParameterInt(1, out int requested) ? Mathf.Clamp(requested, 1, ManualTraceMaxPings) : ManualTracePingCount;
+            args.Context?.AddString($"{RoundTripCommand}: timing {pingCount} round trips to the server...");
+            FiresGhettoNetworkMod.Instance.StartCoroutine(RunManualTrace(serverPeer, pingCount, args.Context));
+        }
+
+        private static IEnumerator RunManualTrace(ZNetPeer serverPeer, int pingCount, Terminal console)
+        {
+            _manualTraceRunning = true;
+            float pingTimeoutSec = AutoTuneConfig.ProbePingTimeoutSeconds?.Value ?? DefaultPingTimeoutSeconds;
+            var tracedSeqs = new List<int>(pingCount);
+            for (int i = 0; i < pingCount; i++)
+            {
+                if (_probeAborted || ZNet.instance == null || serverPeer.m_rpc == null) break;
+
+                int seq = NextSeq();
+                RoundTripTrace.NotePingSent(seq, serverPeer);
+                _pingInflight[seq] = Stopwatch.StartNew();
+                if (!TryInvoke(serverPeer, RpcPing, seq))
+                {
+                    _pingInflight.Remove(seq);
+                    break;
+                }
+                tracedSeqs.Add(seq);
+
+                float waitedSec = 0f;
+                while (_pingInflight.ContainsKey(seq) && waitedSec < pingTimeoutSec)
+                {
+                    yield return null;
+                    waitedSec += Time.unscaledDeltaTime;
+                }
+                _pingInflight.Remove(seq);
+                _pingResultsMs.Remove(seq);
+                yield return new WaitForSeconds(LatencyPingGapSeconds);
+            }
+
+            foreach (string line in RoundTripTrace.Report(tracedSeqs, RoundTripCommand))
+                if (console != null) console.AddString(line);
+            _manualTraceRunning = false;
         }
 
         // ============================================================
@@ -873,7 +1095,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 // One more check after the long sleep before kicking off the probe.
                 if (_probeAborted || ZNet.instance == null) { _rollingMonitorActive = false; yield break; }
 
-                yield return DoLatencyProbe(serverPeer);
+                yield return DoLatencyProbe(serverPeer, "re-probe");
 
                 // Post-probe check: if abort was set DURING DoLatencyProbe, bail before
                 // we read _latencyProbeAborted (which is set to true on legitimate aborts too).
@@ -979,11 +1201,20 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         private static void Finalize(string serverKey, string hwHash, Tier tier, int pingMedianMs, ZNetPeer serverPeer)
         {
-            AutoTuneState.SetClient(tier, pingMedianMs);
-            try { AutoTuneCache.Save(serverKey, tier, pingMedianMs, hwHash); }
-            catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] Cache save skipped ({ex.GetType().Name}: {ex.Message}); tier still applied in-memory."); }
-            ApplyClientTier(tier);
-            SendTierReport(serverPeer, tier, pingMedianMs);
+            Tier appliedTier = HoldTierWhenSampleWasUnsettled(tier);
+
+            AutoTuneState.SetClient(appliedTier, pingMedianMs);
+            if (_sampleWasUnsettled)
+            {
+                LoggerOptions.LogInfo("[AutoTune] Unsettled sample not cached — the next login probes again rather than inheriting this reading.");
+            }
+            else
+            {
+                try { AutoTuneCache.Save(serverKey, appliedTier, pingMedianMs, hwHash); }
+                catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] Cache save skipped ({ex.GetType().Name}: {ex.Message}); tier still applied in-memory."); }
+            }
+            ApplyClientTier(appliedTier);
+            SendTierReport(serverPeer, appliedTier, pingMedianMs);
             _probeCompletedThisSession = true;
             _probeRunning = false;
             VAGhettoLoadSummary.EmitAutoTune("probed", tier.ToString());
@@ -1066,6 +1297,25 @@ namespace FiresGhettoNetworkMod.AutoTune
             return Tier.Low;
         }
 
+        /// <summary>
+        /// A sample taken while the link was still busy may raise the tier but never lower it: the
+        /// reading describes whatever the modpack was transferring, not the connection. Without a
+        /// tier applied yet the machine score stands in, since the hardware measurement is unaffected
+        /// by link traffic.
+        /// </summary>
+        private static Tier HoldTierWhenSampleWasUnsettled(Tier probedTier)
+        {
+            if (!_sampleWasUnsettled) return probedTier;
+
+            Tier heldTier = AutoTuneState.HasClientResult ? AutoTuneState.ClientTier : _sessionMachineTier;
+            if (probedTier >= heldTier) return probedTier;
+
+            LoggerOptions.LogMessage(
+                $"[AutoTune] Sample scored {probedTier} but was taken on a busy link — holding {heldTier}. "
+                + "A reading taken while the link is saturated may not lower the tier.");
+            return heldTier;
+        }
+
         private static Tier MinTier(Tier a, Tier b)
         {
             return (Tier)Mathf.Min((int)a, (int)b);
@@ -1130,6 +1380,19 @@ namespace FiresGhettoNetworkMod.AutoTune
         /// latency stats — transient queue contention generates high outliers, not
         /// low ones, so we only trim from the top.
         /// </summary>
+        /// <summary>
+        /// Drops the slowest frames before scoring. A five-second sample holds hundreds of frames, so
+        /// unlike the ten-sample latency stage it only needs a small proportional trim: enough to lose
+        /// a GC spike or a chunk load, not enough to reshape the distribution.
+        /// </summary>
+        private static List<float> TrimWorstFloat(List<float> xs, int dropCount)
+        {
+            if (dropCount <= 0 || xs.Count <= dropCount) return new List<float>(xs);
+            var sorted = new List<float>(xs);
+            sorted.Sort();
+            return sorted.GetRange(0, sorted.Count - dropCount);
+        }
+
         private static List<long> TrimWorst(List<long> xs, int dropCount)
         {
             if (dropCount <= 0 || xs.Count <= dropCount) return new List<long>(xs);
@@ -1197,8 +1460,14 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
         }
 
+        /// <summary>
+        /// Keyed on the address the player joined, not the socket's endpoint: a dedicated server's endpoint is the
+        /// anonymous Steam ID it gets on every boot, so an endpoint key never matched the next session.
+        /// </summary>
         private static string MakeServerKey(ZNetPeer serverPeer)
         {
+            if (ZNet.HasServerHost()) return ZNet.GetServerString();
+
             try
             {
                 if (serverPeer != null && serverPeer.m_socket != null)
@@ -1222,6 +1491,13 @@ namespace FiresGhettoNetworkMod.AutoTune
     [HarmonyPatch]
     public static class AutoTuneProbeHooks
     {
+        [HarmonyPatch(typeof(ZNet), "Start")]
+        [HarmonyPostfix]
+        public static void ZNet_Start_Postfix()
+        {
+            AutoTuneProbe.RegisterRoundTripCommand();
+        }
+
         [HarmonyPatch(typeof(ZNet), "OnNewConnection")]
         [HarmonyPostfix]
         public static void ZNet_OnNewConnection_Postfix(ZNetPeer peer)

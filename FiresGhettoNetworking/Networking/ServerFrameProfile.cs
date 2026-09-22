@@ -16,6 +16,26 @@ namespace FiresGhettoNetworkMod
         private const float SlowFrameMs = 100f;
         private static readonly double MsPerTick = 1000.0 / Stopwatch.Frequency;
 
+        internal struct SubsystemTicks
+        {
+            public long Networking;
+            public long Sending;
+            public long Zones;
+            public long Objects;
+            public int Collections;
+
+            public SubsystemTicks Since(SubsystemTicks earlier) => new SubsystemTicks
+            {
+                Networking = Networking - earlier.Networking,
+                Sending = Sending - earlier.Sending,
+                Zones = Zones - earlier.Zones,
+                Objects = Objects - earlier.Objects,
+                Collections = Collections - earlier.Collections,
+            };
+        }
+
+        private static long s_netTicksEver, s_sendTicksEver, s_zoneTicksEver, s_sceneTicksEver;
+
         private static int s_frame = -1;
         private static int s_gcAtFrameStart;
         private static long s_netStart, s_sendStart, s_zoneStart, s_sceneStart, s_scanStart;
@@ -35,13 +55,23 @@ namespace FiresGhettoNetworkMod
         static void NetBegin() { NextFrame(); s_netStart = Stopwatch.GetTimestamp(); }
 
         [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void NetEnd() => s_netTicks += Stopwatch.GetTimestamp() - s_netStart;
+        static void NetEnd()
+        {
+            long elapsed = Stopwatch.GetTimestamp() - s_netStart;
+            s_netTicks += elapsed;
+            s_netTicksEver += elapsed;
+        }
 
         [HarmonyPatch(typeof(ZDOMan), "Update"), HarmonyPrefix, HarmonyPriority(Priority.First)]
         static void SendBegin() { NextFrame(); s_sendStart = Stopwatch.GetTimestamp(); }
 
         [HarmonyPatch(typeof(ZDOMan), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void SendEnd() => s_sendTicks += Stopwatch.GetTimestamp() - s_sendStart;
+        static void SendEnd()
+        {
+            long elapsed = Stopwatch.GetTimestamp() - s_sendStart;
+            s_sendTicks += elapsed;
+            s_sendTicksEver += elapsed;
+        }
 
         [HarmonyPatch(typeof(ZDOMan), "CreateSyncList"), HarmonyPrefix, HarmonyPriority(Priority.First)]
         static void ScanBegin() => s_scanStart = Stopwatch.GetTimestamp();
@@ -57,13 +87,33 @@ namespace FiresGhettoNetworkMod
         static void ZoneBegin() { NextFrame(); s_zoneStart = Stopwatch.GetTimestamp(); }
 
         [HarmonyPatch(typeof(ZoneSystem), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void ZoneEnd() => s_zoneTicks += Stopwatch.GetTimestamp() - s_zoneStart;
+        static void ZoneEnd()
+        {
+            long elapsed = Stopwatch.GetTimestamp() - s_zoneStart;
+            s_zoneTicks += elapsed;
+            s_zoneTicksEver += elapsed;
+        }
 
         [HarmonyPatch(typeof(ZNetScene), "Update"), HarmonyPrefix, HarmonyPriority(Priority.First)]
         static void SceneBegin() { NextFrame(); s_sceneStart = Stopwatch.GetTimestamp(); }
 
         [HarmonyPatch(typeof(ZNetScene), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void SceneEnd() => s_sceneTicks += Stopwatch.GetTimestamp() - s_sceneStart;
+        static void SceneEnd()
+        {
+            long elapsed = Stopwatch.GetTimestamp() - s_sceneStart;
+            s_sceneTicks += elapsed;
+            s_sceneTicksEver += elapsed;
+        }
+
+        /// <summary>Running totals since the server started, for the time spent in each subsystem between two points in time.</summary>
+        internal static SubsystemTicks SubsystemTicksSoFar() => new SubsystemTicks
+        {
+            Networking = s_netTicksEver,
+            Sending = s_sendTicksEver,
+            Zones = s_zoneTicksEver,
+            Objects = s_sceneTicksEver,
+            Collections = GC.CollectionCount(0),
+        };
 
         internal static string Report()
         {
