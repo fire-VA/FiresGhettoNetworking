@@ -17,7 +17,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.49";
+        public const string PluginVersion = "1.4.50";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)

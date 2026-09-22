@@ -23,6 +23,9 @@ namespace FiresGhettoNetworkMod
 
         private static bool s_patched;
 
+        // Harmony re-runs the transpiler whenever another mod patches CreateSyncList, so the success line prints once.
+        private static bool s_announced;
+
         public static void InitConfig(ConfigFile config)
         {
             ConfigLivePlayerPositions = config.Bind("04 - Networking", "Live Player Positions", true,
@@ -72,7 +75,13 @@ namespace FiresGhettoNetworkMod
 
             s_patched = swapped > 0;
             if (swapped == 1)
-                LoggerOptions.LogInfo("ZDOMan.CreateSyncList: each player's update is gathered and sorted around their live character position.");
+            {
+                if (!s_announced)
+                {
+                    s_announced = true;
+                    LoggerOptions.LogInfo("ZDOMan.CreateSyncList: each player's update is gathered and sorted around their live character position.");
+                }
+            }
             else if (swapped == 0)
                 LoggerOptions.LogWarning("ZDOMan.CreateSyncList has no reference-position read this FGN version recognises (game update or another mod); "
                     + "players keep vanilla's 2-second-old reported position.");
