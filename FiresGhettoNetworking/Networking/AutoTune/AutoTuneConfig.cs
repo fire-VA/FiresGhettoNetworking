@@ -14,6 +14,23 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static ConfigEntry<bool> RetuneOnEveryLogin;
         public static ConfigEntry<int>  LinkDowngradeCap;
 
+        public const float DefaultSettleMinimumSeconds = 8f;
+        public const float DefaultSettleCeilingSeconds = 300f;
+        public const float DefaultSettleQuietHoldSeconds = 6f;
+        public const float DefaultSettleQuietKilobytesPerSecond = 24f;
+        public const int DefaultSettleStabilityTolerancePercent = 25;
+        public const float DefaultProbeSlotGrantTimeoutSeconds = 45f;
+
+        // Settle detection — replaces the fixed post-arrival delay when enabled
+        public static ConfigEntry<bool>  EnableSettleDetection;
+        public static ConfigEntry<float> SettleMinimumSeconds;
+        public static ConfigEntry<float> SettleCeilingSeconds;
+        public static ConfigEntry<float> SettleQuietHoldSeconds;
+        public static ConfigEntry<float> SettleQuietKilobytesPerSecond;
+        public static ConfigEntry<int>   SettleStabilityTolerancePercent;
+        public static ConfigEntry<bool>  EnableProbeSlotHandshake;
+        public static ConfigEntry<float> ProbeSlotGrantTimeoutSeconds;
+
         // Probe timing knobs (rarely user-tuned, but exposed for emergencies)
         public static ConfigEntry<float> ProbeStartDelaySeconds;
         public static ConfigEntry<float> PlayerArrivalTimeoutSeconds;
@@ -74,6 +91,88 @@ namespace FiresGhettoNetworkMod.AutoTune
                     "bad link can drop you two tiers. Okay/medium ping costs nothing either way. CLIENT-SIDE only.",
                     new AcceptableValueRange<int>(0, 2)));
 
+            EnableSettleDetection = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Enable Settle Detection",
+                true,
+                new ConfigDescription(
+                    "Start the probe when the link actually goes quiet instead of after a fixed delay. The probe\n" +
+                    "watches link throughput, the send queue, main-thread stalls and zone loading, and begins once\n" +
+                    "all four have been quiet for the hold time below. A fixed delay cannot cover both a vanilla\n" +
+                    "server and a modpack whose asset sync runs for minutes past arrival: too short samples the\n" +
+                    "sync and files a fast connection as LOW, too long delays every client for the worst case.\n" +
+                    "When this is ON, 'Start Delay Seconds' is ignored. CLIENT-SIDE only."));
+
+            SettleMinimumSeconds = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Settle Minimum Seconds",
+                DefaultSettleMinimumSeconds,
+                new ConfigDescription(
+                    "Never probe sooner than this after the player arrives, even if the link already looks quiet.\n" +
+                    "Guards against sampling inside the lull between two bursts of arrival traffic.",
+                    new AcceptableValueRange<float>(0f, 120f)));
+
+            SettleCeilingSeconds = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Settle Ceiling Seconds",
+                DefaultSettleCeilingSeconds,
+                new ConfigDescription(
+                    "Give up waiting for quiet after this long and probe anyway. A sample taken at the ceiling is\n" +
+                    "marked unsettled: it can RAISE the tier but never lower it, so a server that is never quiet\n" +
+                    "cannot pin a good connection to a low tier. The rolling monitor re-probes later regardless.",
+                    new AcceptableValueRange<float>(30f, 900f)));
+
+            SettleQuietHoldSeconds = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Settle Quiet Hold Seconds",
+                DefaultSettleQuietHoldSeconds,
+                new ConfigDescription(
+                    "How long every signal must stay quiet before the link counts as settled.",
+                    new AcceptableValueRange<float>(1f, 60f)));
+
+            SettleQuietKilobytesPerSecond = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Settle Quiet KB Per Second",
+                DefaultSettleQuietKilobytesPerSecond,
+                new ConfigDescription(
+                    "Combined send+receive throughput on the server link, below which the link counts as idle.\n" +
+                    "Steady-state Valheim play sits well under this; a mod pushing assets or configs sits far above.\n" +
+                    "A link that never drops this low can still settle — see Settle Stability Tolerance.",
+                    new AcceptableValueRange<float>(1f, 512f)));
+
+            SettleStabilityTolerancePercent = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Settle Stability Tolerance",
+                DefaultSettleStabilityTolerancePercent,
+                new ConfigDescription(
+                    "How much the link's throughput may vary across the hold window and still count as settled,\n" +
+                    "as a percentage of the highest sample in that window. A link is ready to measure when it is\n" +
+                    "STEADY, not only when it is idle: a modpack that sits at a constant 130 KB/s is in its steady\n" +
+                    "state, and waiting for silence there waits forever and probes at the ceiling every login.\n" +
+                    "What actually ruins a sample is a burst or a stall, and both of those show up as a swing.\n" +
+                    "Lower = stricter, demands a flatter line; higher = settles sooner on a noisy link.",
+                    new AcceptableValueRange<int>(5, 100)));
+
+            EnableProbeSlotHandshake = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Enable Probe Slot Handshake",
+                true,
+                new ConfigDescription(
+                    "Ask the server for a probe slot once the link is settled, and wait for its go-ahead. The\n" +
+                    "server hands out one slot at a time so two clients probing at once cannot measure each\n" +
+                    "other's traffic and both file themselves too low. Servers without this mod, and unmodded\n" +
+                    "clients on a crossplay server, simply never take part — the client proceeds on the timeout."));
+
+            ProbeSlotGrantTimeoutSeconds = config.Bind(
+                "07 - Auto-Tune - Probe",
+                "Probe Slot Grant Timeout Seconds",
+                DefaultProbeSlotGrantTimeoutSeconds,
+                new ConfigDescription(
+                    "How long to wait for the server's go-ahead before probing without one. Reached on a server\n" +
+                    "that does not run this mod, or one holding the slot for another client; the sample is then\n" +
+                    "treated as unsettled and may not lower the tier.",
+                    new AcceptableValueRange<float>(5f, 300f)));
+
             ProbeStartDelaySeconds = config.Bind(
                 "07 - Auto-Tune - Probe",
                 "Start Delay Seconds",
@@ -85,8 +184,13 @@ namespace FiresGhettoNetworkMod.AutoTune
                     "while Valheim's own arrival traffic is queued ahead of our pings. 30s is the safe default;\n" +
                     "a server with heavy mod-driven sync (large worlds, many players) may benefit from 45-60.\n" +
                     "Worst-case modpacks on slow servers may need 75-90s to fully settle. Lower only if you\n" +
-                    "know your fast-load mod handles arrival-burst traffic well.",
-                    new AcceptableValueRange<float>(2f, 90f)));
+                    "know your fast-load mod handles arrival-burst traffic well.\n" +
+                    "A converted multi-million-ZDO world with gigabytes of bundle assets is a class above that:\n" +
+                    "measured main-thread stalls ran past T+340s there, and a probe fired inside one reads the\n" +
+                    "stall instead of the link (a 54ms connection sampled 4384ms and was filed LOW). 150-240s\n" +
+                    "suits that case. The probe also retries an aborted sample now, so an over-long delay costs\n" +
+                    "only a later tier, never a wrong one.",
+                    new AcceptableValueRange<float>(2f, 300f)));
 
             PlayerArrivalTimeoutSeconds = config.Bind(
                 "07 - Auto-Tune - Probe",

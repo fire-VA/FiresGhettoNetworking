@@ -1,5 +1,6 @@
 using HarmonyLib;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -97,10 +98,47 @@ namespace FiresGhettoNetworkMod
 
             LoggerOptions.LogMessage(
                 $"[CleanupThrottle] teardown: {movers} mover(s) destroyed IN-FRAME "
-                + $"({moverCharacters} Character, {moverBodies} rigidbody) — these would previously have been queued "
+                + $"({moverCharacters} Character, {moverBodies} rigidbody: {NameMovers()}) — these would previously have been queued "
                 + $"and left simulating while their surroundings were destroyed. "
                 + $"{deferred} static deferred ({queuedSolid} solid last). "
                 + $"Session totals: {_sessionMoversDestroyed} movers / {_sessionStaticDeferred} static.");
+        }
+
+        private const int MaxNamedMovers = 5;
+        private static readonly Dictionary<string, int> _moverCounts = new Dictionary<string, int>();
+        private static readonly List<KeyValuePair<string, int>> _moverRanking = new List<KeyValuePair<string, int>>();
+
+        private static string NameMovers()
+        {
+            _moverCounts.Clear();
+            for (int i = 0; i < _destroyNowScratch.Count; i++)
+            {
+                var view = _destroyNowScratch[i];
+                if (view == null) continue;
+                string name = PrefabName(view);
+                _moverCounts.TryGetValue(name, out int count);
+                _moverCounts[name] = count + 1;
+            }
+            _moverRanking.Clear();
+            _moverRanking.AddRange(_moverCounts);
+            _moverRanking.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+            var names = new StringBuilder();
+            for (int i = 0; i < _moverRanking.Count && i < MaxNamedMovers; i++)
+            {
+                if (i > 0) names.Append(", ");
+                names.Append(_moverRanking[i].Key);
+                if (_moverRanking[i].Value > 1) names.Append(" x").Append(_moverRanking[i].Value);
+            }
+            if (_moverRanking.Count > MaxNamedMovers) names.Append(", +").Append(_moverRanking.Count - MaxNamedMovers).Append(" more");
+            return names.ToString();
+        }
+
+        private static string PrefabName(ZNetView view)
+        {
+            var zdo = view.GetZDO();
+            var prefab = zdo != null && ZNetScene.instance != null ? ZNetScene.instance.GetPrefab(zdo.GetPrefab()) : null;
+            return prefab != null ? prefab.name : view.gameObject.name;
         }
 
         private static void RebuildInAreaSet(List<ZDO> currentNearObjects, List<ZDO> currentDistantObjects)

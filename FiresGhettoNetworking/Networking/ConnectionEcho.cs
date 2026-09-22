@@ -8,7 +8,8 @@ namespace FiresGhettoNetworkMod
     /// <summary>
     /// Times each player's round trip from the server's side. The server stamps a small echo, the player's FGN bounces it
     /// straight back, and the server measures the gap, so the figure covers crossplay players Steam has no ping for and
-    /// cannot be reported lower than it is. Players without FGN never answer, which also marks who has it.
+    /// cannot be reported lower than it is. Players without FGN never answer, which also marks who has it. Each echo is
+    /// traced stage by stage (RoundTripTrace) so the [Links] report can say where that time went.
     /// </summary>
     [HarmonyPatch]
     public static class ConnectionEcho
@@ -55,6 +56,7 @@ namespace FiresGhettoNetworkMod
             {
                 s_echoes[peer] = new Echo { NextSend = Time.realtimeSinceStartupAsDouble + IntervalSeconds };
                 peer.m_rpc.Register<long, int>(ReplyRpc, OnReply);
+                peer.m_rpc.Register<ZPackage>(RoundTripTrace.RpcEchoStages, RoundTripTrace.OnEchoStages);
             }
             else
             {
@@ -67,6 +69,7 @@ namespace FiresGhettoNetworkMod
         {
             if (peer == null) return;
             s_echoes.Remove(peer);
+            RoundTripTrace.ForgetEchoes(peer);
             if (peer.m_rpc != null) s_peersByRpc.Remove(peer.m_rpc);
         }
 
@@ -75,6 +78,7 @@ namespace FiresGhettoNetworkMod
         {
             s_echoes.Clear();
             s_peersByRpc.Clear();
+            RoundTripTrace.ForgetEchoes(null);
         }
 
         [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPostfix]
@@ -90,17 +94,25 @@ namespace FiresGhettoNetworkMod
                 var echo = entry.Value;
                 if (now < echo.NextSend || peer.m_rpc == null || !peer.IsReady()) continue;
                 echo.NextSend = now + IntervalSeconds;
+                RoundTripTrace.NoteEchoSending(peer);
                 echo.PendingStamp = Stopwatch.GetTimestamp();
                 peer.m_rpc.Invoke(EchoRpc, echo.PendingStamp);
+                RoundTripTrace.NoteEchoSent(peer, echo.PendingStamp);
             }
         }
 
-        private static void OnEcho(ZRpc rpc, long stamp) => rpc.Invoke(ReplyRpc, stamp, Protocol);
+        private static void OnEcho(ZRpc rpc, long stamp)
+        {
+            RoundTripTrace.AnswerLeg leg = RoundTripTrace.BeginAnswerLeg(rpc);
+            rpc.Invoke(ReplyRpc, stamp, Protocol);
+            RoundTripTrace.SendAnswerLeg(rpc, RoundTripTrace.RpcEchoStages, stamp, leg);
+        }
 
         private static void OnReply(ZRpc rpc, long stamp, int protocol)
         {
             var peer = PeerOf(rpc);
             if (peer == null || !s_echoes.TryGetValue(peer, out var echo) || stamp != echo.PendingStamp) return;
+            RoundTripTrace.NoteEchoAnswered(peer, rpc, stamp);
             echo.PendingStamp = 0L;
             float sample = (float)((Stopwatch.GetTimestamp() - stamp) * 1000.0 / Stopwatch.Frequency);
             if (sample < 0f || sample > MaxPlausibleRttMs) return;

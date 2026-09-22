@@ -30,6 +30,11 @@ namespace FiresGhettoNetworkMod.AutoTune
         // GhettoNetworkingCoexistence helper for the consuming side.
         private static readonly HashSet<long> _peersWithTierReported = new HashSet<long>();
 
+        private static readonly TimeSpan ProbeSlotMaxHold = TimeSpan.FromSeconds(120);
+        private static readonly Queue<long> _probeSlotQueue = new Queue<long>();
+        private static long _probeSlotHolderUid;
+        private static DateTime _probeSlotGrantedUtc = DateTime.MinValue;
+
         private struct ClientReport
         {
             public Tier Tier;
@@ -59,6 +64,102 @@ namespace FiresGhettoNetworkMod.AutoTune
         {
             if (peerUid == 0L) return;
             _peersWithTierReported.Remove(peerUid);
+            ReleaseProbeSlot(peerUid);
+        }
+
+        /// <summary>
+        /// Hands one client at a time the go-ahead to probe. Two clients settling in the same
+        /// minute would otherwise measure each other's probe traffic and both file themselves a
+        /// tier too low. Callers that never get a grant proceed on their own timeout, so an
+        /// unmodded or older client is never blocked by this.
+        /// </summary>
+        public static void OnProbeSlotRequest(ZRpc rpc)
+        {
+            if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
+
+            long requesterUid = 0L;
+            try { requesterUid = ZNet.instance.GetPeer(rpc)?.m_uid ?? 0L; }
+            catch { }
+            if (requesterUid == 0L) return;
+
+            bool slotIsFree = _probeSlotHolderUid == 0L
+                || DateTime.UtcNow - _probeSlotGrantedUtc > ProbeSlotMaxHold;
+
+            if (slotIsFree)
+            {
+                GrantProbeSlotTo(requesterUid);
+                return;
+            }
+
+            if (requesterUid != _probeSlotHolderUid && !_probeSlotQueue.Contains(requesterUid))
+            {
+                _probeSlotQueue.Enqueue(requesterUid);
+                LoggerOptions.LogInfo($"[AutoTune] Probe slot busy (peer {_probeSlotHolderUid}); peer {requesterUid} queued at position {_probeSlotQueue.Count}.");
+            }
+        }
+
+        private static void GrantProbeSlotTo(long peerUid)
+        {
+            ZNetPeer peer = null;
+            try { peer = ZNet.instance?.GetPeer(peerUid); }
+            catch { }
+            if (peer == null || peer.m_rpc == null)
+            {
+                GrantProbeSlotToNextInQueue();
+                return;
+            }
+
+            _probeSlotHolderUid = peerUid;
+            _probeSlotGrantedUtc = DateTime.UtcNow;
+            try
+            {
+                peer.m_rpc.Invoke(AutoTuneProbe.RpcProbeSlotGrant);
+                LoggerOptions.LogInfo($"[AutoTune] Probe slot granted to peer {peerUid}.");
+            }
+            catch (Exception ex)
+            {
+                LoggerOptions.LogWarning($"[AutoTune] Probe slot grant to peer {peerUid} failed: {ex.Message}");
+                _probeSlotHolderUid = 0L;
+                GrantProbeSlotToNextInQueue();
+            }
+        }
+
+        private static void ReleaseProbeSlot(long peerUid)
+        {
+            if (_probeSlotHolderUid != peerUid)
+            {
+                RemoveFromProbeSlotQueue(peerUid);
+                return;
+            }
+
+            _probeSlotHolderUid = 0L;
+            GrantProbeSlotToNextInQueue();
+        }
+
+        private static void GrantProbeSlotToNextInQueue()
+        {
+            while (_probeSlotQueue.Count > 0)
+            {
+                long nextUid = _probeSlotQueue.Dequeue();
+                ZNetPeer peer = null;
+                try { peer = ZNet.instance?.GetPeer(nextUid); }
+                catch { }
+                if (peer == null || peer.m_rpc == null) continue;
+                GrantProbeSlotTo(nextUid);
+                return;
+            }
+        }
+
+        private static void RemoveFromProbeSlotQueue(long peerUid)
+        {
+            if (_probeSlotQueue.Count == 0 || !_probeSlotQueue.Contains(peerUid)) return;
+            var remaining = new Queue<long>(_probeSlotQueue.Count);
+            foreach (long queuedUid in _probeSlotQueue)
+            {
+                if (queuedUid != peerUid) remaining.Enqueue(queuedUid);
+            }
+            _probeSlotQueue.Clear();
+            foreach (long queuedUid in remaining) _probeSlotQueue.Enqueue(queuedUid);
         }
 
         /// <summary>
@@ -177,7 +278,11 @@ namespace FiresGhettoNetworkMod.AutoTune
             long peerUid = 0L;
             try { peerUid = ZNet.instance.GetPeer(rpc)?.m_uid ?? 0L; }
             catch { /* peer lookup failed — fall through, consumers will timeout */ }
-            if (peerUid != 0L) _peersWithTierReported.Add(peerUid);
+            if (peerUid != 0L)
+            {
+                _peersWithTierReported.Add(peerUid);
+                ReleaseProbeSlot(peerUid);
+            }
 
             LoggerOptions.LogInfo($"[AutoTune] Client reported tier={reported} ping={pingMedianMs}ms peer={peerUid} (rolling window: {_clientReports.Count}/{ClientReportWindow})");
 

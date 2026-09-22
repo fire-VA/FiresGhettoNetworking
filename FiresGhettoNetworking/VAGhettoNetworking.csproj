@@ -185,20 +185,19 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Ascend.cs" />
-    <!-- ClientLogRelay\ entries removed for Thunderstore release.  Files
-         remain on disk and will be split into a standalone mod later;
-         add the Compile Include lines back to re-enable. -->
     <Compile Include="Networking\AILODPatches.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneCache.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneConfig.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneProbe.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneTier.cs" />
+    <Compile Include="Networking\AutoTune\ProbeSettleDetector.cs" />
     <Compile Include="Networking\AutoTune\ServerAutoTune.cs" />
     <Compile Include="Networking\AutoTune\ZoneLoadPatches.cs" />
     <Compile Include="Networking\BigZdoDiagnostic.cs" />
     <Compile Include="Networking\BulkTransferGatePatches.cs" />
     <Compile Include="Networking\ClientCleanupThrottle.cs" />
     <Compile Include="Networking\GroundSnapPatches.cs" />
+    <Compile Include="Networking\HelmOwnership.cs" />
     <Compile Include="Networking\OwnershipHandoffPatches.cs" />
     <Compile Include="Networking\TeleportGhostFix.cs" />
     <Compile Include="Networking\TerrainCompInitRace.cs" />
@@ -220,7 +219,10 @@
     <Compile Include="Networking\StationRouter.cs" />
     <Compile Include="Networking\ServerFrameProfile.cs" />
     <Compile Include="Networking\SectorChangeTracker.cs" />
+    <Compile Include="Networking\SyncListRefPosPatches.cs" />
+    <Compile Include="Networking\UploadBreakdown.cs" />
     <Compile Include="Networking\ConnectionEcho.cs" />
+    <Compile Include="Networking\RoundTripTrace.cs" />
     <Compile Include="Networking\CreatureOwnership.cs" />
     <Compile Include="Networking\VanillaAccess.cs" />
     <Compile Include="Networking\KeepaliveFirst.cs" />
@@ -263,10 +265,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
-    <None Include="ClientLogRelay\README.md" />
     <None Include="packages.config" />
-    <None Include="Scripts\test_discord_polling.bat" />
-    <None Include="Scripts\valheim_server_wrapper.bat" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Utilities\" />

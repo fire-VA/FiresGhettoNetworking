@@ -19,9 +19,14 @@ namespace FiresGhettoNetworkMod
     {
         public static ConfigEntry<bool> ConfigAdaptiveWindow;
         public static ConfigEntry<int> ConfigMaxWindowKB;
+        public static ConfigEntry<int> ConfigCrossplayInFlightKB;
+
+        private const int DefaultCrossplayInFlightKb = 20;
+        private const int MinCrossplayWindowBytes = MinChunkBytes * 2;
 
         public const int MinChunkBytes = 2048;
         private const int VanillaWindowBytes = 10240;
+        private const int PlayFabQueueShare = 4;
         private const int SteamRateCeilingBytes = 100 * 1024 * 1024;
         private const int BytesPerKilobyte = 1024;
         private const float BytesPerMegabyte = 1024f * 1024f;
@@ -49,6 +54,8 @@ namespace FiresGhettoNetworkMod
             public ZNetPeer Peer;
             public ISocket OuterSocket;
             public ZSteamSocket Steam;
+            public bool Crossplay;
+            public bool CrossplayNoticed;
             public int Window;
             public bool Limited;
             public bool HasStatus;
@@ -97,13 +104,25 @@ namespace FiresGhettoNetworkMod
                 "Sizes how much world data may be on its way to each player at once from that player's own connection. It grows "
                 + "while the connection keeps up and shrinks as soon as Steam reports queueing, lost packets or rising ping. "
                 + "Vanilla gives everyone the same 10 KB, which a slow link overflows and a fast but distant link cannot fill. "
-                + "Off = every player uses Queue Size. Crossplay players always use Queue Size, Steam has no figures for them.\n"
+                + "Off = Steam players use Queue Size. Crossplay players are sized by Crossplay In-Flight KB instead: PlayFab "
+                + "gives no figures to size a window from, and counts only a quarter of its unacknowledged data as queued.\n"
                 + "Applies on both sides: a server sizes what it sends each player, a client what it sends the server.");
             ConfigMaxWindowKB = config.Bind("04 - Networking", "Max Send Window", 1024,
                 new ConfigDescription("Upper limit, in KB per player, for Adaptive Send Window.",
                     new AcceptableValueRange<int>(64, 8192)));
+            ConfigCrossplayInFlightKB = config.Bind("04 - Networking", "Crossplay In-Flight KB", DefaultCrossplayInFlightKb,
+                new ConfigDescription(
+                    "How much world data may really be on its way to a crossplay (PlayFab) player at once.\n"
+                    + "PlayFab's socket reports only a quarter of its unacknowledged bytes as queued, so vanilla's 10 KB gate "
+                    + "actually lets a crossplay player run about 40 KB outstanding — four times what a Steam player gets, on "
+                    + "the one transport that waits three seconds before resending a lost packet and blocks everything behind "
+                    + "it meanwhile. This setting is the real figure; the quarter is divided back out for you.\n"
+                    + "Lower means a lost packet costs less and recovers sooner; higher means more data in flight on a long "
+                    + "link. CLIENT and SERVER.",
+                    new AcceptableValueRange<int>(8, 128)));
             ConfigAdaptiveWindow.SettingChanged += (_, __) => ResetWindows();
             ConfigMaxWindowKB.SettingChanged += (_, __) => ClampWindows();
+            ConfigCrossplayInFlightKB.SettingChanged += (_, __) => ResetWindows();
 
             s_connection = AccessTools.FieldRefAccess<ZSteamSocket, HSteamNetConnection>("m_con");
             s_totalSent = AccessTools.FieldRefAccess<ZSteamSocket, int>("m_totalSent");
@@ -204,10 +223,26 @@ namespace FiresGhettoNetworkMod
         {
             foreach (var link in s_links.Values)
             {
-                link.Window = StaticWindowBytes();
+                link.Window = FallbackWindowBytes(link);
                 link.NextUpdate = 0.0;
             }
         }
+
+        private static int FallbackWindowBytes(Link link) => link.Crossplay ? CrossplayWindowBytes() : StaticWindowBytes();
+
+        /// <summary>
+        /// The window a crossplay link is gated against, in the quarter-sized units its socket reports.
+        /// ZPlayFabSocket.GetSendQueueSize returns a quarter of real in-flight bytes, so a 10 KB gate
+        /// permits roughly 40 KB outstanding on the transport least able to carry it: PlayFab resends
+        /// only the oldest unacknowledged packet, three seconds after it goes missing, and its ACKs are
+        /// cumulative, so everything queued behind a loss waits out that timer. The floor keeps enough
+        /// room above vanilla's own 2 KB minimum for packages to keep flowing.
+        /// </summary>
+        private static int CrossplayInFlightKb() =>
+            ConfigCrossplayInFlightKB != null ? ConfigCrossplayInFlightKB.Value : DefaultCrossplayInFlightKb;
+
+        private static int CrossplayWindowBytes() =>
+            Mathf.Max(MinCrossplayWindowBytes, CrossplayInFlightKb() * BytesPerKilobyte / PlayFabQueueShare);
 
         private static void ClampWindows()
         {
@@ -223,7 +258,9 @@ namespace FiresGhettoNetworkMod
             if (!s_links.TryGetValue(netPeer, out var link))
             {
                 if (s_links.Count == 0) ServerFrameProfile.Report();
-                link = new Link { Peer = netPeer, Window = StaticWindowBytes(), SendsSince = Time.realtimeSinceStartupAsDouble };
+                link = new Link { Peer = netPeer, SendsSince = Time.realtimeSinceStartupAsDouble };
+                TrackSocket(link);
+                link.Window = FallbackWindowBytes(link);
                 s_links[netPeer] = link;
             }
             return link;
@@ -247,17 +284,29 @@ namespace FiresGhettoNetworkMod
             else link.RatePinned = false;
         }
 
-        private static void SampleSteamStatus(Link link, double now)
+        private static void TrackSocket(Link link)
         {
             var socket = link.Peer.m_socket;
-            if (!ReferenceEquals(socket, link.OuterSocket))
-            {
-                link.OuterSocket = socket;
-                link.Steam = socket != null ? NetworkingRatesGroup.UnwrapSocket(socket) as ZSteamSocket : null;
-                link.Connection = 0u;
-                link.RatePinned = false;
-                link.GoodputPrimed = false;
-            }
+            if (ReferenceEquals(socket, link.OuterSocket)) return;
+            link.OuterSocket = socket;
+            var inner = socket != null ? NetworkingRatesGroup.UnwrapSocket(socket) : null;
+            link.Steam = inner as ZSteamSocket;
+            link.Crossplay = inner != null && inner.GetType() == typeof(ZPlayFabSocket);
+            link.Connection = 0u;
+            link.RatePinned = false;
+            link.GoodputPrimed = false;
+            if (!link.Crossplay || link.CrossplayNoticed) return;
+            link.CrossplayNoticed = true;
+            string connection = link.Peer.m_server ? "Connected to the server" : PeerName(link.Peer) + " is connected";
+            LoggerOptions.LogMessage($"[Crossplay] {connection} over crossplay (PlayFab). FGN compression, Steam send rates and the "
+                + $"adaptive send window do not apply to a crossplay connection. Holding {CrossplayInFlightKb()} KB of real "
+                + $"in-flight data (gate {CrossplayWindowBytes() / BytesPerKilobyte} KB, since PlayFab reports a quarter of "
+                + "what it has outstanding); vanilla's own 10 KB gate would allow about 40 KB.");
+        }
+
+        private static void SampleSteamStatus(Link link, double now)
+        {
+            TrackSocket(link);
 
             if (link.Steam == null || !TryStatus(link.Steam, out var status))
             {
@@ -312,7 +361,7 @@ namespace FiresGhettoNetworkMod
             link.LastTotalSent = totalSent;
         }
 
-        private static bool TryStatus(ZSteamSocket socket, out SteamNetConnectionRealTimeStatus_t status)
+        internal static bool TryStatus(ZSteamSocket socket, out SteamNetConnectionRealTimeStatus_t status)
         {
             status = default;
             var connection = s_connection(socket);
@@ -335,7 +384,7 @@ namespace FiresGhettoNetworkMod
         {
             if (!link.HasStatus)
             {
-                link.Window = StaticWindowBytes();
+                link.Window = FallbackWindowBytes(link);
                 link.Congested = false;
                 link.Limited = false;
                 return;
@@ -452,6 +501,16 @@ namespace FiresGhettoNetworkMod
                 + $"pacing {link.PacingBytes / BytesPerMegabyte:F1} MB/s, goodput {link.Goodput / BytesPerMegabyte:F2} MB/s";
         }
 
+        private static string DescribeWithoutSteam(Link link)
+        {
+            string window = "window " + (link.Window / BytesPerKilobyte) + " KB";
+            if (!link.Crossplay) return PeerName(link.Peer) + ": no Steam figures, " + window;
+            int inFlight = 0;
+            try { inFlight = link.Peer.m_socket != null ? NetworkingRatesGroup.UnwrapSocket(link.Peer.m_socket).GetSendQueueSize() * PlayFabQueueShare : 0; }
+            catch { }
+            return PeerName(link.Peer) + ": crossplay, " + window + ", in flight " + (inFlight / BytesPerKilobyte) + " KB";
+        }
+
         private static string PeerName(ZNetPeer peer)
         {
             if (peer == null) return "?";
@@ -515,12 +574,18 @@ namespace FiresGhettoNetworkMod
                 float sendsPerSecond = (float)(link.Sends / span);
                 link.Sends = 0;
                 link.SendsSince = now;
-                sb.Append('\n').Append(link.HasStatus ? Describe(link) : PeerName(link.Peer) + ": no Steam figures, window "
-                    + (link.Window / BytesPerKilobyte) + " KB")
+                sb.Append('\n').Append(link.HasStatus ? Describe(link) : DescribeWithoutSteam(link))
                   .Append(", sends ").Append(sendsPerSecond.ToString("F1")).Append("/s");
                 if (link.RatePinned) sb.Append(", rate pinned ").Append((link.RateTarget / BytesPerMegabyte).ToString("F1")).Append(" MB/s");
                 if (ZNet.instance.IsServer())
                     sb.Append(ConnectionEcho.TryRtt(link.Peer, out float echoMs) ? ", FGN round trip " + echoMs.ToString("F0") + " ms" : ", no FGN reply");
+                if (ZNet.instance.IsDedicated())
+                    sb.Append(", delta snapshots ").Append(ZDODeltaPatches.SnapshotCountFor(link.Peer.m_uid));
+                if (ZNet.instance.IsServer())
+                {
+                    string echoStages = RoundTripTrace.DescribeEchoes(link.Peer);
+                    if (echoStages != null) sb.Append("\n  ").Append(echoStages);
+                }
             }
             if (s_links.Count == 0) sb.Append("\nno connections yet");
             if (ZNet.instance.IsDedicated())

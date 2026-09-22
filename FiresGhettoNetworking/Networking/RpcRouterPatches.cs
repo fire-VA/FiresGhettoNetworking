@@ -5,14 +5,16 @@ namespace FiresGhettoNetworkMod
     /// <summary>
     /// Server-side hooks for RoutedRpcManager: routed RPCs arriving from players, broadcasts the server raises itself, and
     /// the server's own destroy batches, whose holders must be read before vanilla handles the destroy and forgets them.
+    /// Both prefixes stand in for vanilla, so they stand down when an earlier prefix has already vetoed the call.
     /// </summary>
     [HarmonyPatch]
     public static class RpcRouterPatches
     {
         [HarmonyPatch(typeof(ZRoutedRpc), "RPC_RoutedRPC")]
         [HarmonyPrefix]
-        public static bool RPC_RoutedRPC_Prefix(ZRoutedRpc __instance, ZRpc rpc, ZPackage pkg)
+        public static bool RPC_RoutedRPC_Prefix(ZRoutedRpc __instance, ZRpc rpc, ZPackage pkg, bool __runOriginal)
         {
+            if (!__runOriginal) return false;
             if (!VanillaAccess.RoutedRpcIsServer(__instance)) return true;
             RoutedRpcManager.ProcessRoutedRPC(__instance, rpc, pkg);
             return false;
@@ -20,8 +22,9 @@ namespace FiresGhettoNetworkMod
 
         [HarmonyPatch(typeof(ZRoutedRpc), "RouteRPC")]
         [HarmonyPrefix]
-        public static bool RouteRPC_Prefix(ZRoutedRpc __instance, ZRoutedRpc.RoutedRPCData rpcData)
+        public static bool RouteRPC_Prefix(ZRoutedRpc __instance, ZRoutedRpc.RoutedRPCData rpcData, bool __runOriginal)
         {
+            if (!__runOriginal) return false;
             if (rpcData == null || rpcData.m_targetPeerID != 0L) return true;
             if (!VanillaAccess.RoutedRpcIsServer(__instance) || rpcData.m_senderPeerID != VanillaAccess.RoutedRpcId(__instance)) return true;
             if (!RoutedRpcManager.FilteringEnabled()) return true;

@@ -28,6 +28,9 @@ namespace FiresGhettoNetworkMod
         }
 
         // ====================== FORCE CROSSPLAY ======================
+        // Vanilla starts the public IP lookup at the end of ParseServerArguments, only when -crossplay already chose PlayFab.
+        // Forcing PlayFab after that has to start it too: without the IP the lobby never gets an address, so joining the
+        // server by address finds no crossplay lobby and falls back to Steam.
         [HarmonyPatch(typeof(FejdStartup), "ParseServerArguments")]
         [HarmonyPostfix]
         static void ApplyForceCrossplay()
@@ -39,7 +42,8 @@ namespace FiresGhettoNetworkMod
             {
                 case ForceCrossplayOptions.playfab:
                     ZNet.m_onlineBackend = OnlineBackendType.PlayFab;
-                    LoggerOptions.LogMessage("[Crossplay] Forcing crossplay ENABLED (PlayFab backend).");
+                    ZPlayFabMatchmaking.LookupPublicIP();
+                    LoggerOptions.LogMessage("[Crossplay] Forcing crossplay ENABLED (PlayFab backend), public IP lookup started.");
                     break;
                 case ForceCrossplayOptions.steamworks:
                     ZNet.m_onlineBackend = OnlineBackendType.Steamworks;
@@ -88,14 +92,21 @@ namespace FiresGhettoNetworkMod
             __result = forced.Value;
         }
 
-        // Joining by IP / explicit backend — this overload carries a real address, so the backend can
-        // safely be forced.
+        // Joining by address. Vanilla reaches this overload only after finding no crossplay server at the address, so there is
+        // no crossplay session a join could be forced onto: forcing PlayFab here leaves the client connecting to nothing.
         [HarmonyPatch(typeof(ZNet), nameof(ZNet.SetServerHost), new System.Type[] { typeof(string), typeof(int), typeof(OnlineBackendType) })]
         [HarmonyPostfix]
         static void ForceClientBackendOnJoinByAddress()
         {
             OnlineBackendType? forced = ForcedBackend();
             if (!forced.HasValue || ZNet.m_onlineBackend == forced.Value) return;
+            if (forced.Value == OnlineBackendType.PlayFab)
+            {
+                LoggerOptions.LogWarning("[Crossplay] Force Crossplay=playfab is ignored when joining a server by address: Valheim joins an "
+                    + $"address over crossplay only when it finds a crossplay server there, so this join stays on {ZNet.m_onlineBackend}. "
+                    + "Join a crossplay server with its join code.");
+                return;
+            }
             LoggerOptions.LogInfo($"[Crossplay] client SetServerHost(addr) {ZNet.m_onlineBackend} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
             ZNet.m_onlineBackend = forced.Value;
         }

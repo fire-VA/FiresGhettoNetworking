@@ -15,9 +15,12 @@ namespace FiresGhettoNetworkMod
     public static class ZDODeltaPatches
     {
         private const float MaxDeltaWindowSec = 5f;
+        private const float SnapshotSweepIntervalSec = 1f;
 
         private static readonly Dictionary<long, Dictionary<ZDOID, ZDOSnapshot>> _peerSnapshots
             = new Dictionary<long, Dictionary<ZDOID, ZDOSnapshot>>();
+        private static readonly List<ZDOID> _expiredSnapshotIds = new List<ZDOID>();
+        private static float _nextSnapshotSweepTime;
 
         private sealed class ZDOSnapshot
         {
@@ -133,7 +136,7 @@ namespace FiresGhettoNetworkMod
                 return true;
             }
 
-            if (Time.realtimeSinceStartup - snap.lastKeyframeTime > MaxDeltaWindowSec)
+            if (IsPastDeltaWindow(snap, Time.realtimeSinceStartup))
             {
                 _pendingKeyframe = true;
                 return true;
@@ -182,6 +185,84 @@ namespace FiresGhettoNetworkMod
             if (netPeer == null) return;
             _peerSnapshots.Remove(netPeer.m_uid);
         }
+
+        [HarmonyPatch(typeof(ZDOMan), "HandleDestroyedZDO")]
+        [HarmonyPostfix]
+        public static void HandleDestroyedZDO_ForgetSnapshots(ZDOID uid)
+        {
+            foreach (var peerMap in _peerSnapshots.Values) peerMap.Remove(uid);
+        }
+
+        /// <summary>
+        /// A snapshot past the delta window is only ever overwritten by the next keyframe, so dropping it changes nothing that is sent.
+        /// </summary>
+        [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.Update))]
+        [HarmonyPostfix]
+        public static void ZDOMan_Update_ForgetExpiredSnapshots()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (now < _nextSnapshotSweepTime) return;
+            _nextSnapshotSweepTime = now + SnapshotSweepIntervalSec;
+            foreach (var peerMap in _peerSnapshots.Values) ForgetSnapshotsPastDeltaWindow(peerMap, now);
+        }
+
+        internal static int SnapshotCountFor(long peerUid)
+            => _peerSnapshots.TryGetValue(peerUid, out var peerMap) ? peerMap.Count : 0;
+
+        /// <summary>
+        /// A snapshot records what the server last sent a player, but a player's own writes are never sent back to it, so
+        /// once it has written an object its copy no longer matches the snapshot. Every object a player sends is sent back
+        /// to it in full next time.
+        /// </summary>
+        [HarmonyPatch(typeof(ZDOMan), "RPC_ZDOData")]
+        [HarmonyPrefix]
+        public static void RPC_ZDOData_Prefix(ZRpc rpc, ZPackage pkg)
+        {
+            if (s_yieldToForeignSerializer || pkg == null || _peerSnapshots.Count == 0) return;
+            if (FiresGhettoNetworkMod.ConfigEnableZDODelta == null || !FiresGhettoNetworkMod.ConfigEnableZDODelta.Value) return;
+            var sender = ConnectionEcho.PeerOf(rpc);
+            if (sender == null || !_peerSnapshots.TryGetValue(sender.m_uid, out var peerMap) || peerMap.Count == 0) return;
+            ForgetObjectsIn(pkg, peerMap);
+        }
+
+        private static void ForgetObjectsIn(ZPackage pkg, Dictionary<ZDOID, ZDOSnapshot> peerMap)
+        {
+            int start = pkg.GetPos();
+            try
+            {
+                int invalidated = pkg.ReadInt();
+                for (int i = 0; i < invalidated; i++) pkg.ReadZDOID();
+                for (ZDOID id = pkg.ReadZDOID(); !id.IsNone(); id = pkg.ReadZDOID())
+                {
+                    pkg.ReadUShort();
+                    pkg.ReadUInt();
+                    pkg.ReadLong();
+                    pkg.ReadVector3();
+                    int dataBytes = pkg.ReadInt();
+                    pkg.SetPos(pkg.GetPos() + dataBytes);
+                    peerMap.Remove(id);
+                }
+            }
+            catch
+            {
+                peerMap.Clear();
+            }
+            finally
+            {
+                pkg.SetPos(start);
+            }
+        }
+
+        private static void ForgetSnapshotsPastDeltaWindow(Dictionary<ZDOID, ZDOSnapshot> peerMap, float now)
+        {
+            foreach (var entry in peerMap)
+                if (IsPastDeltaWindow(entry.Value, now)) _expiredSnapshotIds.Add(entry.Key);
+            foreach (var id in _expiredSnapshotIds) peerMap.Remove(id);
+            _expiredSnapshotIds.Clear();
+        }
+
+        private static bool IsPastDeltaWindow(ZDOSnapshot snapshot, float now)
+            => now - snapshot.lastKeyframeTime > MaxDeltaWindowSec;
 
         // Wire bits, mirroring vanilla's private ZDO.ExtraDataFlags.
         private const int FlagConnections = 0x0001;
@@ -246,20 +327,35 @@ namespace FiresGhettoNetworkMod
                 pkg.Write(connection.m_target);
             }
 
-            ZDODataHelper.WriteData(pkg, changedFloats, new Action<float>(pkg.Write));
-            ZDODataHelper.WriteData(pkg, changedVec3s,  new Action<Vector3>(pkg.Write));
-            ZDODataHelper.WriteData(pkg, changedQuats,  new Action<Quaternion>(pkg.Write));
-            ZDODataHelper.WriteData(pkg, changedInts,   new Action<int>(pkg.Write));
-            ZDODataHelper.WriteData(pkg, changedLongs,  new Action<long>(pkg.Write));
-            ZDODataHelper.WriteData(pkg, strings,       new Action<string>(pkg.Write));
-            ZDODataHelper.WriteData(pkg, byteArrays,    new Action<byte[]>(pkg.Write));
+            // Each of these delegates is a heap object, built before the call even when the block is empty,
+            // and this runs for every ZDO in every package. Vanilla's helper returns immediately on an empty
+            // list, so skipping the call skips the allocation with no change to what reaches the wire.
+            if (changedFloats.Count > 0) ZDODataHelper.WriteData(pkg, changedFloats, new Action<float>(pkg.Write));
+            if (changedVec3s.Count > 0)  ZDODataHelper.WriteData(pkg, changedVec3s,  new Action<Vector3>(pkg.Write));
+            if (changedQuats.Count > 0)  ZDODataHelper.WriteData(pkg, changedQuats,  new Action<Quaternion>(pkg.Write));
+            if (changedInts.Count > 0)   ZDODataHelper.WriteData(pkg, changedInts,   new Action<int>(pkg.Write));
+            if (changedLongs.Count > 0)  ZDODataHelper.WriteData(pkg, changedLongs,  new Action<long>(pkg.Write));
+            if (strings.Count > 0)       ZDODataHelper.WriteData(pkg, strings,       new Action<string>(pkg.Write));
+            if (byteArrays.Count > 0)    ZDODataHelper.WriteData(pkg, byteArrays,    new Action<byte[]>(pkg.Write));
+        }
+
+        /// <summary>
+        /// One reusable result list per value type. WriteDelta asks for floats, vec3s, quats, ints and longs
+        /// in turn, so every live result has a different T and therefore its own list; none outlives the call
+        /// that asked for it. Allocating a fresh list here instead meant five short-lived lists for every ZDO
+        /// in every package, which is Gen0 garbage measured in thousands per second on a busy server.
+        /// </summary>
+        private static class ChangedBuffer<T>
+        {
+            internal static readonly List<KeyValuePair<int, T>> List = new List<KeyValuePair<int, T>>();
         }
 
         // Unity's == on Vector3 and Quaternion is approximate; the comparer is passed in so each type keeps its own.
         private static List<KeyValuePair<int, T>> Changed<T>(
             List<KeyValuePair<int, T>> current, Dictionary<int, T> snapshot, Func<T, T, bool> differs)
         {
-            var changed = new List<KeyValuePair<int, T>>();
+            var changed = ChangedBuffer<T>.List;
+            changed.Clear();
             foreach (var entry in current)
             {
                 T previous;
