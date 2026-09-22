@@ -53,7 +53,17 @@ namespace FiresGhettoNetworkMod
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMin", min);
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", max);
 
-            LoggerOptions.LogInfo($"Steam send rates applied: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
+            LogAppliedIfChanged("SendRates", $"Steam send rates applied: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
+        }
+
+        private static readonly Dictionary<string, string> s_lastAppliedLog = new Dictionary<string, string>();
+
+        // The same values are re-applied on every connection and tier check, so only a change is worth a line.
+        private static void LogAppliedIfChanged(string setting, string message)
+        {
+            if (s_lastAppliedLog.TryGetValue(setting, out string last) && last == message) return;
+            s_lastAppliedLog[setting] = message;
+            LoggerOptions.LogInfo(message);
         }
 
         // Temporarily lift global send-rate + send-buffer above the configured tier for fgn_socketramp.
@@ -317,7 +327,7 @@ namespace FiresGhettoNetworkMod
 
             int bytes = EffectiveConfig.SteamSendBufferBytes();
             SetSteamConfig("k_ESteamNetworkingConfig_SendBufferSize", bytes);
-            LoggerOptions.LogInfo($"Steam send buffer applied: {bytes / 1024} KB");
+            LogAppliedIfChanged("SendBuffer", $"Steam send buffer applied: {bytes / 1024} KB");
         }
 
         /// <summary>
@@ -342,7 +352,7 @@ namespace FiresGhettoNetworkMod
 
             int bytes = EffectiveConfig.SteamRecvBufferBytes();
             SetSteamConfig("k_ESteamNetworkingConfig_RecvBufferSize", bytes);
-            LoggerOptions.LogInfo($"Steam recv buffer applied: {bytes / 1024} KB");
+            LogAppliedIfChanged("RecvBuffer", $"Steam recv buffer applied: {bytes / 1024} KB");
         }
 
         /// <summary>
@@ -368,7 +378,7 @@ namespace FiresGhettoNetworkMod
 
             int bytes = EffectiveConfig.SteamRecvMaxMessageBytes();
             SetSteamConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", bytes);
-            LoggerOptions.LogInfo($"Steam recv-max-message applied: {bytes / 1024} KB");
+            LogAppliedIfChanged("RecvMaxMessage", $"Steam recv-max-message applied: {bytes / 1024} KB");
         }
 
         // True when the running Steamworks build exposes the per-connection send-buffer
@@ -508,8 +518,11 @@ namespace FiresGhettoNetworkMod
             else if (gates != 1 || windows != 1 || clamps != 1)
                 LoggerOptions.LogWarning($"ZDOMan.SendZDOs changed shape: {gates} queue check(s), {windows} budget(s), {clamps} package clamp(s) "
                     + "attached where 1 of each was expected. Per-player windows still apply where attached.");
-            else
+            else if (!s_queueLimitAnnounced)
+            {
+                s_queueLimitAnnounced = true;
                 LoggerOptions.LogInfo("ZDOMan.SendZDOs: send-queue limit follows each player's send window, packages capped at Queue Size.");
+            }
             return code;
         }
 
@@ -526,6 +539,9 @@ namespace FiresGhettoNetworkMod
         private const int VanillaQueueLimitBytes = 10240;
 
         private static bool s_queueLimitPatched;
+
+        // Harmony re-runs this transpiler whenever another mod patches SendZDOs, so the success line prints once.
+        private static bool s_queueLimitAnnounced;
 
         /// <summary>
         /// The send-queue cap ZDOMan.SendZDOs checks, read on every call. Harmony re-runs this transpiler whenever another

@@ -1,3 +1,7 @@
+* v1.4.50 - quieter logs
+  - connection settings are only logged when a value changes, and startup notices print once
+  - update the server and every client to the same version
+
 * v1.4.49 - smarter auto-tune, ships follow the helmsman, crossplay fixes, faster logins
   - auto-tune waits for your connection to settle before measuring, measures one player at a time, and remembers the result per server address
   - fast PCs and good connections are no longer rated Low because of a few slow frames or a noisy ping
