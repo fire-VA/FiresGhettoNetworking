@@ -381,13 +381,13 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static int SteamSendRateMin()
         {
             if (HyperBoost()) return HyperBoostSendRateMinBytes;
-            return VanillaFloor.ClampSendRate(SendRateMinFromEnum(FiresGhettoNetworkMod.ConfigSendRateMin.Value), "SendRateMin", VanillaFloor.ConfigSource);
+            return VanillaFloor.ClampSendRate(FiresGhettoNetworkMod.ConfigSendRateMin.Value * 1024, "SendRateMin", VanillaFloor.ConfigSource);
         }
 
         public static int SteamSendRateMax()
         {
             if (HyperBoost()) return HyperBoostSendRateMaxBytes;
-            return VanillaFloor.ClampSendRate(SendRateMaxFromEnum(FiresGhettoNetworkMod.ConfigSendRateMax.Value), "SendRateMax", VanillaFloor.ConfigSource);
+            return VanillaFloor.ClampSendRate(FiresGhettoNetworkMod.ConfigSendRateMax.Value * 1024, "SendRateMax", VanillaFloor.ConfigSource);
         }
 
         private static bool IsDedicatedServerRuntime()
@@ -599,74 +599,5 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         // Enum to bytes, read by the transpiler at patch time.
 
-        // ── ENUM <-> BYTES, ONE TABLE PER KNOB ────────────────────────────────────────
-        // Previously two switch statements ending `default: return 150 KB`. Any enum member added
-        // without a matching case silently became 150 KB — which the new thin-uplink values would
-        // have done. One table drives BOTH directions, so they cannot drift apart.
-        private static readonly (SendRateMinOptions opt, int bytes)[] s_minTable =
-        {
-            (SendRateMinOptions._1024KB,  1024 * 1024),
-            (SendRateMinOptions._768KB,   768 * 1024),
-            (SendRateMinOptions._512KB,   512 * 1024),
-            (SendRateMinOptions._384KB,   384 * 1024),
-            (SendRateMinOptions._256KB,   256 * 1024),
-            (SendRateMinOptions._192KB,   192 * 1024),
-            (SendRateMinOptions._150KB,   150 * 1024),
-            (SendRateMinOptions._128KB,   128 * 1024),
-            (SendRateMinOptions._96KB,    96 * 1024),
-            (SendRateMinOptions._64KB,    64 * 1024),
-            (SendRateMinOptions._48KB,    48 * 1024),
-            (SendRateMinOptions._32KB,    32 * 1024),
-        };
-
-        private static readonly (SendRateMaxOptions opt, int bytes)[] s_maxTable =
-        {
-            (SendRateMaxOptions._32768KB, 32768 * 1024),
-            (SendRateMaxOptions._16384KB, 16384 * 1024),
-            (SendRateMaxOptions._8192KB,  8192 * 1024),
-            (SendRateMaxOptions._4096KB,  4096 * 1024),
-            (SendRateMaxOptions._2048KB,  2048 * 1024),
-            (SendRateMaxOptions._1536KB,  1536 * 1024),
-            (SendRateMaxOptions._1024KB,  1024 * 1024),
-            (SendRateMaxOptions._768KB,   768 * 1024),
-            (SendRateMaxOptions._640KB,   640 * 1024),
-            (SendRateMaxOptions._512KB,   512 * 1024),
-            (SendRateMaxOptions._384KB,   384 * 1024),
-            (SendRateMaxOptions._320KB,   320 * 1024),
-            (SendRateMaxOptions._256KB,   256 * 1024),
-            (SendRateMaxOptions._192KB,   192 * 1024),
-            (SendRateMaxOptions._150KB,   150 * 1024),
-            (SendRateMaxOptions._128KB,   128 * 1024),
-            (SendRateMaxOptions._96KB,    96 * 1024),
-            (SendRateMaxOptions._64KB,    64 * 1024),
-            (SendRateMaxOptions._48KB,    48 * 1024),
-            (SendRateMaxOptions._32KB,    32 * 1024),
-        };
-
-        internal static int SendRateMinFromEnum(SendRateMinOptions opt)
-        {
-            foreach (var e in s_minTable) if (e.opt == opt) return e.bytes;
-            return 150 * 1024;
-        }
-
-        internal static int SendRateMaxFromEnum(SendRateMaxOptions opt)
-        {
-            foreach (var e in s_maxTable) if (e.opt == opt) return e.bytes;
-            return 150 * 1024;
-        }
-
-        // Largest option NOT ABOVE `bytes`. Snaps DOWN, never up: a value derived from a measured
-        // uplink must land under the line, not over it. Both tables are ordered high -> low.
-        internal static SendRateMinOptions SendRateMinAtMost(int bytes)
-        {
-            foreach (var e in s_minTable) if (e.bytes <= bytes) return e.opt;
-            return s_minTable[s_minTable.Length - 1].opt;
-        }
-
-        internal static SendRateMaxOptions SendRateMaxAtMost(int bytes)
-        {
-            foreach (var e in s_maxTable) if (e.bytes <= bytes) return e.opt;
-            return s_maxTable[s_maxTable.Length - 1].opt;
-        }
     }
 }

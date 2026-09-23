@@ -1,4 +1,5 @@
 using BepInEx.Configuration;
+using UnityEngine;
 
 namespace FiresGhettoNetworkMod.AutoTune
 {
@@ -31,12 +32,19 @@ namespace FiresGhettoNetworkMod.AutoTune
         internal static bool Writing => s_writing;
 
         // ── uplink thresholds ────────────────────────────────────────────────────────
-        // Stay under the measured line rather than on it. 0.9, not less: the value is then SNAPPED
-        // DOWN to a config option, which adds its own margin, so a smaller fraction applies the
-        // safety twice. Measured across 40-1300 KB/s lines with the ~25%-spaced options, this
-        // lands a player on 61-90% of their line (median 80%) and never over it. At 0.8 it was
-        // 56-80%, throwing away capacity the line could carry. Adaptive Upload handles the dips.
-        private const float UplinkBudgetFraction = 0.9f;
+        // ── WHERE THE MARGIN GOES ─────────────────────────────────────────────────────
+        // Max is the CEILING and is set to 100% of the measured line — the full capacity the line can
+        // use, so nothing is left on the table. Min carries the margin instead: it is the rate Steam
+        // HOLDS while a connection struggles, and the floor the live controller backs off to.
+        //
+        // The previous version had this backwards. It shaved Max (90%, then snapped DOWN to a dropdown
+        // option, landing on 64-85% of the line) and set Min = min(tierMin, Max) — and since a tier's
+        // Min is always above a thin line, Min collapsed onto Max. That pinned the controller with no
+        // room to back off, and if the line dipped, Steam held Min at the old rate and flooded it.
+        //
+        // Min is kept at no more than HALF of Max: the same step the controller itself takes when a
+        // link is failing, so it can always get there.
+        private const int MinShareOfMaxDivisor = 2;
 
         // Client ZDO Send Rate by measured uplink. A client's own updates are small, so only a
         // genuinely thin line needs fewer of them — but on that line it is the change that stops
@@ -58,25 +66,17 @@ namespace FiresGhettoNetworkMod.AutoTune
             int tierMax = VanillaFloor.ClampSendRate(preset.SteamSendRateMaxBytes, "SendRateMax", "ClientTier");
             int tierMin = VanillaFloor.ClampSendRate(preset.SteamSendRateMinBytes, "SendRateMin", "ClientTier");
 
-            // A MEASURED uplink is not a guess. When the line is the limit it overrides the tier,
-            // including below vanilla — that is the case this whole change exists for.
             // Only a value the LINE limited may lower anything. A sample capped by Steam's own send
             // rate proves only that the uplink is at least that fast — trusting it would throttle a
             // fat line down to whatever cap happened to be in force when it was measured.
             int uplink = AutoTuneState.ClientUplinkBytes;
             bool isLimit = AutoTuneState.ClientUplinkIsLimit;
-            bool thin = isLimit && uplink * UplinkBudgetFraction < tierMax;
+            bool thin = isLimit && uplink < tierMax;
 
-            int maxBytes = thin ? (int)(uplink * UplinkBudgetFraction) : tierMax;
-            // Min never above Max: Steam holds Min while a link struggles, so a Min above the real
-            // line keeps pushing more than it carries.
-            int minBytes = System.Math.Min(tierMin, maxBytes);
-
-            var maxOpt = EffectiveConfig.SendRateMaxAtMost(maxBytes);
-            var minOpt = EffectiveConfig.SendRateMinAtMost(minBytes);
-            // Snapping can put Min above Max when the two tables' steps differ — re-clamp.
-            if (EffectiveConfig.SendRateMinFromEnum(minOpt) > EffectiveConfig.SendRateMaxFromEnum(maxOpt))
-                minOpt = EffectiveConfig.SendRateMinAtMost(EffectiveConfig.SendRateMaxFromEnum(maxOpt));
+            // A MEASURED uplink is not a guess: when the line is the limit it IS the ceiling, all of
+            // it, including below vanilla — that is the case this whole change exists for.
+            int maxBytes = thin ? uplink : tierMax;
+            int minBytes = System.Math.Min(tierMin, maxBytes / MinShareOfMaxDivisor);
 
             UpdateRateOptions rate = UpdateRateOptions._100;
             if (isLimit)
@@ -95,9 +95,9 @@ namespace FiresGhettoNetworkMod.AutoTune
                 Tier = AutoTuneState.ClientTier.ToString(),
                 Reason = uplink < 0 ? "upload unknown, tier values"
                        : !isLimit ? $"upload at least {uplink / 1024} KB/s, not the limit"
-                       : thin ? $"upload {uplink / 1024} KB/s is the limit, staying under it"
+                       : thin ? $"upload {uplink / 1024} KB/s is the limit, ceiling set to it"
                        : $"upload {uplink / 1024} KB/s, above the tier's ceiling",
-                Max = maxOpt, Min = minOpt, Rate = rate, Queue = queue,
+                MaxBytes = maxBytes, MinBytes = minBytes, Rate = rate, Queue = queue,
             });
         }
 
@@ -114,17 +114,16 @@ namespace FiresGhettoNetworkMod.AutoTune
             // so a HIGH tier's 1024 KB/s Min meant it could never back a slow client off below 1 MB/s
             // and flooded their DOWNLINK. The description said Min stayed low; the code used each
             // tier's own Min. This makes it do what it said.
-            int lowMin = TierPresets.For(Tier.Low).SteamSendRateMinBytes;
-            int minBytes = System.Math.Min(
-                VanillaFloor.ClampSendRate(lowMin, "SendRateMin", "ServerTier"), maxBytes);
+            int lowMin = VanillaFloor.ClampSendRate(TierPresets.For(Tier.Low).SteamSendRateMinBytes, "SendRateMin", "ServerTier");
+            int minBytes = System.Math.Min(lowMin, maxBytes / MinShareOfMaxDivisor);
 
             Write(new Writes
             {
                 Side = "server",
                 Tier = AutoTuneState.ServerTier.ToString(),
                 Reason = "host CPU/RAM tier",
-                Max = EffectiveConfig.SendRateMaxAtMost(maxBytes),
-                Min = EffectiveConfig.SendRateMinAtMost(minBytes),
+                MaxBytes = maxBytes,
+                MinBytes = minBytes,
                 Rate = VanillaFloor.ClampUpdateRate(preset.UpdateRate, "ServerTier"),
                 Queue = preset.QueueSize,
             });
@@ -133,8 +132,8 @@ namespace FiresGhettoNetworkMod.AutoTune
         private struct Writes
         {
             public string Side, Tier, Reason;
-            public SendRateMaxOptions Max;
-            public SendRateMinOptions Min;
+            public int MaxBytes, MinBytes;
+            public int MaxKb, MinKb;        // what was actually written, for the log line
             public UpdateRateOptions Rate;
             public QueueSizeOptions Queue;
         }
@@ -149,14 +148,21 @@ namespace FiresGhettoNetworkMod.AutoTune
                 // Only touch entries whose value actually changes. Every write fires SettingChanged
                 // and saves the file; rewriting identical values on each rolling-monitor pass would
                 // churn both for nothing.
-                changed |= Set(FiresGhettoNetworkMod.ConfigSendRateMax, w.Max);
-                changed |= Set(FiresGhettoNetworkMod.ConfigSendRateMin, w.Min);
+                // Bytes -> KB, rounding DOWN so Max never lands above the measured line, then held in the
+                // config's accepted range. Min is re-derived from the ROUNDED Max so the half-of-Max
+                // guarantee survives rounding at the very bottom of the range.
+                int maxKb = Mathf.Clamp(w.MaxBytes / 1024, FiresGhettoNetworkMod.SendRateKbLow * 2, FiresGhettoNetworkMod.SendRateKbHigh);
+                int minKb = Mathf.Clamp(System.Math.Min(w.MinBytes / 1024, maxKb / MinShareOfMaxDivisor),
+                                        FiresGhettoNetworkMod.SendRateKbLow, maxKb / MinShareOfMaxDivisor);
+                changed |= Set(FiresGhettoNetworkMod.ConfigSendRateMax, maxKb);
+                changed |= Set(FiresGhettoNetworkMod.ConfigSendRateMin, minKb);
+                w.MaxKb = maxKb; w.MinKb = minKb;
                 changed |= Set(FiresGhettoNetworkMod.ConfigUpdateRate,  w.Rate);
                 changed |= Set(FiresGhettoNetworkMod.ConfigQueueSize,   w.Queue);
 
                 if (changed)
                     LoggerOptions.LogMessage($"[AutoTune] {w.Side} {w.Tier}: {w.Reason}. Config set to "
-                        + $"Send Rate Max {w.Max}, Min {w.Min}, ZDO Send Rate {w.Rate}, Queue Size {w.Queue}.");
+                        + $"Send Rate Max {w.MaxKb} KB/s, Min {w.MinKb} KB/s, ZDO Send Rate {w.Rate}, Queue Size {w.Queue}.");
             }
             finally { s_writing = false; }
 

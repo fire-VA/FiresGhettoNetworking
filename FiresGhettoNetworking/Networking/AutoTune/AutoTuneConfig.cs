@@ -53,8 +53,8 @@ namespace FiresGhettoNetworkMod.AutoTune
                 "Run a brief probe on first login to a server — hardware, ping, download AND upload — pick a tier\n" +
                 "(LOW/MED/HIGH), and WRITE the resulting network values into this config: ZDO Send Rate, Queue Size,\n" +
                 "Send Rate Min and Send Rate Max. The config then shows exactly what is running.\n" +
-                "Upload is measured separately from the tier: a strong PC on a thin uplink gets upload rates set just\n" +
-                "under its real upload speed instead of the tier's, which can be below vanilla.\n" +
+                "Upload is measured separately from the tier: a strong PC on a thin uplink gets its upload ceiling\n" +
+                "set to its real upload speed instead of the tier's, which can be below vanilla.\n" +
                 "While ON those four settings are Auto-Tune's and edits to them are replaced on the next tune.\n" +
                 "Turn OFF to set them yourself — they keep the last values Auto-Tune chose. CLIENT-SIDE only.\n" +
                 "(Before this version Auto-Tune ran values over the top of the config without writing them, so the\n" +

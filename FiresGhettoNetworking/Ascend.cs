@@ -31,8 +31,14 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<LogLevel> ConfigLogLevel;
         public static ConfigEntry<bool> ConfigEnableCompression;
         public static ConfigEntry<UpdateRateOptions> ConfigUpdateRate;
-        public static ConfigEntry<SendRateMinOptions> ConfigSendRateMin;
-        public static ConfigEntry<SendRateMaxOptions> ConfigSendRateMax;
+        // KB/s as a plain NUMBER, not a dropdown. Auto-Tune writes the exact measured value; a fixed
+        // list forced it to snap down to the nearest option and threw away up to half a thin line.
+        public static ConfigEntry<int> ConfigSendRateMin;
+        public static ConfigEntry<int> ConfigSendRateMax;
+        public const int DefaultSendRateMinKb = 512;
+        public const int DefaultSendRateMaxKb = 2048;
+        public const int SendRateKbLow  = 4;        // below this a line is unplayable anyway
+        public const int SendRateKbHigh = 131072;   // 128 MB/s — above every Auto-Tune ceiling
         public static ConfigEntry<bool> ConfigAdaptiveUpload;
         public static ConfigEntry<QueueSizeOptions> ConfigQueueSize;
         public static ConfigEntry<ForceCrossplayOptions> ConfigForceCrossplay;
@@ -627,6 +633,60 @@ namespace FiresGhettoNetworkMod
             }
         }
 
+        // ── ONE-TIME MIGRATION: dropdown -> KB/s number ─────────────────────────────────
+        // Send Rate Min/Max used to be dropdowns stored as "_2048KB". They are now plain KB/s numbers so
+        // Auto-Tune can write an exact measured value. Changing the type alone would have been lossy:
+        // BepInEx cannot parse "_2048KB" as a number, logs that it "could not be parsed and will be
+        // ignored", and RESETS the player's value to the default. This carries the old value across.
+        //
+        // Reads the .cfg on disk as plain text, so it does not depend on BepInEx internals. Then it
+        // rewrites BepInEx's in-memory copy of that raw value so Bind parses it cleanly with no warning.
+        // If that second step ever fails, the value is still kept — it is returned and used as Bind's
+        // default — and BepInEx logs one harmless warning on the first run after updating.
+        // Once migrated the file holds a plain number, this finds nothing, and it is a no-op forever.
+        private int MigrateLegacyKb(string section, string key, int defaultKb)
+        {
+            int legacyKb = -1;
+            try
+            {
+                string path = Config.ConfigFilePath;
+                if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path))
+                {
+                    string current = null;
+                    foreach (string raw in System.IO.File.ReadAllLines(path))
+                    {
+                        string line = raw.Trim();
+                        if (line.StartsWith("[") && line.EndsWith("]")) { current = line.Substring(1, line.Length - 2).Trim(); continue; }
+                        if (current != section || line.Length == 0 || line.StartsWith("#")) continue;
+                        int eq = line.IndexOf('=');
+                        if (eq <= 0 || line.Substring(0, eq).Trim() != key) continue;
+                        var m = System.Text.RegularExpressions.Regex.Match(line.Substring(eq + 1).Trim(), @"^_(\d+)KB$");
+                        if (m.Success) legacyKb = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.LogWarning($"[Config] Could not read {key} for migration: {ex.Message}"); }
+
+            if (legacyKb <= 0) return defaultKb;
+
+            try
+            {
+                var prop = typeof(ConfigFile).GetProperty("OrphanedEntries",
+                    BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                if (prop?.GetValue(Config) is System.Collections.Generic.Dictionary<ConfigDefinition, string> orphans)
+                {
+                    var def = new ConfigDefinition(section, key);
+                    if (orphans.ContainsKey(def))
+                        orphans[def] = legacyKb.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+            catch { /* value still carried as the default below */ }
+
+            Logger.LogInfo($"[Config] {key}: migrated from the old option _{legacyKb}KB to {legacyKb} KB/s.");
+            return Mathf.Clamp(legacyKb, SendRateKbLow, SendRateKbHigh);
+        }
+
         private void BindConfigs()
         {
             ConfigLogLevel = Config.Bind(
@@ -679,25 +739,32 @@ namespace FiresGhettoNetworkMod
             ConfigSendRateMin = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Min",
-                SendRateMinOptions._512KB,
+                MigrateLegacyKb("05 - Networking - Steamworks", "Send Rate Min", DefaultSendRateMinKb),
+                new ConfigDescription(
+                "In KB/s. " +
                 "SET BY AUTO-TUNE when Auto-Tune is on: it measures your connection and writes the value here, so this\n" +
                 "always shows what is actually running. Edits are replaced on the next tune. Turn Auto-Tune off\n" +
                 "(06 - Auto-Tune) to set it yourself — it starts from the last value Auto-Tune chose.\n" +
-                "The rate Steam will hold even while a connection struggles. On a client this governs your UPLOAD.\n" +
-                "Keep it below your real upload speed: a Min above the line keeps pushing more than it carries.\n" +
-                "Auto-Tune keeps it at or under Send Rate Max, and under a measured thin upload.");
+                "The rate Steam HOLDS even while a connection struggles, and the floor Adaptive Upload / Adaptive\n" +
+                "Send Rate back off to. Keep it well under your real upload: a Min at or near the line leaves no room\n" +
+                "to back off, so a dip floods it. Auto-Tune keeps it at no more than half of Send Rate Max.",
+                new AcceptableValueRange<int>(SendRateKbLow, SendRateKbHigh)));
 
             ConfigSendRateMax = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Max",
-                SendRateMaxOptions._2048KB,
+                MigrateLegacyKb("05 - Networking - Steamworks", "Send Rate Max", DefaultSendRateMaxKb),
+                new ConfigDescription(
+                "In KB/s. " +
                 "SET BY AUTO-TUNE when Auto-Tune is on: it measures your connection and writes the value here, so this\n" +
                 "always shows what is actually running. Edits are replaced on the next tune. Turn Auto-Tune off\n" +
                 "(06 - Auto-Tune) to set it yourself — it starts from the last value Auto-Tune chose.\n" +
-                "The ceiling on this PC's send rate. On a client this is your UPLOAD ceiling. Adaptive Send Rate\n" +
-                "and Adaptive Upload move the live rate between Min and Max, and never outside it.\n" +
-                "Auto-Tune sets it from your tier, or — when it measures that your upload is the limit — just under\n" +
-                "your real upload speed, which can be below vanilla. That is the one case where sending less is right.");
+                "The ceiling on this PC's send rate — on a client, your UPLOAD ceiling. Adaptive Upload and Adaptive\n" +
+                "Send Rate move the live rate between Min and Max, never outside it.\n" +
+                "Auto-Tune sets it from your tier, or — when it measures that your upload is the limit — to your real\n" +
+                "upload speed exactly, so no capacity is left unused. The live controller, not this ceiling, is what\n" +
+                "keeps you under the line from moment to moment.",
+                new AcceptableValueRange<int>(SendRateKbLow, SendRateKbHigh)));
 
             ConfigAdaptiveUpload = Config.Bind(
                 "04 - Networking",
@@ -1427,84 +1494,6 @@ namespace FiresGhettoNetworkMod
         _75,
         [Description("50% - 10 network sends/sec")]
         _50
-    }
-
-    // BepInEx stores enum configs by NAME, so adding members never breaks an existing config file.
-    // The low values exist because Auto-Tune now measures upload: a thin uplink is the one case
-    // where a rate below vanilla is the correct measured answer, and it must be expressible here.
-    public enum SendRateMinOptions
-    {
-        [Description("1024 KB/s | 8 Mbit/s")]
-        _1024KB,
-        [Description("768 KB/s | 6 Mbit/s")]
-        _768KB,
-        [Description("512 KB/s | 4 Mbit/s [default]")]
-        _512KB,
-        [Description("384 KB/s | 3 Mbit/s")]
-        _384KB,
-        [Description("256 KB/s | 2 Mbit/s")]
-        _256KB,
-        [Description("192 KB/s | 1.5 Mbit/s")]
-        _192KB,
-        [Description("150 KB/s | 1.2 Mbit/s [vanilla]")]
-        _150KB,
-        [Description("128 KB/s | 1 Mbit/s [thin uplink]")]
-        _128KB,
-        [Description("96 KB/s | 0.75 Mbit/s [thin uplink]")]
-        _96KB,
-        [Description("64 KB/s | 0.5 Mbit/s [thin uplink]")]
-        _64KB,
-        [Description("48 KB/s | 0.4 Mbit/s [thin uplink]")]
-        _48KB,
-        [Description("32 KB/s | 0.25 Mbit/s [thin uplink]")]
-        _32KB
-    }
-
-    // _32768KB / _16384KB are the HIGH and MEDIUM Auto-Tune ceilings. The enum used to stop at 8192,
-    // so the config could not even SHOW the value Auto-Tune was running — one of the reasons the two
-    // disagreed. Every value Auto-Tune can choose must be a value the config can hold.
-    public enum SendRateMaxOptions
-    {
-        [Description("32768 KB/s | 256 Mbit/s [Auto-Tune HIGH]")]
-        _32768KB,
-        [Description("16384 KB/s | 128 Mbit/s [Auto-Tune MEDIUM]")]
-        _16384KB,
-        [Description("8192 KB/s | 64 Mbit/s")]
-        _8192KB,
-        [Description("4096 KB/s | 32 Mbit/s")]
-        _4096KB,
-        [Description("2048 KB/s | 16 Mbit/s [default]")]
-        _2048KB,
-        [Description("1536 KB/s | 12 Mbit/s")]
-        _1536KB,
-        [Description("1024 KB/s | 8 Mbit/s")]
-        _1024KB,
-        [Description("768 KB/s | 6 Mbit/s")]
-        _768KB,
-        [Description("640 KB/s | 5 Mbit/s")]
-        _640KB,
-        [Description("512 KB/s | 4 Mbit/s")]
-        _512KB,
-        [Description("384 KB/s | 3 Mbit/s")]
-        _384KB,
-        [Description("320 KB/s | 2.5 Mbit/s")]
-        _320KB,
-        [Description("256 KB/s | 2 Mbit/s")]
-        _256KB,
-        [Description("192 KB/s | 1.5 Mbit/s")]
-        _192KB,
-        [Description("150 KB/s | 1.2 Mbit/s [vanilla]")]
-        _150KB,
-        [Description("128 KB/s | 1 Mbit/s [thin uplink]")]
-        _128KB,
-        [Description("96 KB/s | 0.75 Mbit/s [thin uplink]")]
-        _96KB,
-        [Description("64 KB/s | 0.5 Mbit/s [thin uplink]")]
-        _64KB,
-        [Description("48 KB/s | 0.4 Mbit/s [thin uplink]")]
-        _48KB,
-        [Description("32 KB/s | 0.25 Mbit/s [thin uplink]")]
-        _32KB
     }
 
     public enum QueueSizeOptions
