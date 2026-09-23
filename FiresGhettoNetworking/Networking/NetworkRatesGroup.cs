@@ -17,10 +17,18 @@ namespace FiresGhettoNetworkMod
     {
         public static void Init(ConfigFile config)
         {
-            FiresGhettoNetworkMod.ConfigUpdateRate.SettingChanged += (_, __) => ApplyUpdateRate();
-            FiresGhettoNetworkMod.ConfigSendRateMin.SettingChanged += (_, __) => ApplySendRates();
-            FiresGhettoNetworkMod.ConfigSendRateMax.SettingChanged += (_, __) => ApplySendRates();
-            FiresGhettoNetworkMod.ConfigQueueSize.SettingChanged += (_, __) => LoggerOptions.LogInfo("Queue size changed - restart recommended.");
+            // While Auto-Tune is writing a batch these stay quiet: it changes several entries at once
+            // and pushes ONCE when done (ApplyTunedRatesLive). Handling each field separately could
+            // briefly put Min above Max on a live connection between the two writes, and would log a
+            // "restart recommended" for a change Auto-Tune already applied.
+            FiresGhettoNetworkMod.ConfigUpdateRate.SettingChanged += (_, __) => { if (!AutoTuneApplier.Writing) ApplyUpdateRate(); };
+            FiresGhettoNetworkMod.ConfigSendRateMin.SettingChanged += (_, __) => { if (!AutoTuneApplier.Writing) ApplyRatesLive(); };
+            FiresGhettoNetworkMod.ConfigSendRateMax.SettingChanged += (_, __) => { if (!AutoTuneApplier.Writing) ApplyRatesLive(); };
+            FiresGhettoNetworkMod.ConfigQueueSize.SettingChanged += (_, __) =>
+            {
+                if (!AutoTuneApplier.Writing)
+                    LoggerOptions.LogInfo("Queue size changed — live for the send window; the bulk-transfer gate picks it up on restart.");
+            };
 
             if (FiresGhettoNetworkMod.ConfigHyperBoost != null)
                 FiresGhettoNetworkMod.ConfigHyperBoost.SettingChanged += (_, __) =>
@@ -40,13 +48,32 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogInfo($"Update rate set to {FiresGhettoNetworkMod.ConfigUpdateRate.Value}");
         }
 
+        // ── LIVE APPLY ─────────────────────────────────────────────────────────────────
+        // Steam reads its GLOBAL send-rate config only when a connection OPENS. ApplySendRates alone
+        // therefore changed nothing for a connection already open — so a rate changed mid-session,
+        // whether a player's edit or Auto-Tune writing its result after the join-time probe, did not
+        // reach the connection it was meant for until the next reconnect. With Adaptive Upload or
+        // Adaptive Send Rate on, the controller re-pinned within a second and hid it; with them off,
+        // the new rate never landed that session.
+        internal static void ApplyRatesLive()
+        {
+            ApplyEffectiveRatesLiveToAllPeers();   // global + every open connection
+            LinkController.ResetRates();           // controllers re-pin inside the new Min..Max
+        }
+
+        /// Called once by AutoTuneApplier after it writes a batch.
+        internal static void ApplyTunedRatesLive()
+        {
+            ApplyUpdateRate();
+            ApplyRatesLive();
+        }
+
         public static void ApplySendRates()
         {
             if (ZNet.instance == null) return;
 
-            // Routed through EffectiveConfig so Auto-Tune can shadow these without
-            // overwriting the user's bound config values. Manual values still win when
-            // Auto-Tune is off OR no probe result has landed yet.
+            // Reads the config, which is the source of truth: the player's values with Auto-Tune off,
+            // or the values Auto-Tune wrote (AutoTuneApplier) with it on.
             int min = EffectiveConfig.SteamSendRateMin();
             int max = EffectiveConfig.SteamSendRateMax();
 

@@ -33,6 +33,7 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<UpdateRateOptions> ConfigUpdateRate;
         public static ConfigEntry<SendRateMinOptions> ConfigSendRateMin;
         public static ConfigEntry<SendRateMaxOptions> ConfigSendRateMax;
+        public static ConfigEntry<bool> ConfigAdaptiveUpload;
         public static ConfigEntry<QueueSizeOptions> ConfigQueueSize;
         public static ConfigEntry<ForceCrossplayOptions> ConfigForceCrossplay;
         public static ConfigEntry<int> ConfigPlayerLimit;
@@ -664,36 +665,49 @@ namespace FiresGhettoNetworkMod
                 "04 - Networking",
                 "ZDO Send Rate",
                 UpdateRateOptions._100,
-                "How many times a second each player is sent world updates (and a client sends its own). This is a\n" +
-                "NETWORK send-cadence setting ONLY: it does NOT change the world tick, day length, smelter or cooking\n" +
-                "timers, cooldowns or any simulation speed. Higher = other players and creatures look smoother, at the\n" +
-                "cost of more bandwidth and server CPU.\n" +
-                "100% (20 per second) is vanilla's intended rate. Vanilla only reaches it with one or two players, because\n" +
-                "it serves one player per frame; 'Send To Every Player Each Frame' gives every player this rate.\n" +
-                "150% (30 per second) can look smoother when bandwidth and CPU allow.\n" +
-                "75% / 50% are THE setting to use if your UPLOAD is thin. They cut how often your own character's\n" +
-                "updates leave your PC, which is what stops you rubber-banding for everyone else on a weak uplink.\n" +
-                "You will look slightly less smooth to others and see no difference yourself. Auto-Tune never chooses\n" +
-                "below 100% on its own — setting it here is an explicit instruction and is honoured.");
+                "SET BY AUTO-TUNE when Auto-Tune is on: it measures your connection and writes the value here, so this\n" +
+                "always shows what is actually running. Edits are replaced on the next tune. Turn Auto-Tune off\n" +
+                "(06 - Auto-Tune) to set it yourself — it starts from the last value Auto-Tune chose.\n" +
+                "How many times a second world updates are sent — to each player on a server, and this PC's OWN\n" +
+                "updates on a client. A NETWORK cadence setting only: it does NOT change the world tick, day length,\n" +
+                "smelter or cooking timers, cooldowns or any simulation speed.\n" +
+                "100% (20/s) is vanilla. 150% (30/s) looks smoother where bandwidth and CPU allow.\n" +
+                "75% / 50% cut how often your character's updates leave your PC — the fix for a thin UPLOAD, and\n" +
+                "what Auto-Tune picks when it measures one. You look slightly less smooth to others and see no\n" +
+                "difference yourself, and you stop rubber-banding for everyone else.");
 
             ConfigSendRateMin = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Min",
                 SendRateMinOptions._512KB,
-                "Minimum send rate Steam will attempt. Steam's adapter has a sticky-down quirk — peers " +
-                "that back off toward this value tend to stay there. Keep it well above unplayable.\n" +
-                "ON A THIN UPLINK: set this BELOW your real upload speed. Steam treats Min as a rate it may " +
-                "hold even when the link is struggling, so leaving it above your actual upstream keeps it " +
-                "pushing more than the line can carry.");
+                "SET BY AUTO-TUNE when Auto-Tune is on: it measures your connection and writes the value here, so this\n" +
+                "always shows what is actually running. Edits are replaced on the next tune. Turn Auto-Tune off\n" +
+                "(06 - Auto-Tune) to set it yourself — it starts from the last value Auto-Tune chose.\n" +
+                "The rate Steam will hold even while a connection struggles. On a client this governs your UPLOAD.\n" +
+                "Keep it below your real upload speed: a Min above the line keeps pushing more than it carries.\n" +
+                "Auto-Tune keeps it at or under Send Rate Max, and under a measured thin upload.");
 
             ConfigSendRateMax = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Max",
                 SendRateMaxOptions._2048KB,
-                "Maximum send rate Steam will attempt. This is 'permission to burst' — Steam still ramps " +
-                "adaptively between Min and Max, this just removes the artificial ceiling.\n" +
-                "ON A THIN UPLINK: cap this at or below your real upload speed. The default is permission to " +
-                "use bandwidth you may not have; on a weak uplink that permission is what floods it.");
+                "SET BY AUTO-TUNE when Auto-Tune is on: it measures your connection and writes the value here, so this\n" +
+                "always shows what is actually running. Edits are replaced on the next tune. Turn Auto-Tune off\n" +
+                "(06 - Auto-Tune) to set it yourself — it starts from the last value Auto-Tune chose.\n" +
+                "The ceiling on this PC's send rate. On a client this is your UPLOAD ceiling. Adaptive Send Rate\n" +
+                "and Adaptive Upload move the live rate between Min and Max, and never outside it.\n" +
+                "Auto-Tune sets it from your tier, or — when it measures that your upload is the limit — just under\n" +
+                "your real upload speed, which can be below vanilla. That is the one case where sending less is right.");
+
+            ConfigAdaptiveUpload = Config.Bind(
+                "04 - Networking",
+                "Adaptive Upload",
+                true,
+                "Keeps this PC's live send rate under what its connection can actually carry, continuously, within\n" +
+                "Send Rate Min..Max. When more is being sent than gets through, it eases toward what gets through\n" +
+                "instead of flooding the line. Catches changes the join-time measurement cannot — someone else in\n" +
+                "the house starting an upload, say. Off = Steam's own rate adapter.\n" +
+                "Steam connections only; a crossplay (PlayFab) link has no Steam figures to measure.");
 
             ConfigHyperBoost = Config.Bind(
                 "05 - Networking - Steamworks",
@@ -715,6 +729,9 @@ namespace FiresGhettoNetworkMod
                 "04 - Networking",
                 "Queue Size",
                 QueueSizeOptions._32KB,
+                "SET BY AUTO-TUNE when Auto-Tune is on: it measures your connection and writes the value here, so this\n" +
+                "always shows what is actually running. Edits are replaced on the next tune. Turn Auto-Tune off\n" +
+                "(06 - Auto-Tune) to set it yourself — it starts from the last value Auto-Tune chose.\n" +
                 "The largest single package of world updates sent to one player at a time, and the starting send window\n" +
                 "for each player. With 'Adaptive Send Window' off it is also the fixed limit on data in flight to each\n" +
                 "player. Crossplay players are sized by Crossplay In-Flight KB instead.");
@@ -1412,38 +1429,82 @@ namespace FiresGhettoNetworkMod
         _50
     }
 
+    // BepInEx stores enum configs by NAME, so adding members never breaks an existing config file.
+    // The low values exist because Auto-Tune now measures upload: a thin uplink is the one case
+    // where a rate below vanilla is the correct measured answer, and it must be expressible here.
     public enum SendRateMinOptions
     {
         [Description("1024 KB/s | 8 Mbit/s")]
         _1024KB,
         [Description("768 KB/s | 6 Mbit/s")]
         _768KB,
-        [Description("512 KB/s | 4 Mbit/s")]
+        [Description("512 KB/s | 4 Mbit/s [default]")]
         _512KB,
-        [Description("256 KB/s | 2 Mbit/s [default]")]
+        [Description("384 KB/s | 3 Mbit/s")]
+        _384KB,
+        [Description("256 KB/s | 2 Mbit/s")]
         _256KB,
+        [Description("192 KB/s | 1.5 Mbit/s")]
+        _192KB,
         [Description("150 KB/s | 1.2 Mbit/s [vanilla]")]
-        _150KB
+        _150KB,
+        [Description("128 KB/s | 1 Mbit/s [thin uplink]")]
+        _128KB,
+        [Description("96 KB/s | 0.75 Mbit/s [thin uplink]")]
+        _96KB,
+        [Description("64 KB/s | 0.5 Mbit/s [thin uplink]")]
+        _64KB,
+        [Description("48 KB/s | 0.4 Mbit/s [thin uplink]")]
+        _48KB,
+        [Description("32 KB/s | 0.25 Mbit/s [thin uplink]")]
+        _32KB
     }
 
+    // _32768KB / _16384KB are the HIGH and MEDIUM Auto-Tune ceilings. The enum used to stop at 8192,
+    // so the config could not even SHOW the value Auto-Tune was running — one of the reasons the two
+    // disagreed. Every value Auto-Tune can choose must be a value the config can hold.
     public enum SendRateMaxOptions
     {
+        [Description("32768 KB/s | 256 Mbit/s [Auto-Tune HIGH]")]
+        _32768KB,
+        [Description("16384 KB/s | 128 Mbit/s [Auto-Tune MEDIUM]")]
+        _16384KB,
         [Description("8192 KB/s | 64 Mbit/s")]
         _8192KB,
         [Description("4096 KB/s | 32 Mbit/s")]
         _4096KB,
-        [Description("2048 KB/s | 16 Mbit/s")]
+        [Description("2048 KB/s | 16 Mbit/s [default]")]
         _2048KB,
+        [Description("1536 KB/s | 12 Mbit/s")]
+        _1536KB,
         [Description("1024 KB/s | 8 Mbit/s")]
         _1024KB,
         [Description("768 KB/s | 6 Mbit/s")]
         _768KB,
-        [Description("512 KB/s | 4 Mbit/s [default]")]
+        [Description("640 KB/s | 5 Mbit/s")]
+        _640KB,
+        [Description("512 KB/s | 4 Mbit/s")]
         _512KB,
+        [Description("384 KB/s | 3 Mbit/s")]
+        _384KB,
+        [Description("320 KB/s | 2.5 Mbit/s")]
+        _320KB,
         [Description("256 KB/s | 2 Mbit/s")]
         _256KB,
+        [Description("192 KB/s | 1.5 Mbit/s")]
+        _192KB,
         [Description("150 KB/s | 1.2 Mbit/s [vanilla]")]
-        _150KB
+        _150KB,
+        [Description("128 KB/s | 1 Mbit/s [thin uplink]")]
+        _128KB,
+        [Description("96 KB/s | 0.75 Mbit/s [thin uplink]")]
+        _96KB,
+        [Description("64 KB/s | 0.5 Mbit/s [thin uplink]")]
+        _64KB,
+        [Description("48 KB/s | 0.4 Mbit/s [thin uplink]")]
+        _48KB,
+        [Description("32 KB/s | 0.25 Mbit/s [thin uplink]")]
+        _32KB
     }
 
     public enum QueueSizeOptions

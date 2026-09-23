@@ -12,27 +12,24 @@ namespace FiresGhettoNetworkMod.AutoTune
     // which throttled a peer below stock and made "remove the mod and it's fixed" true by construction.
     public static class VanillaFloor
     {
-        // ── UPLINK BUDGET ESCAPE HATCH ───────────────────────────────────────────────
-        // The floor exists so AutoTune cannot make a link WORSE than vanilla, and that is
-        // right for anything AutoTune decides on the player's behalf. It is wrong for a
-        // player who is deliberately asking to send LESS.
+        // ── WHAT THE FLOOR IS FOR ──────────────────────────────────────────────────────
+        // It exists so a tier PRESET cannot make a link worse than vanilla. Presets are scored on
+        // ping, hardware and downlink — educated guesses about a link — and guesses are floored.
+        // That is why the originally-reported problem (Steam and ping-based scoring pushing healthy
+        // connections too low) was solved here.
         //
-        // A thin uplink is the one case where below-vanilla is the correct answer. Vanilla
-        // assumes it can push 20 ZDO sends/sec at up to 150 KB/s; on a 1 Mbit upstream that
-        // saturates the pipe, the queue backs up, ACKs are delayed behind the player's own
-        // outbound, and their character rubber-bands for everyone else. Sending half as
-        // often fixes it. Better Networking has shipped exactly this for years (Update Rate
-        // 75/50%, send rates down to 150 KB/s) and it is the reason players on poor uplinks
-        // install it.
-        //
-        // So: the floor still applies to every AutoTune-derived value (ServerTier,
-        // ClientTier). A MANUAL config value is the player's own instruction and is honoured
-        // as written. Source strings are already threaded through every call site, so the
-        // distinction costs one comparison and no new plumbing.
-        private const string ManualSource = "ManualConfig";
+        // It does NOT apply to the config's own value, because the config is now the source of
+        // truth and only two things ever write it:
+        //   * the player, with Auto-Tune off — an explicit instruction
+        //   * AutoTuneApplier, with Auto-Tune on — which has ALREADY floored every preset before
+        //     writing, and only goes below vanilla on a MEASURED thin uplink
+        // Flooring it again would silently undo the one below-vanilla value that is correct: a
+        // thin uplink, where vanilla's 20 sends/sec at 150 KB/s saturates the line, delays the
+        // player's own ACKs, and rubber-bands them for everyone else.
+        public const string ConfigSource = "Config";
 
-        private static bool IsManual(string source) =>
-            string.Equals(source, ManualSource, System.StringComparison.Ordinal);
+        private static bool IsConfig(string source) =>
+            string.Equals(source, ConfigSource, System.StringComparison.Ordinal);
 
         public const int SendRateBytes   = 150 * 1024;   // 153600 — vanilla send-rate floor (Min and Max)
         public const int SendBufferBytes = 512 * 1024;   // Steam's default outbound buffer
@@ -43,14 +40,13 @@ namespace FiresGhettoNetworkMod.AutoTune
         // is reported once, not spammed each frame the getter is read.
         private static readonly HashSet<string> _warned = new HashSet<string>();
 
-        // Manual below-vanilla is a deliberate choice, so it is reported ONCE as information
-        // rather than repeated as a warning — a player who set it does not need telling off
-        // every time the getter is read.
-        private static void NoteManualBelowVanilla(string knob, string asked)
+        // Below-vanilla in the config is deliberate — set by the player, or by Auto-Tune on a
+        // measured thin uplink — so it is reported ONCE as information, not repeated as a warning.
+        private static void NoteConfigBelowVanilla(string knob, string asked)
         {
-            if (!_warned.Add("ManualBelowVanilla:" + knob)) return;
-            LoggerOptions.LogMessage($"[Uplink] {knob} manually set to {asked}, below vanilla. Honouring it — "
-                + "this is the supported way to cap a thin uplink. AutoTune-derived values are still floored at vanilla.");
+            if (!_warned.Add("ConfigBelowVanilla:" + knob)) return;
+            LoggerOptions.LogMessage($"[Uplink] {knob} is {asked}, below vanilla. Honouring it — the config is "
+                + "authoritative. Auto-Tune only chooses this on a measured thin uplink; tier presets stay floored.");
         }
 
         private static void WarnOnce(string knob, string source, object asked, object floored)
@@ -63,7 +59,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static int ClampSendRate(int value, string knob, string source)
         {
             if (value >= SendRateBytes) return value;
-            if (IsManual(source)) { NoteManualBelowVanilla(knob, value + " bytes/s"); return value; }
+            if (IsConfig(source)) { NoteConfigBelowVanilla(knob, (value / 1024) + " KB/s"); return value; }
             WarnOnce(knob, source, value, SendRateBytes);
             return SendRateBytes;
         }
@@ -85,7 +81,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static UpdateRateOptions ClampUpdateRate(UpdateRateOptions value, string source)
         {
             if (Percent(value) >= Percent(UpdateRate)) return value;
-            if (IsManual(source)) { NoteManualBelowVanilla("UpdateRate", Percent(value) + "%"); return value; }
+            if (IsConfig(source)) { NoteConfigBelowVanilla("ZDO Send Rate", Percent(value) + "%"); return value; }
             WarnOnce("UpdateRate", source, value, UpdateRate);
             return UpdateRate;
         }
@@ -296,11 +292,32 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static bool HasServerResult { get; private set; }
         public static Tier ServerTier      { get; private set; } = Tier.Medium;
 
+        /// Measured client -> server throughput in bytes/sec, or -1 when unknown.
+        /// Kept separate from the tier on purpose: the tier is scored on ping, hardware and
+        /// downlink, and was being used to set upload rates it knows nothing about.
+        public static int ClientUplinkBytes { get; private set; } = -1;
+
+        /// True only when the LINE limited the measurement, so ClientUplinkBytes is the line's
+        /// capacity. False when Steam's send cap limited it (the uplink is at least that fast) or
+        /// nothing was measured. Only a true value may lower the config.
+        public static bool ClientUplinkIsLimit { get; private set; }
+
+        /// Set BEFORE SetClient — SetClient writes the config, and that write reads this.
+        public static void SetClientUplink(int bytesPerSec, bool isLimit)
+        {
+            ClientUplinkBytes = bytesPerSec;
+            ClientUplinkIsLimit = isLimit && bytesPerSec > 0;
+        }
+
+        // Every path that activates a tier comes through these two methods — the probe, a cache
+        // restore, the rolling monitor's consensus, the LOW fallback. So this is the one place that
+        // turns a decision into config values, and no path can skip it.
         public static void SetClient(Tier tier, int pingMedianMs)
         {
             ClientTier = tier;
             ClientPingMedianMs = pingMedianMs;
             HasClientResult = true;
+            AutoTuneApplier.ApplyClient();
         }
 
         public static void ClearClient()
@@ -308,12 +325,15 @@ namespace FiresGhettoNetworkMod.AutoTune
             HasClientResult = false;
             ClientTier = Tier.Medium;
             ClientPingMedianMs = 0;
+            ClientUplinkBytes = -1;     // a new server is a new path — measure it again
+            ClientUplinkIsLimit = false;
         }
 
         public static void SetServer(Tier tier)
         {
             ServerTier = tier;
             HasServerResult = true;
+            AutoTuneApplier.ApplyServer();
         }
     }
 
@@ -350,24 +370,24 @@ namespace FiresGhettoNetworkMod.AutoTune
         // outbound to all peers. So we pick which tier drives them based on side:
         // server tier wins when running on a dedicated server with auto-tune enabled,
         // otherwise client tier (or manual config).
+        // ── THE CONFIG IS THE SOURCE OF TRUTH ─────────────────────────────────────────
+        // These four getters used to return a tier preset whenever Auto-Tune had a result, and
+        // ignore the config entirely — so the file showed one value while another ran. Auto-Tune
+        // now WRITES its decision into the config (AutoTuneApplier), so the getter just reads it.
+        // One path, and what the player sees is what is running.
+        //
+        // HYPERBOOST stays an override: it is a switch the player flips deliberately, documented
+        // as overriding these values, and its maximums are not expressible as config options.
         public static int SteamSendRateMin()
         {
             if (HyperBoost()) return HyperBoostSendRateMinBytes;
-            if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMinBytes, "SendRateMin", "ServerTier");
-            if (UseClientAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMinBytes, "SendRateMin", "ClientTier");
-            return VanillaFloor.ClampSendRate(SendRateMinFromEnum(FiresGhettoNetworkMod.ConfigSendRateMin.Value), "SendRateMin", "ManualConfig");
+            return VanillaFloor.ClampSendRate(SendRateMinFromEnum(FiresGhettoNetworkMod.ConfigSendRateMin.Value), "SendRateMin", VanillaFloor.ConfigSource);
         }
 
         public static int SteamSendRateMax()
         {
             if (HyperBoost()) return HyperBoostSendRateMaxBytes;
-            if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMaxBytes, "SendRateMax", "ServerTier");
-            if (UseClientAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMaxBytes, "SendRateMax", "ClientTier");
-            return VanillaFloor.ClampSendRate(SendRateMaxFromEnum(FiresGhettoNetworkMod.ConfigSendRateMax.Value), "SendRateMax", "ManualConfig");
+            return VanillaFloor.ClampSendRate(SendRateMaxFromEnum(FiresGhettoNetworkMod.ConfigSendRateMax.Value), "SendRateMax", VanillaFloor.ConfigSource);
         }
 
         private static bool IsDedicatedServerRuntime()
@@ -497,21 +517,12 @@ namespace FiresGhettoNetworkMod.AutoTune
             return PlayerPositionSyncPatches.ConfigSmoothingMinInterval?.Value ?? 0.0f;
         }
 
-        // ---------------- Server knobs ----------------
+        // ---------------- Cadence knobs — written by Auto-Tune when enabled (see AutoTuneApplier) ----------------
 
         public static UpdateRateOptions UpdateRate()
-        {
-            if (UseServerAutoTune())
-                return VanillaFloor.ClampUpdateRate(TierPresets.For(AutoTuneState.ServerTier).UpdateRate, "ServerTier");
-            return VanillaFloor.ClampUpdateRate(FiresGhettoNetworkMod.ConfigUpdateRate.Value, "ManualConfig");
-        }
+            => VanillaFloor.ClampUpdateRate(FiresGhettoNetworkMod.ConfigUpdateRate.Value, VanillaFloor.ConfigSource);
 
-        public static QueueSizeOptions QueueSize()
-        {
-            if (UseServerAutoTune())
-                return TierPresets.For(AutoTuneState.ServerTier).QueueSize;
-            return FiresGhettoNetworkMod.ConfigQueueSize.Value;
-        }
+        public static QueueSizeOptions QueueSize() => FiresGhettoNetworkMod.ConfigQueueSize.Value;
 
         public static float ZDOThrottleDistance()
         {
@@ -588,31 +599,74 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         // Enum to bytes, read by the transpiler at patch time.
 
-        private static int SendRateMinFromEnum(SendRateMinOptions opt)
+        // ── ENUM <-> BYTES, ONE TABLE PER KNOB ────────────────────────────────────────
+        // Previously two switch statements ending `default: return 150 KB`. Any enum member added
+        // without a matching case silently became 150 KB — which the new thin-uplink values would
+        // have done. One table drives BOTH directions, so they cannot drift apart.
+        private static readonly (SendRateMinOptions opt, int bytes)[] s_minTable =
         {
-            switch (opt)
-            {
-                case SendRateMinOptions._1024KB: return 1024 * 1024;
-                case SendRateMinOptions._768KB:  return 768  * 1024;
-                case SendRateMinOptions._512KB:  return 512  * 1024;
-                case SendRateMinOptions._256KB:  return 256  * 1024;
-                default:                         return 150  * 1024;
-            }
+            (SendRateMinOptions._1024KB,  1024 * 1024),
+            (SendRateMinOptions._768KB,   768 * 1024),
+            (SendRateMinOptions._512KB,   512 * 1024),
+            (SendRateMinOptions._384KB,   384 * 1024),
+            (SendRateMinOptions._256KB,   256 * 1024),
+            (SendRateMinOptions._192KB,   192 * 1024),
+            (SendRateMinOptions._150KB,   150 * 1024),
+            (SendRateMinOptions._128KB,   128 * 1024),
+            (SendRateMinOptions._96KB,    96 * 1024),
+            (SendRateMinOptions._64KB,    64 * 1024),
+            (SendRateMinOptions._48KB,    48 * 1024),
+            (SendRateMinOptions._32KB,    32 * 1024),
+        };
+
+        private static readonly (SendRateMaxOptions opt, int bytes)[] s_maxTable =
+        {
+            (SendRateMaxOptions._32768KB, 32768 * 1024),
+            (SendRateMaxOptions._16384KB, 16384 * 1024),
+            (SendRateMaxOptions._8192KB,  8192 * 1024),
+            (SendRateMaxOptions._4096KB,  4096 * 1024),
+            (SendRateMaxOptions._2048KB,  2048 * 1024),
+            (SendRateMaxOptions._1536KB,  1536 * 1024),
+            (SendRateMaxOptions._1024KB,  1024 * 1024),
+            (SendRateMaxOptions._768KB,   768 * 1024),
+            (SendRateMaxOptions._640KB,   640 * 1024),
+            (SendRateMaxOptions._512KB,   512 * 1024),
+            (SendRateMaxOptions._384KB,   384 * 1024),
+            (SendRateMaxOptions._320KB,   320 * 1024),
+            (SendRateMaxOptions._256KB,   256 * 1024),
+            (SendRateMaxOptions._192KB,   192 * 1024),
+            (SendRateMaxOptions._150KB,   150 * 1024),
+            (SendRateMaxOptions._128KB,   128 * 1024),
+            (SendRateMaxOptions._96KB,    96 * 1024),
+            (SendRateMaxOptions._64KB,    64 * 1024),
+            (SendRateMaxOptions._48KB,    48 * 1024),
+            (SendRateMaxOptions._32KB,    32 * 1024),
+        };
+
+        internal static int SendRateMinFromEnum(SendRateMinOptions opt)
+        {
+            foreach (var e in s_minTable) if (e.opt == opt) return e.bytes;
+            return 150 * 1024;
         }
 
-        private static int SendRateMaxFromEnum(SendRateMaxOptions opt)
+        internal static int SendRateMaxFromEnum(SendRateMaxOptions opt)
         {
-            switch (opt)
-            {
-                case SendRateMaxOptions._8192KB: return 8192 * 1024;
-                case SendRateMaxOptions._4096KB: return 4096 * 1024;
-                case SendRateMaxOptions._2048KB: return 2048 * 1024;
-                case SendRateMaxOptions._1024KB: return 1024 * 1024;
-                case SendRateMaxOptions._768KB:  return 768  * 1024;
-                case SendRateMaxOptions._512KB:  return 512  * 1024;
-                case SendRateMaxOptions._256KB:  return 256  * 1024;
-                default:                         return 150  * 1024;
-            }
+            foreach (var e in s_maxTable) if (e.opt == opt) return e.bytes;
+            return 150 * 1024;
+        }
+
+        // Largest option NOT ABOVE `bytes`. Snaps DOWN, never up: a value derived from a measured
+        // uplink must land under the line, not over it. Both tables are ordered high -> low.
+        internal static SendRateMinOptions SendRateMinAtMost(int bytes)
+        {
+            foreach (var e in s_minTable) if (e.bytes <= bytes) return e.opt;
+            return s_minTable[s_minTable.Length - 1].opt;
+        }
+
+        internal static SendRateMaxOptions SendRateMaxAtMost(int bytes)
+        {
+            foreach (var e in s_maxTable) if (e.bytes <= bytes) return e.opt;
+            return s_maxTable[s_maxTable.Length - 1].opt;
         }
     }
 }

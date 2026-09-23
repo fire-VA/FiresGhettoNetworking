@@ -26,6 +26,10 @@ namespace FiresGhettoNetworkMod.AutoTune
         public const string RpcPong        = "FiresGhetto.AutoTune.Pong";
         public const string RpcBandwidthRequest      = "FiresGhetto.AutoTune.BwReq";
         public const string RpcBandwidthResponse     = "FiresGhetto.AutoTune.BwResp";
+        // Uplink: the mirror of the bandwidth pair. The client SENDS the payload and the server
+        // acknowledges on receipt, so the round trip is dominated by the client's upload.
+        public const string RpcUplinkRequest         = "FiresGhetto.AutoTune.UpReq";
+        public const string RpcUplinkAck             = "FiresGhetto.AutoTune.UpAck";
         public const string RpcTierReport = "FiresGhetto.AutoTune.TierReport";
         public const string RpcProbeSlotRequest = "FiresGhetto.AutoTune.SlotReq";
         public const string RpcProbeSlotGrant   = "FiresGhetto.AutoTune.SlotGo";
@@ -35,6 +39,18 @@ namespace FiresGhettoNetworkMod.AutoTune
         private const int BwPayloadMinBytes = 1024;
         private const int BwPayloadMaxBytes = 256 * 1024;
         private const int DefaultBwPayloadBytes = 128 * 1024;
+
+        // Smaller than the downlink payload on purpose. The line being measured is the thin one:
+        // 64 KB clears a 32 KB/s uplink in ~2 s, well inside the timeout, where 128 KB would not.
+        // A FAST uplink needs no precision — it only has to prove it is not the limit.
+        private const int UplinkPayloadBytes = 64 * 1024;
+        // Under this the payload went up essentially instantly: the RTT dominates and any
+        // arithmetic on the remainder is noise. Treat it as "not the limit".
+        private const float UplinkMinTransferMs = 15f;
+        // A sample within this fraction of the send-rate cap in force was capped BY STEAM, not the
+        // line — so it proves only that the uplink is at least that fast. The same test
+        // LinkController uses to tell a full line from a low rate.
+        private const float UplinkSaturatedFraction = 0.8f;
         private const int PayloadPatternMultiplier = 1103515245;
         private const int PayloadPatternIncrement = 12345;
         private const int PayloadPatternShift = 8;
@@ -94,6 +110,8 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         private static readonly Dictionary<int, long> _pingResultsMs = new Dictionary<int, long>();
         private static readonly Dictionary<int, BwResult> _bwResults = new Dictionary<int, BwResult>();
+        private static readonly Dictionary<int, Stopwatch> _upInflight = new Dictionary<int, Stopwatch>();
+        private static readonly Dictionary<int, BwResult>  _upResults  = new Dictionary<int, BwResult>();
 
         private struct BwResult
         {
@@ -172,10 +190,12 @@ namespace FiresGhettoNetworkMod.AutoTune
                 // for inbound Ping/BwReq because clients only see their server peer reply).
                 peer.m_rpc.Register<int>(RpcPing, OnRpcPing);
                 peer.m_rpc.Register<int, int>(RpcBandwidthRequest, OnRpcBwReq);
+                peer.m_rpc.Register<int, ZPackage>(RpcUplinkRequest, OnRpcUpReq);
 
                 // Client-side handlers
                 peer.m_rpc.Register<int>(RpcPong, OnRpcPong);
                 peer.m_rpc.Register<int, ZPackage>(RpcBandwidthResponse, OnRpcBwResp);
+                peer.m_rpc.Register<int, int>(RpcUplinkAck, OnRpcUpAck);
 
                 // Server-side: receive client tier reports (handled by ServerAutoTune)
                 peer.m_rpc.Register<int, int>(RpcTierReport, ServerAutoTune.OnTierReport);
@@ -411,6 +431,25 @@ namespace FiresGhettoNetworkMod.AutoTune
         /// without this mod never answers; the client proceeds once the timeout elapses and treats
         /// the sample as unsettled.
         /// </summary>
+        // SERVER: the payload has already arrived by the time this runs — acknowledge immediately.
+        // No allocation beyond what Steam already delivered, so there is nothing to abuse here.
+        private static void OnRpcUpReq(ZRpc rpc, int seq, ZPackage pkg)
+        {
+            int received = 0;
+            try { received = pkg?.GetArray()?.Length ?? 0; } catch { }
+            try { rpc.Invoke(RpcUplinkAck, seq, received); }
+            catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] Uplink ack failed: {ex.Message}"); }
+        }
+
+        // CLIENT: the server confirmed receipt.
+        private static void OnRpcUpAck(ZRpc rpc, int seq, int receivedBytes)
+        {
+            if (!_upInflight.TryGetValue(seq, out Stopwatch sw)) return;
+            sw.Stop();
+            _upResults[seq] = new BwResult { Bytes = receivedBytes, Ms = sw.ElapsedMilliseconds };
+            _upInflight.Remove(seq);
+        }
+
         private static IEnumerator WaitForProbeSlot(ZNetPeer serverPeer)
         {
             _probeSlotGranted = false;
@@ -570,6 +609,8 @@ namespace FiresGhettoNetworkMod.AutoTune
                 if (cached != null)
                 {
                     LoggerOptions.LogInfo($"[AutoTune] Using cached tier for {serverKey}: {cached.Tier} (probed {(int)(DateTime.UtcNow - cached.TimestampUtc).TotalDays}d ago)");
+                    // Upload first: SetClient writes the config and that write reads it.
+                    AutoTuneState.SetClientUplink(cached.UplinkBytes, cached.UplinkIsLimit);
                     AutoTuneState.SetClient(cached.Tier, cached.PingMedianMs);
                     CapeCrashDiagnostics.Log($"AutoTune using cached tier {cached.Tier}");
                     ApplyClientTier(cached.Tier);
@@ -743,6 +784,93 @@ namespace FiresGhettoNetworkMod.AutoTune
                     LoggerOptions.LogInfo($"[AutoTune] Bandwidth probe: all {timeouts} samples timed out — treated as bandwidth-bad signal.");
                     bwKbPerSec = 0f;
                     bwProbeCompleted = true;
+                }
+            }
+
+            // ---- 6b. Uplink probe ----
+            // The probe never measured upload, yet the tier it produced set the client's Send Rate
+            // Min/Max — which ARE the client's upload. A strong PC on a thin line scored HIGH and got
+            // HIGH upload rates. This stage measures the line those settings actually govern.
+            //
+            // Mirror of the bandwidth stage: the client sends the payload, the server acks on
+            // receipt, so the round trip is the upload plus one RTT — which the latency stage has
+            // already measured and is subtracted.
+            {
+                int capBytes = EffectiveConfig.SteamSendRateMax();   // what Steam allowed us to send
+                float upTimeout = Mathf.Max(MinBandwidthTimeoutSeconds,
+                    (AutoTuneConfig.ProbePingTimeoutSeconds?.Value ?? DefaultPingTimeoutSeconds) * BandwidthTimeoutFactor);
+
+                // Varied pattern so the compression layer cannot squash the sample and flatter the line.
+                byte[] upPayload = new byte[UplinkPayloadBytes];
+                for (int i = 0; i < upPayload.Length; i++)
+                    upPayload[i] = (byte)((i * PayloadPatternMultiplier + PayloadPatternIncrement) >> PayloadPatternShift);
+
+                float upPeak = -1f;
+                int upAnswered = 0, upTimeouts = 0, upInstant = 0;
+
+                for (int s = 0; s < BandwidthSampleCount; s++)
+                {
+                    if (serverPeer == null || serverPeer.m_rpc == null) break;
+
+                    int seq = NextSeq();
+                    var pkg = new ZPackage();
+                    pkg.Write(upPayload);
+                    _upInflight[seq] = Stopwatch.StartNew();
+                    if (!TryInvoke(serverPeer, RpcUplinkRequest, seq, pkg)) { _upInflight.Remove(seq); break; }
+
+                    float waited = 0f;
+                    while (_upInflight.ContainsKey(seq) && waited < upTimeout)
+                    {
+                        yield return null;
+                        waited += Time.unscaledDeltaTime;
+                    }
+
+                    if (_upInflight.ContainsKey(seq)) { _upInflight.Remove(seq); upTimeouts++; }
+                    else if (_upResults.TryGetValue(seq, out BwResult up))
+                    {
+                        _upResults.Remove(seq);
+                        upAnswered++;
+                        float transferMs = up.Ms - Mathf.Max(0, pingMedian);
+                        if (transferMs < UplinkMinTransferMs) upInstant++;          // RTT-dominated: fast
+                        else
+                        {
+                            float bytesPerSec = up.Bytes / (transferMs / 1000f);
+                            if (bytesPerSec > upPeak) upPeak = bytesPerSec;       // least-contended sample
+                        }
+                    }
+
+                    if (s < BandwidthSampleCount - 1) yield return new WaitForSeconds(BandwidthSampleGapSeconds);
+                }
+
+                if (upAnswered == 0)
+                {
+                    // ⚠ NOT "thin". An older FGN server has no handler for this RPC and will never
+                    // answer — reading silence as a thin line would throttle every player who joins
+                    // an un-updated server to nothing. No evidence means unknown; the runtime
+                    // controller still catches a genuinely full line from real traffic.
+                    AutoTuneState.SetClientUplink(-1, false);
+                    LoggerOptions.LogInfo($"[AutoTune] Upload: no answer ({upTimeouts} timeout(s)) — server may predate the "
+                        + "upload probe. Treating upload as unknown; tier values stand.");
+                }
+                else if (upPeak < 0f || upInstant == upAnswered)
+                {
+                    AutoTuneState.SetClientUplink(-1, false);
+                    LoggerOptions.LogInfo("[AutoTune] Upload: payload cleared within one round trip — not the limit.");
+                }
+                else if (upPeak >= capBytes * UplinkSaturatedFraction)
+                {
+                    // Reached the cap Steam was enforcing, so the CAP limited the sample, not the line.
+                    // All we know is the uplink is at least this fast — recording it as capacity would
+                    // throttle a fat line down to whatever cap happened to be in force.
+                    AutoTuneState.SetClientUplink((int)upPeak, false);
+                    LoggerOptions.LogInfo($"[AutoTune] Upload: at least {upPeak / 1024f:0} KB/s (reached the "
+                        + $"{capBytes / 1024} KB/s send cap) — not the limit.");
+                }
+                else
+                {
+                    AutoTuneState.SetClientUplink((int)upPeak, true);
+                    LoggerOptions.LogInfo($"[AutoTune] Upload: {upPeak / 1024f:0} KB/s against a {capBytes / 1024} KB/s "
+                        + "send cap — the line is the limit.");
                 }
             }
 
@@ -1137,7 +1265,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         LoggerOptions.LogMessage($"[AutoTune] Rolling tier change: {currentApplied} → {consensus} ({_pendingRollingObservations} consecutive obs; this probe: latency={_latencyTier} median={_latencyMedianMs}ms; window=[{string.Join(",", _rollingTiers)}])");
                         AutoTuneState.SetClient(consensus, _latencyMedianMs);
                         ApplyClientTier(consensus);
-                        try { AutoTuneCache.Save(_sessionServerKey, consensus, _latencyMedianMs, _sessionHwHash); }
+                        try { AutoTuneCache.Save(_sessionServerKey, consensus, _latencyMedianMs, _sessionHwHash, AutoTuneState.ClientUplinkBytes, AutoTuneState.ClientUplinkIsLimit); }
                         catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] Cache save skipped ({ex.GetType().Name}: {ex.Message})."); }
                         SendTierReport(serverPeer, consensus, _latencyMedianMs);
                         // Reset streak — applied, no longer pending.
@@ -1210,7 +1338,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
             else
             {
-                try { AutoTuneCache.Save(serverKey, appliedTier, pingMedianMs, hwHash); }
+                try { AutoTuneCache.Save(serverKey, appliedTier, pingMedianMs, hwHash, AutoTuneState.ClientUplinkBytes, AutoTuneState.ClientUplinkIsLimit); }
                 catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] Cache save skipped ({ex.GetType().Name}: {ex.Message}); tier still applied in-memory."); }
             }
             ApplyClientTier(appliedTier);

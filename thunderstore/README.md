@@ -141,6 +141,7 @@ Valheim has two network backends. Steam-to-Steam players ride `ZSteamSocket`. An
 | Keepalive-first send ordering | ✅ | ❌ |
 | Ping / connection-quality readouts | ✅ real Steam figures | ⚠️ byte counters only |
 | Adaptive send window | ✅ grows with the line | ⚠️ replaced by a fixed safe cap — see below |
+| Adaptive Upload / upload-based send rates | ✅ | ❌ — ZDO Send Rate is still set from your upload |
 | Bulk-transfer gate (ServerSync unstick) | ✅ | ✅ |
 | ZDO delta compression | ✅ | ✅ |
 | Distance-based ZDO throttling | ✅ | ✅ |
@@ -241,32 +242,32 @@ but im not smart enough to know how to hide the config to only clients while all
 ### If your upload is the problem
 
 Most of this mod assumes bandwidth is the server's problem. It is not always — a player on a
-thin uplink (rural DSL, 4G, a bad ISP) floods their own upstream, their ACKs queue behind their
+thin uplink (rural DSL, 4G, a poor ISP) floods their own upstream, their ACKs queue behind their
 own outbound, and **they rubber-band for everyone else** while their own game looks fine.
 
-Three settings cap what your PC sends. They are yours to set and Auto-Tune will not override
-them:
+**Auto-Tune handles this, and it is on by default.** On first login it measures your upload as
+well as your download, and when your upload is the limit it sets your send rates just under your
+real upload speed — below vanilla if that is what your line needs. It also lowers **ZDO Send
+Rate** on a thin line, which is the change that actually stops the rubber-banding.
 
-| Setting | Section | For a thin uplink |
-|---|---|---|
-| **ZDO Send Rate** | `04 - Networking` | `75%` or `50%` — how often your character's updates leave your PC. This is the big one. |
-| **Send Rate Max** | `05 - Networking - Steamworks` | at or below your real upload speed |
-| **Send Rate Min** | `05 - Networking - Steamworks` | below your real upload speed |
-| **Queue Size** | `04 - Networking` | `Vanilla (~10 KB)` — less buffered ahead of a slow line |
-
-**ZDO Send Rate is the one that actually fixes rubber-banding.** Halving it halves how often
-you transmit. You look marginally less smooth to others; you see no difference at all, and you
-stop being the player everyone else sees teleporting.
-
-⚠️ Auto-Tune never chooses below vanilla on its own — it only ever raises rates. Setting these
-below vanilla is an explicit instruction, and the log confirms it once:
+**It writes what it chose into your config**, so the config always shows what is running:
 
 ```
-[Uplink] UpdateRate manually set to 50%, below vanilla. Honouring it — this is the supported
-way to cap a thin uplink. AutoTune-derived values are still floored at vanilla.
+[AutoTune] Upload: 180 KB/s against a 2048 KB/s send cap — the line is the limit.
+[AutoTune] client High: upload 180 KB/s is the limit, staying under it. Config set to
+           Send Rate Max _150KB, Min _150KB, ZDO Send Rate _75, Queue Size _vanilla.
 ```
 
-If you do not see that line, the setting did not take.
+**Adaptive Upload** then keeps the live rate under what actually gets through, continuously —
+so if someone else in the house starts an upload mid-session, it backs off instead of flooding.
+
+**Want to set it yourself?** Turn off `Enable Client Auto-Tune` under `06 - Auto-Tune`. Your
+config keeps the values Auto-Tune last chose, and from then on they are yours. While Auto-Tune is
+on, edits to ZDO Send Rate, Queue Size, Send Rate Min and Send Rate Max are replaced on the next
+tune — that is what keeps the config and the running values the same.
+
+⚠️ Send Rate Min/Max and Adaptive Upload are **Steam only** — on crossplay the rate belongs to
+PlayFab. **ZDO Send Rate** works on both, and Auto-Tune still sets it from your measured upload.
 
 ## Reading the log
 

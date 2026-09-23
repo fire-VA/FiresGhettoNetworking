@@ -186,6 +186,7 @@
   <ItemGroup>
     <Compile Include="Ascend.cs" />
     <Compile Include="Networking\AILODPatches.cs" />
+    <Compile Include="Networking\AutoTune\AutoTuneApplier.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneCache.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneConfig.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneProbe.cs" />
