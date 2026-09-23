@@ -12,6 +12,28 @@ namespace FiresGhettoNetworkMod.AutoTune
     // which throttled a peer below stock and made "remove the mod and it's fixed" true by construction.
     public static class VanillaFloor
     {
+        // ── UPLINK BUDGET ESCAPE HATCH ───────────────────────────────────────────────
+        // The floor exists so AutoTune cannot make a link WORSE than vanilla, and that is
+        // right for anything AutoTune decides on the player's behalf. It is wrong for a
+        // player who is deliberately asking to send LESS.
+        //
+        // A thin uplink is the one case where below-vanilla is the correct answer. Vanilla
+        // assumes it can push 20 ZDO sends/sec at up to 150 KB/s; on a 1 Mbit upstream that
+        // saturates the pipe, the queue backs up, ACKs are delayed behind the player's own
+        // outbound, and their character rubber-bands for everyone else. Sending half as
+        // often fixes it. Better Networking has shipped exactly this for years (Update Rate
+        // 75/50%, send rates down to 150 KB/s) and it is the reason players on poor uplinks
+        // install it.
+        //
+        // So: the floor still applies to every AutoTune-derived value (ServerTier,
+        // ClientTier). A MANUAL config value is the player's own instruction and is honoured
+        // as written. Source strings are already threaded through every call site, so the
+        // distinction costs one comparison and no new plumbing.
+        private const string ManualSource = "ManualConfig";
+
+        private static bool IsManual(string source) =>
+            string.Equals(source, ManualSource, System.StringComparison.Ordinal);
+
         public const int SendRateBytes   = 150 * 1024;   // 153600 — vanilla send-rate floor (Min and Max)
         public const int SendBufferBytes = 512 * 1024;   // Steam's default outbound buffer
         public const int RecvBufferBytes = 512 * 1024;   // Steam's default inbound buffer
@@ -20,6 +42,16 @@ namespace FiresGhettoNetworkMod.AutoTune
         // Dedupe key = "source:knob" so a value clamped on every apply / reconnect / autotune reassert
         // is reported once, not spammed each frame the getter is read.
         private static readonly HashSet<string> _warned = new HashSet<string>();
+
+        // Manual below-vanilla is a deliberate choice, so it is reported ONCE as information
+        // rather than repeated as a warning — a player who set it does not need telling off
+        // every time the getter is read.
+        private static void NoteManualBelowVanilla(string knob, string asked)
+        {
+            if (!_warned.Add("ManualBelowVanilla:" + knob)) return;
+            LoggerOptions.LogMessage($"[Uplink] {knob} manually set to {asked}, below vanilla. Honouring it — "
+                + "this is the supported way to cap a thin uplink. AutoTune-derived values are still floored at vanilla.");
+        }
 
         private static void WarnOnce(string knob, string source, object asked, object floored)
         {
@@ -31,6 +63,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static int ClampSendRate(int value, string knob, string source)
         {
             if (value >= SendRateBytes) return value;
+            if (IsManual(source)) { NoteManualBelowVanilla(knob, value + " bytes/s"); return value; }
             WarnOnce(knob, source, value, SendRateBytes);
             return SendRateBytes;
         }
@@ -52,6 +85,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static UpdateRateOptions ClampUpdateRate(UpdateRateOptions value, string source)
         {
             if (Percent(value) >= Percent(UpdateRate)) return value;
+            if (IsManual(source)) { NoteManualBelowVanilla("UpdateRate", Percent(value) + "%"); return value; }
             WarnOnce("UpdateRate", source, value, UpdateRate);
             return UpdateRate;
         }

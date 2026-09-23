@@ -238,6 +238,36 @@ The mod automatically disables server-only features on clients regardless of wha
 so that you can't manually toggle `Enable Server-Side Simulation` on your client,
 but im not smart enough to know how to hide the config to only clients while allowing admins and servers to see it. 
 
+### If your upload is the problem
+
+Most of this mod assumes bandwidth is the server's problem. It is not always — a player on a
+thin uplink (rural DSL, 4G, a bad ISP) floods their own upstream, their ACKs queue behind their
+own outbound, and **they rubber-band for everyone else** while their own game looks fine.
+
+Three settings cap what your PC sends. They are yours to set and Auto-Tune will not override
+them:
+
+| Setting | Section | For a thin uplink |
+|---|---|---|
+| **ZDO Send Rate** | `04 - Networking` | `75%` or `50%` — how often your character's updates leave your PC. This is the big one. |
+| **Send Rate Max** | `05 - Networking - Steamworks` | at or below your real upload speed |
+| **Send Rate Min** | `05 - Networking - Steamworks` | below your real upload speed |
+| **Queue Size** | `04 - Networking` | `Vanilla (~10 KB)` — less buffered ahead of a slow line |
+
+**ZDO Send Rate is the one that actually fixes rubber-banding.** Halving it halves how often
+you transmit. You look marginally less smooth to others; you see no difference at all, and you
+stop being the player everyone else sees teleporting.
+
+⚠️ Auto-Tune never chooses below vanilla on its own — it only ever raises rates. Setting these
+below vanilla is an explicit instruction, and the log confirms it once:
+
+```
+[Uplink] UpdateRate manually set to 50%, below vanilla. Honouring it — this is the supported
+way to cap a thin uplink. AutoTune-derived values are still floored at vanilla.
+```
+
+If you do not see that line, the setting did not take.
+
 ## Reading the log
 
 Every 5 minutes the mod writes a short report, so you can see what it is doing without guessing:

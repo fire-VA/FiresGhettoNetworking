@@ -670,21 +670,30 @@ namespace FiresGhettoNetworkMod
                 "cost of more bandwidth and server CPU.\n" +
                 "100% (20 per second) is vanilla's intended rate. Vanilla only reaches it with one or two players, because\n" +
                 "it serves one player per frame; 'Send To Every Player Each Frame' gives every player this rate.\n" +
-                "150% (30 per second) can look smoother when bandwidth and CPU allow. Never goes below vanilla.");
+                "150% (30 per second) can look smoother when bandwidth and CPU allow.\n" +
+                "75% / 50% are THE setting to use if your UPLOAD is thin. They cut how often your own character's\n" +
+                "updates leave your PC, which is what stops you rubber-banding for everyone else on a weak uplink.\n" +
+                "You will look slightly less smooth to others and see no difference yourself. Auto-Tune never chooses\n" +
+                "below 100% on its own — setting it here is an explicit instruction and is honoured.");
 
             ConfigSendRateMin = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Min",
                 SendRateMinOptions._512KB,
                 "Minimum send rate Steam will attempt. Steam's adapter has a sticky-down quirk — peers " +
-                "that back off toward this value tend to stay there. Keep it well above unplayable.");
+                "that back off toward this value tend to stay there. Keep it well above unplayable.\n" +
+                "ON A THIN UPLINK: set this BELOW your real upload speed. Steam treats Min as a rate it may " +
+                "hold even when the link is struggling, so leaving it above your actual upstream keeps it " +
+                "pushing more than the line can carry.");
 
             ConfigSendRateMax = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Max",
                 SendRateMaxOptions._2048KB,
                 "Maximum send rate Steam will attempt. This is 'permission to burst' — Steam still ramps " +
-                "adaptively between Min and Max, this just removes the artificial ceiling.");
+                "adaptively between Min and Max, this just removes the artificial ceiling.\n" +
+                "ON A THIN UPLINK: cap this at or below your real upload speed. The default is permission to " +
+                "use bandwidth you may not have; on a weak uplink that permission is what floods it.");
 
             ConfigHyperBoost = Config.Bind(
                 "05 - Networking - Steamworks",
