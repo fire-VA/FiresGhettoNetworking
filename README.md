@@ -246,20 +246,23 @@ thin uplink (rural DSL, 4G, a poor ISP) floods their own upstream, their ACKs qu
 own outbound, and **they rubber-band for everyone else** while their own game looks fine.
 
 **Auto-Tune handles this, and it is on by default.** On first login it measures your upload as
-well as your download, and when your upload is the limit it sets your send rates just under your
-real upload speed — below vanilla if that is what your line needs. It also lowers **ZDO Send
+well as your download, and when your upload is the limit it sets your send ceiling to your real
+upload speed — all of it, below vanilla if that is what your line is. It also lowers **ZDO Send
 Rate** on a thin line, which is the change that actually stops the rubber-banding.
 
 **It writes what it chose into your config**, so the config always shows what is running:
 
 ```
 [AutoTune] Upload: 180 KB/s against a 2048 KB/s send cap — the line is the limit.
-[AutoTune] client High: upload 180 KB/s is the limit, staying under it. Config set to
-           Send Rate Max _150KB, Min _150KB, ZDO Send Rate _75, Queue Size _vanilla.
+[AutoTune] client High: upload 180 KB/s is the limit, ceiling set to it. Config set to
+           Send Rate Max 180 KB/s, Min 90 KB/s, ZDO Send Rate _75, Queue Size _vanilla.
 ```
 
 **Adaptive Upload** then keeps the live rate under what actually gets through, continuously —
 so if someone else in the house starts an upload mid-session, it backs off instead of flooding.
+That is why the ceiling can sit at your full upload speed: the ceiling is what your line *can*
+do, and the controller decides what it *should* do right now, anywhere down to Send Rate Min.
+Min is kept at no more than half of Max so it always has room to back off.
 
 **Want to set it yourself?** Turn off `Enable Client Auto-Tune` under `06 - Auto-Tune`. Your
 config keeps the values Auto-Tune last chose, and from then on they are yours. While Auto-Tune is
