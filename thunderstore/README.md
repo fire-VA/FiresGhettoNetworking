@@ -27,7 +27,7 @@ The mod is layered. Installing it does not turn everything on — most of the he
 Everything here is server-side and needs nothing installed on your players' machines:
 
 - Player limit + advertised player limit, crossplay backend selection
-- Steam send rate / send buffer, send queue size, ZDO send rate
+- Steam send rate / send buffer, send queue size, ZDO send rate — ⚠️ the Steam rate and buffer items reach **Steam peers only**
 - Per-peer adaptive send rate (each client ramps toward its own real link capacity)
 - **Bulk-transfer gate** — raises the 20 KB queue limit inside every loaded ServerSync / ServerCharacters copy, so large config syncs on join stop stalling and dropping peers. This is one of the biggest real-world wins and it is entirely server-side
 - Server-side auto-tune, plus all diagnostics and admin commands (`fgn_headroom`, `fgn_flood`, `fgn_socketramp`, `fgn_comptest`, `fgn_zdoflood`, `fgn_links`)
@@ -123,6 +123,61 @@ Every tier stays at or above vanilla's values; the startup log confirms it with 
 
 The server also collects tier reports from connected clients and periodically logs the median client tier with suggestions, 
 so an admin can see at a glance whether the server's settings actually match the audience joining.
+
+## Steam vs crossplay (PlayFab) — what each player actually gets
+
+Worth reading before you judge the mod on your own server, because **some of the headline features do nothing at all on a crossplay connection** and there is no version of this mod that fixes that. The knobs do not exist on the other transport.
+
+Valheim has two network backends. Steam-to-Steam players ride `ZSteamSocket`. Anyone on crossplay — Xbox, Game Pass, PlayStation, or a Steam player who joined through a crossplay code — rides `ZPlayFabSocket`. Every socket-level patch in this mod targets `ZSteamSocket`.
+
+### The split
+
+| Feature | Steam | Crossplay (PlayFab) |
+|---|---|---|
+| Deflate packet compression | ✅ | ❌ |
+| Steam send rate Min/Max | ✅ | ❌ rate is PlayFab-governed |
+| Send / receive buffer tuning | ✅ | ❌ no connection handle to set |
+| HyperBoost + `FiresSteamworksPatcher` unlocks | ✅ | ❌ |
+| Keepalive-first send ordering | ✅ | ❌ |
+| Ping / connection-quality readouts | ✅ real Steam figures | ⚠️ byte counters only |
+| Adaptive send window | ✅ grows with the line | ⚠️ replaced by a fixed safe cap — see below |
+| Bulk-transfer gate (ServerSync unstick) | ✅ | ✅ |
+| ZDO delta compression | ✅ | ✅ |
+| Distance-based ZDO throttling | ✅ | ✅ |
+| AI LOD throttling | ✅ | ✅ |
+| RPC Area-of-Interest | ✅ | ✅ |
+| WearNTear server optimisation | ✅ | ✅ |
+| Server-authority patches (ownership, ships, zones, spawning) | ✅ | ✅ |
+| Boat damage fix / helmsman ownership | ✅ | ✅ |
+| Client auto-tune (zone batching, instantiation budget) | ✅ | ✅ |
+
+**Rule of thumb:** anything that changes *how the bytes move* is Steam-only. Anything that changes *how many bytes there are* works for everyone. The second group is the larger half of the mod, so a crossplay server still gains plenty — it just does not get the transport tuning.
+
+### Crossplay is handled, not ignored
+
+A crossplay link does not simply fall back to vanilla. It gets a deliberately conservative fixed window instead of the adaptive one, because PlayFab misreports what it is holding:
+
+> `ZPlayFabSocket.GetSendQueueSize` returns a quarter of real in-flight bytes, so a 10 KB gate permits roughly 40 KB outstanding on the transport least able to carry it: PlayFab resends only the oldest unacknowledged packet, three seconds after it goes missing, and its ACKs are cumulative, so everything queued behind a loss waits out that timer.
+
+That is what `Crossplay In-Flight KB` (default 20 KB) controls. It is a real limit in real bytes, and it is deliberately low — a crossplay line recovers from loss far worse than a Steam one, so the mod holds less in flight rather than more.
+
+### The case most likely to mislead you
+
+⚠️ **A server running with `-crossplay` can put even Steam players on a PlayFab socket.** If your players joined through a crossplay code, the Steam column above may not apply to anyone on your server, and comparing two players' experience on the same server can be misleading.
+
+Transport and install location are also two separate filters. A crossplay player loses the Steam column **even with the mod installed**, and a vanilla Steam client loses compression **even though its transport supports it**.
+
+### How to tell which you are on
+
+The mod says so, once per connection, the first time it sees a crossplay peer:
+
+```
+[Crossplay] <peer> over crossplay (PlayFab). FGN compression, Steam send rates and the
+adaptive send window do not apply to a crossplay connection. Holding 20 KB of real
+in-flight data ...
+```
+
+`fgn_links` shows the live per-peer picture, and a Steam peer reports real Steam figures where a crossplay peer reports byte counters only.
 
 ## Server-side networking improvements
 
