@@ -413,12 +413,37 @@ namespace FiresGhettoNetworkMod
             return Mathf.Min(link.MinRttCurrent, link.MinRttPrevious);
         }
 
+        // Rate control used to be server-only, which left a CLIENT's uplink to Steam's own adapter —
+        // the one with the sticky-down quirk — even though this class already measured that link
+        // ("[Links] this client to the server"). The measurement was there; the decision was not.
+        // A listen-server host counts as a server: its outbound to other players is the same
+        // problem, and it is usually the machine on a home connection.
         private static bool RateControlActive()
         {
-            return ZNet.instance != null && ZNet.instance.IsServer()
-                && AdaptiveSendRate.ConfigEnabled != null && AdaptiveSendRate.ConfigEnabled.Value
-                && !AdaptiveSendRate.Suspend
-                && !EffectiveConfig.HyperBoost();
+            if (ZNet.instance == null || AdaptiveSendRate.Suspend || EffectiveConfig.HyperBoost()) return false;
+            if (ZNet.instance.IsServer())
+                return AdaptiveSendRate.ConfigEnabled != null && AdaptiveSendRate.ConfigEnabled.Value;
+            return FiresGhettoNetworkMod.ConfigAdaptiveUpload != null && FiresGhettoNetworkMod.ConfigAdaptiveUpload.Value;
+        }
+
+        // ── THE SATURATION TEST ──────────────────────────────────────────────────────
+        // "Steam is queueing" means one of two opposite things:
+        //   1. the RATE is the bottleneck — Steam is allowed less than the line can carry, so it
+        //      queues. Raising is right. This is the fat-upstream case the controller was built for.
+        //   2. the LINE is the bottleneck — it is full. Raising floods it: the queue grows, the
+        //      sender's own ACKs wait behind their outbound, and they rubber-band for everyone.
+        // The controller could not tell them apart and raised in both. Latent on home-hosted
+        // servers, and live on any client once client-side control exists.
+        //
+        // Goodput tells them apart: allowed far more than actually gets through means the line is
+        // full. The fraction leaves room for normal jitter in the goodput sample so a healthy link
+        // is not misread as saturated. Same threshold the upload probe uses.
+        private const float SaturatedGoodputFraction = 0.8f;
+
+        private static bool LinkSaturated(Link link, int current)
+        {
+            return link.GoodputPrimed && link.Goodput > 0f
+                && link.Goodput < current * SaturatedGoodputFraction;
         }
 
         private static void StepRate(Link link, double now)
@@ -427,8 +452,14 @@ namespace FiresGhettoNetworkMod
             if (link.Connection == 0u) link.Connection = NetworkingRatesGroup.GetConnectionHandle(link.Peer);
             if (link.Connection == 0u) return;
 
-            int floor = EffectiveConfig.SteamSendRateMin();
-            int start = Mathf.Clamp(EffectiveConfig.SteamSendRateMax(), floor, SteamRateCeilingBytes);
+            // The controller works INSIDE the config's Min..Max and never outside it. It used to be
+            // able to raise to SteamRateCeilingBytes (100 MB/s) regardless of Send Rate Max, which
+            // meant a player could read one Max in their config while the connection ran far above
+            // it. Auto-Tune now writes a Max that matches the tier, so there is no longer anything
+            // to climb past — and what the config shows is the real ceiling.
+            int ceiling = Mathf.Min(EffectiveConfig.SteamSendRateMax(), SteamRateCeilingBytes);
+            int floor = Mathf.Min(EffectiveConfig.SteamSendRateMin(), ceiling);
+            int start = ceiling;
             if (!link.RatePinned)
             {
                 link.RateTarget = start;
@@ -451,7 +482,7 @@ namespace FiresGhettoNetworkMod
             bool pipeStuck = link.Congested || link.QueueMs > QueueShrinkMs || link.InFlightBytes >= link.Window;
             link.BadConnectionCount = pingAge > BadConnectionSeconds && pipeStuck ? link.BadConnectionCount + 1 : 0;
 
-            int current = Mathf.Max(floor, link.RateTarget);
+            int current = Mathf.Clamp(link.RateTarget, floor, ceiling);
             int next = current;
             string decision = "hold";
             if (link.BadConnectionCount >= BadConnectionSteps)
@@ -471,10 +502,20 @@ namespace FiresGhettoNetworkMod
                 next = (int)Math.Max(floor, eased);
                 decision = "back off, loss or rising ping";
             }
-            else if (link.QueueMs > QueueHoldMs && link.PendingBytes > 0 && current < SteamRateCeilingBytes)
+            else if (link.QueueMs > QueueHoldMs && link.PendingBytes > 0 && LinkSaturated(link, current))
+            {
+                // Queueing AND well under what we are allowed: the line is full, not the rate.
+                // Ease toward what actually gets through, with a little headroom so the controller
+                // still notices if the line opens up.
+                link.RateSlowStart = false;
+                long eased = (long)(link.Goodput * GoodputHeadroom);
+                next = (int)Mathf.Clamp(eased, floor, current);
+                decision = next < current ? "ease down, the line is full" : "hold, the line is full";
+            }
+            else if (link.QueueMs > QueueHoldMs && link.PendingBytes > 0 && current < ceiling)
             {
                 long raised = (long)(current * (link.RateSlowStart ? 2f : GrowFactor));
-                next = (int)Math.Min(raised, SteamRateCeilingBytes);
+                next = (int)Math.Min(raised, ceiling);
                 decision = "raise, Steam is queueing";
             }
             else if (current < start && now - link.LastBackoff >= RecoverSeconds)
@@ -482,6 +523,8 @@ namespace FiresGhettoNetworkMod
                 next = (int)Math.Min(start, (long)(current * GrowFactor));
                 decision = "recover toward Send Rate Max, link healthy";
             }
+
+            next = Mathf.Clamp(next, floor, ceiling);   // nothing escapes the config's range
 
             bool? pinned = null;
             if (next != link.RateTarget)
