@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using HarmonyLib;
@@ -83,6 +83,12 @@ namespace FiresGhettoNetworkMod
             yield return "[Upload] By RPC: " + Top(s_byRpc, rpc => rpc);
             if (s_byPrefab.Count > 0) yield return "[Upload] ZDOData by object prefab: " + Top(s_byPrefab, PrefabName);
             if (s_byRoutedMethod.Count > 0) yield return "[Upload] RoutedRPC by method: " + Top(s_byRoutedMethod, routed => routed);
+            string delta = ZDODeltaPatches.TakeReportLine();
+            if (delta != null) yield return delta;
+            string fires = FireplaceFuelTicks.TakeReportLine();
+            if (fires != null) yield return fires;
+            string writes = TransformWriteRate.TakeReportLine();
+            if (writes != null) yield return writes;
             StartPeriod();
         }
 

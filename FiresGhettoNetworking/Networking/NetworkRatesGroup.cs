@@ -17,10 +17,15 @@ namespace FiresGhettoNetworkMod
     {
         public static void Init(ConfigFile config)
         {
-            FiresGhettoNetworkMod.ConfigUpdateRate.SettingChanged += (_, __) => ApplyUpdateRate();
-            FiresGhettoNetworkMod.ConfigSendRateMin.SettingChanged += (_, __) => ApplySendRates();
-            FiresGhettoNetworkMod.ConfigSendRateMax.SettingChanged += (_, __) => ApplySendRates();
-            FiresGhettoNetworkMod.ConfigQueueSize.SettingChanged += (_, __) => LoggerOptions.LogInfo("Queue size changed - restart recommended.");
+            // Quiet while AutoTuneApplier writes a batch; it pushes once at the end.
+            FiresGhettoNetworkMod.ConfigUpdateRate.SettingChanged += (_, __) => { if (!AutoTuneApplier.Writing) ApplyUpdateRate(); };
+            FiresGhettoNetworkMod.ConfigSendRateMin.SettingChanged += (_, __) => { if (!AutoTuneApplier.Writing) ApplyRatesLive(); };
+            FiresGhettoNetworkMod.ConfigSendRateMax.SettingChanged += (_, __) => { if (!AutoTuneApplier.Writing) ApplyRatesLive(); };
+            FiresGhettoNetworkMod.ConfigQueueSize.SettingChanged += (_, __) =>
+            {
+                if (!AutoTuneApplier.Writing)
+                    LoggerOptions.LogInfo("Queue size changed - live for the send window; the bulk-transfer gate picks it up on restart.");
+            };
 
             if (FiresGhettoNetworkMod.ConfigHyperBoost != null)
                 FiresGhettoNetworkMod.ConfigHyperBoost.SettingChanged += (_, __) =>
@@ -40,13 +45,25 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogInfo($"Update rate set to {FiresGhettoNetworkMod.ConfigUpdateRate.Value}");
         }
 
+        /// <summary>Pushes the configured rates to the global config AND to every connection already
+        /// open, which Steam does not otherwise re-read. Plan: Docs/PLAN_UploadBudgetAndAutoTune.md</summary>
+        internal static void ApplyRatesLive()
+        {
+            ApplyEffectiveRatesLiveToAllPeers();   // global + every open connection
+            LinkController.ResetRates();           // controllers re-pin inside the new Min..Max
+        }
+
+        /// <summary>Called once by AutoTuneApplier after it writes a batch.</summary>
+        internal static void ApplyTunedRatesLive()
+        {
+            ApplyUpdateRate();
+            ApplyRatesLive();
+        }
+
         public static void ApplySendRates()
         {
             if (ZNet.instance == null) return;
 
-            // Routed through EffectiveConfig so Auto-Tune can shadow these without
-            // overwriting the user's bound config values. Manual values still win when
-            // Auto-Tune is off OR no probe result has landed yet.
             int min = EffectiveConfig.SteamSendRateMin();
             int max = EffectiveConfig.SteamSendRateMax();
 

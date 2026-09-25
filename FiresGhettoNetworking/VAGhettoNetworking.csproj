@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
@@ -75,10 +75,9 @@
       <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\publicized_assemblies\assembly_guiutils_publicized.dll</HintPath>
     </Reference>
     <Reference Include="assembly_utils">
-      <!-- Pinned to the stashed legacy DLL on purpose; see FiresRPGmaker.csproj. -->
-      <HintPath>..\..\assembly_valheim\lib\assembly_utils.dll</HintPath>
-      <Private>True</Private>
-    </Reference>
+      <HintPath>$(GamePath)\valheim_Data\Managed\assembly_utils.dll</HintPath>
+      <Private>False</Private>
+      </Reference>
     <Reference Include="assembly_valheim_publicized">
       <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\publicized_assemblies\assembly_valheim_publicized.dll</HintPath>
     </Reference>
@@ -186,6 +185,7 @@
   <ItemGroup>
     <Compile Include="Ascend.cs" />
     <Compile Include="Networking\AILODPatches.cs" />
+    <Compile Include="Networking\AutoTune\AutoTuneApplier.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneCache.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneConfig.cs" />
     <Compile Include="Networking\AutoTune\AutoTuneProbe.cs" />
@@ -218,8 +218,11 @@
     <Compile Include="Networking\SendScheduler.cs" />
     <Compile Include="Networking\StationRouter.cs" />
     <Compile Include="Networking\ServerFrameProfile.cs" />
+    <Compile Include="Networking\FireplaceFuelTicks.cs" />
+    <Compile Include="Networking\TransformWriteRate.cs" />
     <Compile Include="Networking\SectorChangeTracker.cs" />
     <Compile Include="Networking\SyncListRefPosPatches.cs" />
+    <Compile Include="Networking\DownloadBreakdown.cs" />
     <Compile Include="Networking\UploadBreakdown.cs" />
     <Compile Include="Networking\ConnectionEcho.cs" />
     <Compile Include="Networking\RoundTripTrace.cs" />
@@ -228,6 +231,7 @@
     <Compile Include="Networking\KeepaliveFirst.cs" />
     <Compile Include="Networking\AdminConsoleEcho.cs" />
     <Compile Include="Networking\ZdoFloodTest.cs" />
+    <Compile Include="Networking\ZdoWireWriter.cs" />
     <Compile Include="Networking\LoggerOptions.cs" />
     <Compile Include="Networking\MonsterAiPatches.cs" />
     <Compile Include="Networking\NetworkRatesGroup.cs" />
@@ -271,14 +275,4 @@
     <Folder Include="Utilities\" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <!-- Copies the built DLL and PDB into the r2modman 'BlueHills' test profile. Gated on Exists so a
-       missing profile skips instead of failing the build. -->
-  <PropertyGroup>
-    <BlueHillsPluginDir>$(AppData)\r2modmanPlus-local\Valheim\profiles\BlueHills\BepInEx\plugins\VerdantsAscent-FiresGhettoNetworking\</BlueHillsPluginDir>
-  </PropertyGroup>
-  <Target Name="DeployToBlueHills" AfterTargets="Build" Condition="Exists('$(BlueHillsPluginDir)')">
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BlueHillsPluginDir)" OverwriteReadOnlyFiles="true" />
-    <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(BlueHillsPluginDir)" OverwriteReadOnlyFiles="true" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
-    <Message Importance="high" Text="Deployed $(TargetFileName) (+pdb) -> $(BlueHillsPluginDir)" />
-  </Target>
 </Project>

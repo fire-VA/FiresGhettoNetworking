@@ -12,6 +12,13 @@ namespace FiresGhettoNetworkMod.AutoTune
     // which throttled a peer below stock and made "remove the mod and it's fixed" true by construction.
     public static class VanillaFloor
     {
+        // The floor applies to tier PRESETS only. A value read from the config is authoritative and
+        // passes through unfloored. Plan: Docs/PLAN_UploadBudgetAndAutoTune.md
+        public const string ConfigSource = "Config";
+
+        private static bool IsConfig(string source) =>
+            string.Equals(source, ConfigSource, System.StringComparison.Ordinal);
+
         public const int SendRateBytes   = 150 * 1024;   // 153600 — vanilla send-rate floor (Min and Max)
         public const int SendBufferBytes = 512 * 1024;   // Steam's default outbound buffer
         public const int RecvBufferBytes = 512 * 1024;   // Steam's default inbound buffer
@@ -20,6 +27,13 @@ namespace FiresGhettoNetworkMod.AutoTune
         // Dedupe key = "source:knob" so a value clamped on every apply / reconnect / autotune reassert
         // is reported once, not spammed each frame the getter is read.
         private static readonly HashSet<string> _warned = new HashSet<string>();
+
+        private static void NoteConfigBelowVanilla(string knob, string asked)
+        {
+            if (!_warned.Add("ConfigBelowVanilla:" + knob)) return;
+            LoggerOptions.LogMessage($"[Uplink] {knob} is {asked}, below vanilla. Honouring it - the config is "
+                + "authoritative. Auto-Tune only chooses this on a measured thin uplink; tier presets stay floored.");
+        }
 
         private static void WarnOnce(string knob, string source, object asked, object floored)
         {
@@ -31,6 +45,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static int ClampSendRate(int value, string knob, string source)
         {
             if (value >= SendRateBytes) return value;
+            if (IsConfig(source)) { NoteConfigBelowVanilla(knob, (value / 1024) + " KB/s"); return value; }
             WarnOnce(knob, source, value, SendRateBytes);
             return SendRateBytes;
         }
@@ -52,6 +67,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static UpdateRateOptions ClampUpdateRate(UpdateRateOptions value, string source)
         {
             if (Percent(value) >= Percent(UpdateRate)) return value;
+            if (IsConfig(source)) { NoteConfigBelowVanilla("ZDO Send Rate", Percent(value) + "%"); return value; }
             WarnOnce("UpdateRate", source, value, UpdateRate);
             return UpdateRate;
         }
@@ -262,11 +278,28 @@ namespace FiresGhettoNetworkMod.AutoTune
         public static bool HasServerResult { get; private set; }
         public static Tier ServerTier      { get; private set; } = Tier.Medium;
 
+        /// <summary>Measured client -> server throughput in bytes/sec, or -1 when unknown.</summary>
+        public static int ClientUplinkBytes { get; private set; } = -1;
+
+        /// <summary>True only when the LINE limited the measurement, so ClientUplinkBytes is the
+        /// line's capacity. Only a true value may lower the config.</summary>
+        public static bool ClientUplinkIsLimit { get; private set; }
+
+        /// <summary>Must be set BEFORE SetClient, whose config write reads it.</summary>
+        public static void SetClientUplink(int bytesPerSec, bool isLimit)
+        {
+            ClientUplinkBytes = bytesPerSec;
+            ClientUplinkIsLimit = isLimit && bytesPerSec > 0;
+        }
+
+        // Every path that activates a tier comes through SetClient / SetServer, so the config write
+        // hangs off these two and no path can skip it.
         public static void SetClient(Tier tier, int pingMedianMs)
         {
             ClientTier = tier;
             ClientPingMedianMs = pingMedianMs;
             HasClientResult = true;
+            AutoTuneApplier.ApplyClient();
         }
 
         public static void ClearClient()
@@ -274,12 +307,15 @@ namespace FiresGhettoNetworkMod.AutoTune
             HasClientResult = false;
             ClientTier = Tier.Medium;
             ClientPingMedianMs = 0;
+            ClientUplinkBytes = -1;     // a new server is a new path - measure it again
+            ClientUplinkIsLimit = false;
         }
 
         public static void SetServer(Tier tier)
         {
             ServerTier = tier;
             HasServerResult = true;
+            AutoTuneApplier.ApplyServer();
         }
     }
 
@@ -311,29 +347,20 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         // ---------------- Client knobs ----------------
 
-        // Steam send rates apply per-process: on the client this scales the client's
-        // outbound to the server, on the dedicated server it scales the server's
-        // outbound to all peers. So we pick which tier drives them based on side:
-        // server tier wins when running on a dedicated server with auto-tune enabled,
-        // otherwise client tier (or manual config).
+        // Steam send rates apply per-process: on the client this scales the client's outbound to the
+        // server, on the dedicated server it scales the server's outbound to all peers. The config is
+        // the source of truth for both - AutoTuneApplier writes it when Auto-Tune is on. HyperBoost
+        // still overrides, since its maximums are not expressible as config options.
         public static int SteamSendRateMin()
         {
             if (HyperBoost()) return HyperBoostSendRateMinBytes;
-            if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMinBytes, "SendRateMin", "ServerTier");
-            if (UseClientAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMinBytes, "SendRateMin", "ClientTier");
-            return VanillaFloor.ClampSendRate(SendRateMinFromEnum(FiresGhettoNetworkMod.ConfigSendRateMin.Value), "SendRateMin", "ManualConfig");
+            return VanillaFloor.ClampSendRate(FiresGhettoNetworkMod.ConfigSendRateMin.Value * 1024, "SendRateMin", VanillaFloor.ConfigSource);
         }
 
         public static int SteamSendRateMax()
         {
             if (HyperBoost()) return HyperBoostSendRateMaxBytes;
-            if (IsDedicatedServerRuntime() && UseServerAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ServerTier).SteamSendRateMaxBytes, "SendRateMax", "ServerTier");
-            if (UseClientAutoTune())
-                return VanillaFloor.ClampSendRate(TierPresets.For(AutoTuneState.ClientTier).SteamSendRateMaxBytes, "SendRateMax", "ClientTier");
-            return VanillaFloor.ClampSendRate(SendRateMaxFromEnum(FiresGhettoNetworkMod.ConfigSendRateMax.Value), "SendRateMax", "ManualConfig");
+            return VanillaFloor.ClampSendRate(FiresGhettoNetworkMod.ConfigSendRateMax.Value * 1024, "SendRateMax", VanillaFloor.ConfigSource);
         }
 
         private static bool IsDedicatedServerRuntime()
@@ -463,21 +490,12 @@ namespace FiresGhettoNetworkMod.AutoTune
             return PlayerPositionSyncPatches.ConfigSmoothingMinInterval?.Value ?? 0.0f;
         }
 
-        // ---------------- Server knobs ----------------
+        // ---------------- Cadence knobs - written by Auto-Tune when enabled (see AutoTuneApplier) ----------------
 
         public static UpdateRateOptions UpdateRate()
-        {
-            if (UseServerAutoTune())
-                return VanillaFloor.ClampUpdateRate(TierPresets.For(AutoTuneState.ServerTier).UpdateRate, "ServerTier");
-            return VanillaFloor.ClampUpdateRate(FiresGhettoNetworkMod.ConfigUpdateRate.Value, "ManualConfig");
-        }
+            => VanillaFloor.ClampUpdateRate(FiresGhettoNetworkMod.ConfigUpdateRate.Value, VanillaFloor.ConfigSource);
 
-        public static QueueSizeOptions QueueSize()
-        {
-            if (UseServerAutoTune())
-                return TierPresets.For(AutoTuneState.ServerTier).QueueSize;
-            return FiresGhettoNetworkMod.ConfigQueueSize.Value;
-        }
+        public static QueueSizeOptions QueueSize() => FiresGhettoNetworkMod.ConfigQueueSize.Value;
 
         public static float ZDOThrottleDistance()
         {
@@ -554,31 +572,5 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         // Enum to bytes, read by the transpiler at patch time.
 
-        private static int SendRateMinFromEnum(SendRateMinOptions opt)
-        {
-            switch (opt)
-            {
-                case SendRateMinOptions._1024KB: return 1024 * 1024;
-                case SendRateMinOptions._768KB:  return 768  * 1024;
-                case SendRateMinOptions._512KB:  return 512  * 1024;
-                case SendRateMinOptions._256KB:  return 256  * 1024;
-                default:                         return 150  * 1024;
-            }
-        }
-
-        private static int SendRateMaxFromEnum(SendRateMaxOptions opt)
-        {
-            switch (opt)
-            {
-                case SendRateMaxOptions._8192KB: return 8192 * 1024;
-                case SendRateMaxOptions._4096KB: return 4096 * 1024;
-                case SendRateMaxOptions._2048KB: return 2048 * 1024;
-                case SendRateMaxOptions._1024KB: return 1024 * 1024;
-                case SendRateMaxOptions._768KB:  return 768  * 1024;
-                case SendRateMaxOptions._512KB:  return 512  * 1024;
-                case SendRateMaxOptions._256KB:  return 256  * 1024;
-                default:                         return 150  * 1024;
-            }
-        }
     }
 }

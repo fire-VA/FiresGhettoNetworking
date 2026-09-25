@@ -413,12 +413,24 @@ namespace FiresGhettoNetworkMod
             return Mathf.Min(link.MinRttCurrent, link.MinRttPrevious);
         }
 
+        // A server (including a listen-server host) is governed by Adaptive Send Rate; a pure client
+        // by Adaptive Upload. Plan: Docs/PLAN_UploadBudgetAndAutoTune.md
         private static bool RateControlActive()
         {
-            return ZNet.instance != null && ZNet.instance.IsServer()
-                && AdaptiveSendRate.ConfigEnabled != null && AdaptiveSendRate.ConfigEnabled.Value
-                && !AdaptiveSendRate.Suspend
-                && !EffectiveConfig.HyperBoost();
+            if (ZNet.instance == null || AdaptiveSendRate.Suspend || EffectiveConfig.HyperBoost()) return false;
+            if (ZNet.instance.IsServer())
+                return AdaptiveSendRate.ConfigEnabled != null && AdaptiveSendRate.ConfigEnabled.Value;
+            return FiresGhettoNetworkMod.ConfigAdaptiveUpload != null && FiresGhettoNetworkMod.ConfigAdaptiveUpload.Value;
+        }
+
+        private const float SaturatedGoodputFraction = 0.8f;
+
+        // Queueing while goodput sits far below the allowed rate means the LINE is full, not that the
+        // rate is too low. Plan: Docs/PLAN_UploadBudgetAndAutoTune.md
+        private static bool LinkSaturated(Link link, int current)
+        {
+            return link.GoodputPrimed && link.Goodput > 0f
+                && link.Goodput < current * SaturatedGoodputFraction;
         }
 
         private static void StepRate(Link link, double now)
@@ -427,8 +439,9 @@ namespace FiresGhettoNetworkMod
             if (link.Connection == 0u) link.Connection = NetworkingRatesGroup.GetConnectionHandle(link.Peer);
             if (link.Connection == 0u) return;
 
-            int floor = EffectiveConfig.SteamSendRateMin();
-            int start = Mathf.Clamp(EffectiveConfig.SteamSendRateMax(), floor, SteamRateCeilingBytes);
+            int ceiling = Mathf.Min(EffectiveConfig.SteamSendRateMax(), SteamRateCeilingBytes);
+            int floor = Mathf.Min(EffectiveConfig.SteamSendRateMin(), ceiling);
+            int start = ceiling;
             if (!link.RatePinned)
             {
                 link.RateTarget = start;
@@ -451,7 +464,7 @@ namespace FiresGhettoNetworkMod
             bool pipeStuck = link.Congested || link.QueueMs > QueueShrinkMs || link.InFlightBytes >= link.Window;
             link.BadConnectionCount = pingAge > BadConnectionSeconds && pipeStuck ? link.BadConnectionCount + 1 : 0;
 
-            int current = Mathf.Max(floor, link.RateTarget);
+            int current = Mathf.Clamp(link.RateTarget, floor, ceiling);
             int next = current;
             string decision = "hold";
             if (link.BadConnectionCount >= BadConnectionSteps)
@@ -471,10 +484,17 @@ namespace FiresGhettoNetworkMod
                 next = (int)Math.Max(floor, eased);
                 decision = "back off, loss or rising ping";
             }
-            else if (link.QueueMs > QueueHoldMs && link.PendingBytes > 0 && current < SteamRateCeilingBytes)
+            else if (link.QueueMs > QueueHoldMs && link.PendingBytes > 0 && LinkSaturated(link, current))
+            {
+                link.RateSlowStart = false;
+                long eased = (long)(link.Goodput * GoodputHeadroom);
+                next = (int)Mathf.Clamp(eased, floor, current);
+                decision = next < current ? "ease down, the line is full" : "hold, the line is full";
+            }
+            else if (link.QueueMs > QueueHoldMs && link.PendingBytes > 0 && current < ceiling)
             {
                 long raised = (long)(current * (link.RateSlowStart ? 2f : GrowFactor));
-                next = (int)Math.Min(raised, SteamRateCeilingBytes);
+                next = (int)Math.Min(raised, ceiling);
                 decision = "raise, Steam is queueing";
             }
             else if (current < start && now - link.LastBackoff >= RecoverSeconds)
@@ -482,6 +502,8 @@ namespace FiresGhettoNetworkMod
                 next = (int)Math.Min(start, (long)(current * GrowFactor));
                 decision = "recover toward Send Rate Max, link healthy";
             }
+
+            next = Mathf.Clamp(next, floor, ceiling);   // nothing escapes the config's range
 
             bool? pinned = null;
             if (next != link.RateTarget)
@@ -590,8 +612,9 @@ namespace FiresGhettoNetworkMod
             if (s_links.Count == 0) sb.Append("\nno connections yet");
             if (ZNet.instance.IsDedicated())
             {
-                sb.Append('\n').Append(CreatureOwnership.Report())
-                  .Append('\n').Append(ServerFrameProfile.Report());
+                sb.Append('\n').Append(CreatureOwnership.Report());
+                string frames = ServerFrameProfile.Report();
+                if (frames != null) sb.Append('\n').Append(frames);
             }
             return sb.ToString();
         }

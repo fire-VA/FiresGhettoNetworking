@@ -33,16 +33,16 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool UpdateOwner_Prefix() => !ShipFixesActive();
 
-        /// <summary>Sail visuals run ahead of the owner guard and reach cloth and transforms a server build does not have.</summary>
+        /// <summary>Sail visuals run ahead of the owner guard and reach cloth and transforms a server build does not
+        /// have. Guarded on the build, not on ConfigEnableShipFixes: ships become server-owned on Server-Side Ship
+        /// Simulation, so fixes-off + simulation-on would otherwise crash every fixed update.</summary>
         [HarmonyPatch(typeof(Ship), "UpdateSail")]
         [HarmonyPrefix]
-        public static bool UpdateSail_Prefix() => !ShipFixesActive();
+        public static bool UpdateSail_Prefix() => !IsDedicatedServer();
 
-        private static bool ShipFixesActive()
-        {
-            return FiresGhettoNetworkMod.ConfigEnableShipFixes.Value
-                && ZNet.instance != null
-                && ZNet.instance.IsDedicated();
-        }
+        private static bool ShipFixesActive() =>
+            FiresGhettoNetworkMod.ConfigEnableShipFixes.Value && IsDedicatedServer();
+
+        private static bool IsDedicatedServer() => ZNet.instance != null && ZNet.instance.IsDedicated();
     }
 }

@@ -531,20 +531,24 @@ namespace FiresGhettoNetworkMod
         // the ground-snap fix so both answer "what can you stand on?" identically.
         private static int GetFellOutRescueMask() => SolidSurface.Mask();
 
-        [HarmonyPatch(typeof(ZSyncTransform), "OwnerSync")]
-        [HarmonyPrefix]
-        public static bool ZSyncTransform_OwnerSync_DediFellOutFix_Prefix(
-            ZSyncTransform __instance,
-            Rigidbody ___m_body)
+        /// <summary>Set once server-side simulation is actually running, since this class is only patched in then.</summary>
+        internal static bool SimulationActive;
+
+        /// <summary>
+        /// True when the object was below the kill plane and has been dealt with, so vanilla's sync must not run. The
+        /// Harmony hook on OwnerSync lives in TransformWriteRate because that one has to load on clients too; this class
+        /// is only registered on a dedicated server running server-side simulation.
+        /// </summary>
+        internal static bool TryRescueBelowKillPlane(ZSyncTransform sync, Rigidbody body)
         {
-            if (!ServerClientUtils.ZNetIsDedicated()) return true;
+            if (!SimulationActive || !ServerClientUtils.ZNetIsDedicated()) return false;
 
-            Vector3 pos = __instance.transform.position;
-            if (pos.y >= KillPlaneY) return true;
+            Vector3 pos = sync.transform.position;
+            if (pos.y >= KillPlaneY) return false;
 
-            StopRigidbody(___m_body);
-            TryRescueOntoGroundCollider(__instance, pos);
-            return false;
+            StopRigidbody(body);
+            TryRescueOntoGroundCollider(sync, pos);
+            return true;
         }
 
         // Kill the fall momentum so the rescue reposition lands clean. We do NOT set isKinematic: setting
