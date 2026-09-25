@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         // files / corrupted writes / pre-binary .bin files written by some prior build.
         private const int FileMagic = 0x414E4746;
         private const string FileName = "com.Fire.FiresGhettoNetworkMod_autotune.bin";
-        public  const int    SchemaVersion = 2;  // 1 = old JSON, 2 = this binary format
+        public  const int    SchemaVersion = 3;  // 1 = old JSON, 2 = binary, 3 = + measured upload
 
         private static readonly TimeSpan DefaultTtl = TimeSpan.FromDays(7);
 
@@ -29,6 +29,8 @@ namespace FiresGhettoNetworkMod.AutoTune
             public int PingMedianMs { get; set; }
             public DateTime TimestampUtc { get; set; }
             public string HardwareHash { get; set; } = string.Empty;
+            public int UplinkBytes { get; set; } = -1;
+            public bool UplinkIsLimit { get; set; }
         }
 
         private static string CachePath
@@ -74,13 +76,17 @@ namespace FiresGhettoNetworkMod.AutoTune
                         int    pingMedian  = br.ReadInt32();
                         long   ticks       = br.ReadInt64();
                         string hwHash      = br.ReadString();
+                        int    uplink      = br.ReadInt32();
+                        bool   upIsLimit   = br.ReadBoolean();
 
                         _entries[serverKey] = new CacheEntry
                         {
-                            Tier         = (Tier)tierInt,
-                            PingMedianMs = pingMedian,
-                            TimestampUtc = new DateTime(ticks, DateTimeKind.Utc),
-                            HardwareHash = hwHash ?? string.Empty,
+                            Tier          = (Tier)tierInt,
+                            PingMedianMs  = pingMedian,
+                            TimestampUtc  = new DateTime(ticks, DateTimeKind.Utc),
+                            HardwareHash  = hwHash ?? string.Empty,
+                            UplinkBytes   = uplink,
+                            UplinkIsLimit = upIsLimit,
                         };
                     }
                 }
@@ -109,6 +115,8 @@ namespace FiresGhettoNetworkMod.AutoTune
                         bw.Write(kvp.Value.PingMedianMs);
                         bw.Write(kvp.Value.TimestampUtc.Ticks);
                         bw.Write(kvp.Value.HardwareHash ?? string.Empty);
+                        bw.Write(kvp.Value.UplinkBytes);
+                        bw.Write(kvp.Value.UplinkIsLimit);
                     }
                 }
             }
@@ -147,7 +155,8 @@ namespace FiresGhettoNetworkMod.AutoTune
             return entry;
         }
 
-        public static void Save(string serverKey, Tier tier, int pingMedianMs, string hwHash)
+        public static void Save(string serverKey, Tier tier, int pingMedianMs, string hwHash,
+                                int uplinkBytes = -1, bool uplinkIsLimit = false)
         {
             if (string.IsNullOrEmpty(serverKey)) return;
             EnsureLoaded();
@@ -157,7 +166,9 @@ namespace FiresGhettoNetworkMod.AutoTune
                 Tier         = tier,
                 PingMedianMs = pingMedianMs,
                 TimestampUtc = DateTime.UtcNow,
-                HardwareHash = hwHash ?? string.Empty,
+                HardwareHash  = hwHash ?? string.Empty,
+                UplinkBytes   = uplinkBytes,
+                UplinkIsLimit = uplinkIsLimit,
             };
 
             SaveToDisk();

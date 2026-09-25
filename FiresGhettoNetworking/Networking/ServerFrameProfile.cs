@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using HarmonyLib;
 using UnityEngine;
@@ -115,8 +115,12 @@ namespace FiresGhettoNetworkMod
             Collections = GC.CollectionCount(0),
         };
 
+        /// <summary>The frame breakdown since the last caller took it, or null when nothing has been measured since.
+        /// Both the periodic links report and the report flushed at logout ask, so a session too short for the periodic
+        /// one still says what the frames cost; whichever asks first gets it and the other prints nothing.</summary>
         internal static string Report()
         {
+            if (s_frames == 0) return null;
             double now = Time.realtimeSinceStartupAsDouble;
             double seconds = s_windowStart >= 0.0 ? Math.Max(0.001, now - s_windowStart) : 0.0;
             long sectors = SectorChangeTracker.SectorsScanned + SectorChangeTracker.SectorsSkipped;
@@ -125,8 +129,19 @@ namespace FiresGhettoNetworkMod
                 + $"{(s_frames > 0 ? s_sendTicksTotal * MsPerTick / s_frames : 0.0):F2} ms per frame over {s_frames} frames, of which "
                 + $"rescanning the objects around players {(s_frames > 0 ? s_scanTicksTotal * MsPerTick / s_frames : 0.0):F2} ms "
                 + $"({(seconds > 0.0 ? s_scans / seconds : 0.0):F1} rescans a second, "
-                + $"{(sectors > 0 ? 100.0 * SectorChangeTracker.SectorsSkipped / sectors : 0.0):F0}% of sectors skipped as unchanged)";
+                + $"{(sectors > 0 ? 100.0 * SectorChangeTracker.SectorsSkipped / sectors : 0.0):F0}% of sectors skipped as unchanged; "
+                + $"{SectorChangeTracker.FullRescans:N0} full rescans walked {SectorChangeTracker.ObjectsWalkedInFullRescans:N0} objects, "
+                + $"{SectorChangeTracker.JournalWalks:N0} changed sectors walked {SectorChangeTracker.ObjectsWalkedInJournals:N0} "
+                + $"changed objects, {SectorChangeTracker.LongWalks:N0} needed the long walk for "
+                + $"{SectorChangeTracker.ObjectsWalked - SectorChangeTracker.ObjectsWalkedInFullRescans - SectorChangeTracker.ObjectsWalkedInJournals:N0} "
+                + $"({SectorChangeTracker.LongWalksNoState:N0} had nothing recorded, {SectorChangeTracker.JournalMisses:N0} out of journal reach); "
+                + $"rechecks confirmed {SectorChangeTracker.SkipsChecked:N0} skipped sectors, {SectorChangeTracker.SkipsWrong:N0} wrongly "
+                + $"({SectorChangeTracker.SkipsWrongObjects:N0} objects))";
             SectorChangeTracker.SectorsScanned = SectorChangeTracker.SectorsSkipped = 0;
+            SectorChangeTracker.FullRescans = SectorChangeTracker.ObjectsWalked = SectorChangeTracker.ObjectsWalkedInFullRescans = 0;
+            SectorChangeTracker.JournalWalks = SectorChangeTracker.ObjectsWalkedInJournals = SectorChangeTracker.JournalMisses = 0;
+            SectorChangeTracker.LongWalks = SectorChangeTracker.LongWalksNoState = 0;
+            SectorChangeTracker.SkipsChecked = SectorChangeTracker.SkipsWrong = SectorChangeTracker.SkipsWrongObjects = 0;
             s_frames = s_slowFrames = s_collections = s_scans = 0;
             s_sendTicksTotal = s_scanTicksTotal = 0L;
             s_longestMs = 0f;

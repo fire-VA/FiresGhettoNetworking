@@ -45,12 +45,11 @@ namespace FiresGhettoNetworkMod
             TryReportOversizedBuckets(__instance, "Save", canTruncateOnWire: false, SnapshotSaveBuckets);
         }
 
-        [HarmonyPatch(typeof(ZDO), nameof(ZDO.Serialize))]
-        [HarmonyPrefix]
-        public static void ZDO_Serialize_Prefix(ZDO __instance)
+        // Called from ZdoWireWriter's ZDO.Serialize hook, FGN's only patch on that method.
+        internal static void ReportLiveBuckets(ZDO zdo)
         {
-            if (__instance == null || !LargeZdoDiagnosticIsEnabled()) return;
-            TryReportOversizedBuckets(__instance, "Serialize", canTruncateOnWire: true, SnapshotLiveBuckets);
+            if (zdo == null || !LargeZdoDiagnosticIsEnabled()) return;
+            TryReportOversizedBuckets(zdo, "Serialize", canTruncateOnWire: true, SnapshotLiveBuckets);
         }
 
         private static bool LargeZdoDiagnosticIsEnabled()

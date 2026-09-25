@@ -1,3 +1,8 @@
+* v1.4.55 - less garbage and less traffic from sending objects
+  - every object sent over the network is written straight into the packet, without the temporary lists, closures and copies vanilla makes for each one, so the game has far less garbage to collect; the bytes sent are the same as before ([12 - Advanced] Allocation-free ZDO Writes turns it off)
+  - a player's own creatures and companions now send only what changed since the last update, instead of their whole state; an unchanged inventory or name is no longer re-sent every time
+  - update the server and every client to the same version
+
 * v1.4.50 - quieter logs
   - connection settings are only logged when a value changes, and startup notices print once
   - update the server and every client to the same version

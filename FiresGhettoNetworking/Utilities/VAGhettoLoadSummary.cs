@@ -9,6 +9,7 @@ namespace FiresGhettoNetworkMod
     {
         private const string Tag = "[LoadSummary]";
         private const int InnerWidth = 30;
+        private const char EmojiPresentation = '️';
 
         // 📡 RPC ROUTER — RPC handler registration completion banner.
         // Emitted after all handlers are registered + AoI is configured.
@@ -66,9 +67,9 @@ namespace FiresGhettoNetworkMod
         {
             try
             {
-                int titleChars = title.Length;
-                int fillDashes = Math.Max(0, InnerWidth - titleChars - 5);
-                string topFrame = "╭─── " + title + " " + new string('─', fillDashes) + "╮";
+                string boxTitle = WithEmojiPresentation(title);
+                int fillDashes = Math.Max(0, InnerWidth - DisplayWidth(boxTitle) - 5);
+                string topFrame = "╭─── " + boxTitle + " " + new string('─', fillDashes) + "╮";
                 string botFrame = "╰" + new string('─', InnerWidth) + "╯";
 
                 EmitLine(topFrame);
@@ -76,7 +77,7 @@ namespace FiresGhettoNetworkMod
                 {
                     string body = line ?? string.Empty;
                     if (body.Length > InnerWidth - 2) body = body.Substring(0, InnerWidth - 2);
-                    body = body.PadRight(InnerWidth - 2);
+                    body += new string(' ', Math.Max(0, InnerWidth - 2 - DisplayWidth(body)));
                     EmitLine($"│ {body} │");
                 }
                 EmitLine(botFrame);
@@ -86,6 +87,29 @@ namespace FiresGhettoNetworkMod
                 try { EmitLine($"(summary render failed: {ex.Message}) {title}: {string.Join(", ", lines ?? new string[0])}"); }
                 catch { }
             }
+        }
+
+        // Windows Terminal draws a text-style emoji (the classical building) one cell wide and a colour emoji two, so a
+        // title's leading emoji gets VS16 and is counted as two. Core's LoadSummary does the same; FGN carries its own
+        // copy because it runs without Core.
+        private static string WithEmojiPresentation(string title)
+        {
+            if (title.Length < 2 || !char.IsSurrogatePair(title, 0)) return title;
+            if (title.Length > 2 && title[2] == EmojiPresentation) return title;
+            return title.Insert(2, EmojiPresentation.ToString());
+        }
+
+        // Cells as Windows Terminal draws them: an emoji two, VS16 none, anything else one.
+        private static int DisplayWidth(string text)
+        {
+            int width = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (text[i] == EmojiPresentation) continue;
+                if (char.IsSurrogatePair(text, i)) { width += 2; i++; continue; }
+                width++;
+            }
+            return width;
         }
 
         // Routes a summary line through the plugin's BepInEx log source (not

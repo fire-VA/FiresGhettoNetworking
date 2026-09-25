@@ -463,6 +463,17 @@ namespace FiresGhettoNetworkMod
             foreach (string line in UploadBreakdown.TakeReport(period))
                 LoggerOptions.LogInfo(line);
 
+            foreach (string line in DownloadBreakdown.TakeReport(period))
+                LoggerOptions.LogInfo(line);
+
+            // A session shorter than the report interval never reaches the periodic links report, so the frame
+            // breakdown would be thrown away. Whichever of the two asks first gets it.
+            if (ZNet.instance != null && ZNet.instance.IsDedicated())
+            {
+                string frames = ServerFrameProfile.Report();
+                if (frames != null) LoggerOptions.LogInfo(frames);
+            }
+
             if (interval.Sent.All(tally => tally.Packets == 0) && interval.Decoded.Packets == 0 && interval.Rejected == 0) return;
             foreach (string line in DescribeTotals(interval, period))
                 LoggerOptions.LogInfo(line);

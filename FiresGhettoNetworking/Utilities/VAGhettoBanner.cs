@@ -71,22 +71,19 @@ namespace FiresGhettoNetworkMod
                 new Segment("   ║",            Tower),
             },
 
-            // Status line. Width accounting:
-            //   `   ║    ` (8) + "📡 SIGNAL LOCKED" (16 chars .Length —
-            //   📡 surrogate pair contributes 2, " SIGNAL LOCKED" = 14)
-            //   + `      ║` (7) = 31 ✓
+            // Status line. Width accounting, in COLUMNS ADVANCED, not .Length:
+            //   `   ║    ` (8) + "📡 SIGNAL LOCKED" (15 — 📡 advances ONE
+            //   column, " SIGNAL LOCKED" = 14) + `       ║` (8) = 31 ✓
             //
-            // Width math caveat (same as VAFapLoadSummary): this
-            // assumes 📡 renders at 2 visual cells (it's Unicode East
-            // Asian Width "Wide" so this holds in any modern emoji-
-            // aware terminal). If a terminal renders it at 1 cell,
-            // this line ends up 1 cell short — acceptable for the
-            // segmented compact banner.
+            // A bare pictograph advances a single column however wide the
+            // font paints it; only a VS16 sequence advances two. Counting
+            // this one as two is what left the row a column short of the
+            // frame, in this banner and fifteen others.
             new[]
             {
                 new Segment("   ║    ",        Tower),
                 new Segment("📡 SIGNAL LOCKED", Signal),
-                new Segment("      ║",         Tower),
+                new Segment("       ║",         Tower),
             },
 
             // Frame bottom

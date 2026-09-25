@@ -10,8 +10,44 @@ libs/
 packages/
 *.dll.before-*.bak
 
+# Code only. Compiled output is rebuilt from source, so it is never committed. The sync tool still
+# copies the built DLL into plugins\ for packaging - it just stays untracked from here on.
+*.dll
+*.pdb
+*.mdb
+
+# Thunderstore zips are uploaded, never committed
+*.zip
+
+# Unity AssetBundles. They ship extensionless, so a suffix rule cannot catch them: the sync tool
+# drops them by reading the UnityFS/UnityWeb/UnityRaw header and these names are the backstop.
+# Add a name here when a new bundle ships.
+*.bundle
+*.unity3d
+adminterrain
+firescompanions
+firesdungeonmaster
+firesgalaxies
+firesnpcs
+firesnpcsui
+firesplayermodels
+fireswater
+fireswaterfall
+fireszones
+steamydumps
+tossinshade
+vapieces
+
+# Raw Unity content - prefabs, scenes and meshes belong in a bundle, not in the repo.
+# Icon PNGs and short WAVs deliberately stay: several mods compile them in as EmbeddedResource
+# (FiresAllTheItems UI icons, FiresDungeonMaster lock art), so ignoring those would break a build
+# from a fresh clone.
+*.prefab
+*.unity
+*.fbx
+*.blend
+*.psd
+
 # OS noise
 Thumbs.db
 desktop.ini
-# Thunderstore zips live outside git
-*.zip

@@ -50,19 +50,29 @@ namespace FiresGhettoNetworkMod.AutoTune
                 "06 - Auto-Tune",
                 "Enable Client Auto-Tune",
                 true,
-                "Run a brief network/hardware probe on first login to a server and pick a perf tier (LOW/MED/HIGH).\n" +
-                "Effective values shadow the BepInEx config — your manual settings are never overwritten.\n" +
-                "Disable to use only the values set above. CLIENT-SIDE only.");
+                "Run a brief probe on first login to a server - hardware, ping, download AND upload - pick a tier\n" +
+                "(LOW/MED/HIGH), and WRITE the resulting network values into this config: ZDO Send Rate, Queue Size,\n" +
+                "Send Rate Min and Send Rate Max. The config then shows exactly what is running.\n" +
+                "Upload is measured separately from the tier: a strong PC on a thin uplink gets its upload ceiling\n" +
+                "set to its real upload speed instead of the tier's, which can be below vanilla.\n" +
+                "While ON those four settings are Auto-Tune's and edits to them are replaced on the next tune.\n" +
+                "Turn OFF to set them yourself - they keep the last values Auto-Tune chose. CLIENT-SIDE only.\n" +
+                "(Before this version Auto-Tune ran values over the top of the config without writing them, so the\n" +
+                "file could show one value while another ran. Nothing that was actually in effect is lost.)");
 
             EnableServerAutoTune = config.Bind(
                 "06 - Auto-Tune",
                 "Enable Server Auto-Tune",
                 true,
-                "When the mod runs on a dedicated server, score the host's CPU/RAM and APPLY a tier preset to\n" +
-                "ZDO throttle / AI LOD / RPC AoI / queue size / extended zone radius / update rate / Steam buffers.\n" +
-                "Default ON — the tier preset is conservative and the asymmetric send-rate pattern keeps slow\n" +
-                "clients safe (Min stays at the LOW baseline regardless of tier). Disable if you've manually tuned\n" +
-                "every server knob and want your values used verbatim. SERVER-SIDE only.");
+                "When the mod runs on a dedicated server, score the host's CPU/RAM, pick a tier, and WRITE the resulting\n" +
+                "network values into this config: ZDO Send Rate, Queue Size, Send Rate Min and Send Rate Max. The config\n" +
+                "then shows exactly what is running. Other server knobs (ZDO throttle, AI LOD, RPC AoI, zone radius,\n" +
+                "Steam buffers) follow the tier too.\n" +
+                "Send rates are ASYMMETRIC: Max scales with the tier so fast players can burst, while Min stays at the LOW\n" +
+                "baseline whatever the tier - Min is the floor the per-player controller backs off to, so a slow player's\n" +
+                "connection is never forced above what it can take.\n" +
+                "While ON those four settings are Auto-Tune's and edits are replaced on restart. Turn OFF to set every\n" +
+                "server knob yourself - they keep the last values Auto-Tune chose. SERVER-SIDE only.");
 
             LogServerSuggestions = config.Bind(
                 "06 - Auto-Tune",
