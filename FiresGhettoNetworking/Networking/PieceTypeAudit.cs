@@ -20,8 +20,6 @@ namespace FiresGhettoNetworkMod
 
         private static bool s_started;
 
-        [HarmonyPatch(typeof(ZNetScene), "Awake")]
-        [HarmonyPostfix]
         public static void ZNetScene_Awake_Postfix()
         {
             if (s_started || FiresGhettoNetworkMod.Instance == null) return;

@@ -150,8 +150,6 @@ namespace FiresGhettoNetworkMod
             Log($"Created {created} objects in frame {Time.frameCount} (per-frame cap {maxCreatedPerFrame})");
         }
 
-        [HarmonyPatch(typeof(ZDO), nameof(ZDO.Deserialize))]
-        [HarmonyPostfix]
         public static void ZDO_Deserialize_Postfix(ZDO __instance)
         {
             if (!Enabled) return;

@@ -38,10 +38,9 @@ namespace FiresGhettoNetworkMod
             return true;
         }
 
-        [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Send), new[] { typeof(ZPackage) })]
-        [HarmonyPrefix]
-        [HarmonyPriority(Priority.First)]
-        static bool Prefix(ZSteamSocket __instance, ZPackage pkg)
+        internal static bool Ready => s_sendQueuedPackages != null;
+
+        internal static bool JumpQueue(ZSteamSocket __instance, ZPackage pkg)
         {
             if (!(FiresGhettoNetworkMod.ConfigKeepaliveFirst?.Value ?? false)) return true;
             if (pkg == null || pkg.Size() != KeepaliveBytes || !__instance.IsConnected()) return true;

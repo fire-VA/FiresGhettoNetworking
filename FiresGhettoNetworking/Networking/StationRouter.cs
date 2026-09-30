@@ -53,8 +53,7 @@ namespace FiresGhettoNetworkMod
                 "DEDICATED SERVER ONLY. No client install needed.");
         }
 
-        [HarmonyPatch(typeof(ZNet), "Shutdown"), HarmonyPostfix]
-        static void OnZNetShutdown()
+        internal static void OnZNetShutdown()
         {
             s_held.Clear();
             s_waiting.Clear();
@@ -84,8 +83,7 @@ namespace FiresGhettoNetworkMod
             return true;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "Update"), HarmonyPostfix]
-        static void ReleaseHeld()
+        internal static void ReleaseHeld()
         {
             if (s_held.Count == 0) return;
             var routedRpc = ZRoutedRpc.instance;

@@ -56,11 +56,10 @@ namespace FiresGhettoNetworkMod
 
         // Static state outlives a world session, so a disconnect/reconnect would
         // otherwise carry dead ZNetViews from the previous ZNetScene into the next.
-        [HarmonyPatch(typeof(ZNetScene), "Shutdown")]
-        [HarmonyPostfix]
         public static void ZNetScene_Shutdown_ClearPendingState()
         {
             _pendingDestroySet.Clear();
+            VehicleOwnershipEdge.Clear();
             _pendingLooseQueue.Clear();
             _pendingSolidQueue.Clear();
             _zdosToUnregisterScratch.Clear();

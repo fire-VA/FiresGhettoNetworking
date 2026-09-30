@@ -9,8 +9,6 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     public static class ShipFixesGroup
     {
-        [HarmonyPatch(typeof(Ship), nameof(Ship.CustomFixedUpdate))]
-        [HarmonyPostfix]
         public static void CustomFixedUpdate_Postfix(Ship __instance)
         {
             if (!ShipFixesActive()) return;

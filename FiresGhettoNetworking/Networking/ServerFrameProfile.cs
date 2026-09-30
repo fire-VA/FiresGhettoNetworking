@@ -51,43 +51,35 @@ namespace FiresGhettoNetworkMod
         private static float s_longestMs;
         private static string s_longestBreakdown = "";
 
-        [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPrefix, HarmonyPriority(Priority.First)]
-        static void NetBegin() { NextFrame(); s_netStart = Stopwatch.GetTimestamp(); }
+        internal static void NetBegin() { NextFrame(); s_netStart = Stopwatch.GetTimestamp(); }
 
-        [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void NetEnd()
+        internal static void NetEnd()
         {
             long elapsed = Stopwatch.GetTimestamp() - s_netStart;
             s_netTicks += elapsed;
             s_netTicksEver += elapsed;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "Update"), HarmonyPrefix, HarmonyPriority(Priority.First)]
-        static void SendBegin() { NextFrame(); s_sendStart = Stopwatch.GetTimestamp(); }
+        internal static void SendBegin() { NextFrame(); s_sendStart = Stopwatch.GetTimestamp(); }
 
-        [HarmonyPatch(typeof(ZDOMan), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void SendEnd()
+        internal static void SendEnd()
         {
             long elapsed = Stopwatch.GetTimestamp() - s_sendStart;
             s_sendTicks += elapsed;
             s_sendTicksEver += elapsed;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "CreateSyncList"), HarmonyPrefix, HarmonyPriority(Priority.First)]
-        static void ScanBegin() => s_scanStart = Stopwatch.GetTimestamp();
+        internal static void ScanBegin() => s_scanStart = Stopwatch.GetTimestamp();
 
-        [HarmonyPatch(typeof(ZDOMan), "CreateSyncList"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void ScanEnd()
+        internal static void ScanEnd()
         {
             s_scanTicks += Stopwatch.GetTimestamp() - s_scanStart;
             s_scans++;
         }
 
-        [HarmonyPatch(typeof(ZoneSystem), "Update"), HarmonyPrefix, HarmonyPriority(Priority.First)]
-        static void ZoneBegin() { NextFrame(); s_zoneStart = Stopwatch.GetTimestamp(); }
+        internal static void ZoneBegin() { NextFrame(); s_zoneStart = Stopwatch.GetTimestamp(); }
 
-        [HarmonyPatch(typeof(ZoneSystem), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
-        static void ZoneEnd()
+        internal static void ZoneEnd()
         {
             long elapsed = Stopwatch.GetTimestamp() - s_zoneStart;
             s_zoneTicks += elapsed;
@@ -156,10 +148,16 @@ namespace FiresGhettoNetworkMod
             if (frame == s_frame) return;
 
             int collections = GC.CollectionCount(0);
+            WorldClock.AddBackTimeLostToSlowServerFrame(ZNet.instance);
             if (s_frame >= 0)
             {
                 float frameMs = Time.unscaledDeltaTime * 1000f;
                 int collectedLastFrame = collections - s_gcAtFrameStart;
+                double net = s_netTicks * MsPerTick;
+                double zones = s_zoneTicks * MsPerTick;
+                double scene = s_sceneTicks * MsPerTick;
+                string handler = DownloadBreakdown.SlowestHandler(s_frame);
+                ServerHealth.CountFrame(frameMs, net, zones, scene, handler);
                 s_frames++;
                 s_collections += collectedLastFrame;
                 s_sendTicksTotal += s_sendTicks;
@@ -167,13 +165,11 @@ namespace FiresGhettoNetworkMod
                 if (frameMs > SlowFrameMs) s_slowFrames++;
                 if (frameMs > s_longestMs)
                 {
-                    double net = s_netTicks * MsPerTick;
                     double send = s_sendTicks * MsPerTick;
                     double scan = s_scanTicks * MsPerTick;
-                    double zones = s_zoneTicks * MsPerTick;
-                    double scene = s_sceneTicks * MsPerTick;
                     s_longestMs = frameMs;
-                    s_longestBreakdown = $" (networking {net:F0} ms, of which ZDO sending {send:F0} ms and rescans {scan:F0} ms; "
+                    s_longestBreakdown = $" (networking {net:F0} ms, of which ZDO sending {send:F0} ms and rescans {scan:F0} ms"
+                        + (handler != null ? $", slowest RPC handler {handler}; " : "; ")
                         + $"zone generation {zones:F0} ms; object creation {scene:F0} ms; "
                         + $"everything else {Math.Max(0.0, frameMs - net - zones - scene):F0} ms; "
                         + $"{collectedLastFrame} garbage collection{(collectedLastFrame == 1 ? "" : "s")})";

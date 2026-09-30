@@ -19,15 +19,18 @@ namespace FiresGhettoNetworkMod
 
         private static readonly HashSet<int> _teleportWorldPrefabs = new HashSet<int>();
         private static bool _portalExclusionActive;
+        private static readonly HashSet<int> _cartPrefabs = new HashSet<int>();
 
-        [HarmonyPatch(typeof(ZNetScene), "Awake")]
-        [HarmonyPostfix]
-        [HarmonyPriority(Priority.Last)]
-        public static void ZNetScene_Awake_BuildPortalExclusionSet(ZNetScene __instance)
+        public static void ZNetScene_Awake_BuildExclusionSets(ZNetScene __instance)
         {
             _teleportWorldPrefabs.Clear();
             _portalExclusionActive = false;
             if (__instance == null || __instance.m_prefabs == null) return;
+
+            _cartPrefabs.Clear();
+            foreach (var prefab in __instance.m_prefabs)
+                if (prefab != null && prefab.GetComponent<Vagon>() != null)
+                    _cartPrefabs.Add(prefab.name.GetStableHashCode());
 
             if (!IsTargetPortalProtectionLoaded()) return;
 
@@ -63,8 +66,6 @@ namespace FiresGhettoNetworkMod
             return false;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "ReleaseNearbyZDOS")]
-        [HarmonyPrefix]
         public static bool ReleaseNearbyZDOS_Prefix(ZDOMan __instance, Vector3 refPosition, long uid)
         {
             if (ZNet.instance == null || !ZNet.instance.IsDedicated()) return true;
@@ -94,6 +95,7 @@ namespace FiresGhettoNetworkMod
             {
                 if (zdo == null || !zdo.Persistent) continue;
                 if (_portalExclusionActive && _teleportWorldPrefabs.Contains(zdo.m_prefab)) continue;
+                if (_cartPrefabs.Contains(zdo.m_prefab)) continue;
                 ServerStatusDiagnostics.s_ownership_zdosProcessed++;
                 ApplySssOwnershipRule(__instance, zdo, uid, serverUid);
             }
@@ -122,6 +124,12 @@ namespace FiresGhettoNetworkMod
             bool currentOwnerCovers = owner != 0L && zdoMan.IsInPeerActiveArea(zdo.GetPosition(), owner);
             if (!currentOwnerCovers && coveredByAnyPeer)
             {
+                // A tamed ZDO (Core companions) never goes to the server: vanilla's rule, the covering peer takes it.
+                if (zdo.GetBool(ZDOVars.s_tamed))
+                {
+                    if (callerUid != serverUid) zdo.SetOwner(callerUid);
+                    return;
+                }
                 zdo.SetOwner(serverUid);
                 ServerStatusDiagnostics.s_ownership_transfersToServer++;
             }

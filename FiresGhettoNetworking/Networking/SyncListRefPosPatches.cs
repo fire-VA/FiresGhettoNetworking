@@ -55,9 +55,7 @@ namespace FiresGhettoNetworkMod
             return character != null ? character.GetPosition() : peer.GetRefPos();
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "CreateSyncList")]
-        [HarmonyTranspiler]
-        static IEnumerable<CodeInstruction> CreateSyncList_LiveRefPosTranspiler(IEnumerable<CodeInstruction> instructions)
+        internal static IEnumerable<CodeInstruction> CreateSyncList_LiveRefPosTranspiler(IEnumerable<CodeInstruction> instructions)
         {
             var code = new List<CodeInstruction>(instructions);
             var vanillaRefPos = AccessTools.Method(typeof(ZNetPeer), nameof(ZNetPeer.GetRefPos));

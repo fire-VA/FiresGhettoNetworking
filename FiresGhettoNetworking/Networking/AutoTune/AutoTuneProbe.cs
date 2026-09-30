@@ -1593,22 +1593,16 @@ namespace FiresGhettoNetworkMod.AutoTune
     [HarmonyPatch]
     public static class AutoTuneProbeHooks
     {
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
         public static void ZNet_Start_Postfix()
         {
             AutoTuneProbe.RegisterRoundTripCommand();
         }
 
-        [HarmonyPatch(typeof(ZNet), "OnNewConnection")]
-        [HarmonyPostfix]
         public static void ZNet_OnNewConnection_Postfix(ZNetPeer peer)
         {
             AutoTuneProbe.OnPeerConnected(peer);
         }
 
-        [HarmonyPatch(typeof(ZNet), nameof(ZNet.Disconnect))]
-        [HarmonyPostfix]
         public static void ZNet_Disconnect_Postfix(ZNetPeer peer)
         {
             // Client-side: clear local probe state regardless of which peer disconnected
@@ -1633,8 +1627,6 @@ namespace FiresGhettoNetworkMod.AutoTune
         // ZNetPeer.Dispose disposes the socket + rpc but does NOT null serverPeer.m_rpc,
         // so the coroutine's own "serverPeer.m_rpc == null" self-check doesn't catch this
         // either — has to be torn down externally.
-        [HarmonyPatch(typeof(ZNet), nameof(ZNet.Shutdown))]
-        [HarmonyPostfix]
         public static void ZNet_Shutdown_Postfix()
         {
             AutoTuneProbe.OnPeerDisconnected();
@@ -1645,8 +1637,6 @@ namespace FiresGhettoNetworkMod.AutoTune
         // paths (e.g. error-driven disconnects, certain modded shutdowns) may skip
         // Shutdown but every path must eventually destroy ZNet. Idempotent with the
         // Shutdown hook above (OnPeerDisconnected just re-sets already-set flags).
-        [HarmonyPatch(typeof(ZNet), "OnDestroy")]
-        [HarmonyPostfix]
         public static void ZNet_OnDestroy_Postfix()
         {
             AutoTuneProbe.OnPeerDisconnected();

@@ -47,8 +47,7 @@ namespace FiresGhettoNetworkMod
 
         internal static ZNetPeer PeerOf(ZRpc rpc) => rpc != null && s_peersByRpc.TryGetValue(rpc, out var peer) ? peer : null;
 
-        [HarmonyPatch(typeof(ZNet), "OnNewConnection"), HarmonyPostfix]
-        static void OnNewConnection(ZNet __instance, ZNetPeer peer)
+        internal static void OnNewConnection(ZNet __instance, ZNetPeer peer)
         {
             if (peer?.m_rpc == null) return;
             s_peersByRpc[peer.m_rpc] = peer;
@@ -64,8 +63,7 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        [HarmonyPatch(typeof(ZNet), nameof(ZNet.Disconnect)), HarmonyPostfix]
-        static void OnDisconnect(ZNetPeer peer)
+        internal static void OnDisconnect(ZNetPeer peer)
         {
             if (peer == null) return;
             s_echoes.Remove(peer);
@@ -73,16 +71,14 @@ namespace FiresGhettoNetworkMod
             if (peer.m_rpc != null) s_peersByRpc.Remove(peer.m_rpc);
         }
 
-        [HarmonyPatch(typeof(ZNet), "Shutdown"), HarmonyPostfix]
-        static void OnShutdown()
+        internal static void OnShutdown()
         {
             s_echoes.Clear();
             s_peersByRpc.Clear();
             RoundTripTrace.ForgetEchoes(null);
         }
 
-        [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPostfix]
-        static void SendEchoes(ZNet __instance)
+        internal static void SendEchoes(ZNet __instance)
         {
             if (s_echoes.Count == 0 || !__instance.IsServer()) return;
             double now = Time.realtimeSinceStartupAsDouble;

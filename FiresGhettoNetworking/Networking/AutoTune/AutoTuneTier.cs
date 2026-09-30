@@ -169,7 +169,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         AILODFarDistance      = 500f,
                         AILODThrottleFactor   = 0.5f,
                         RpcAoIRadius          = 384f,
-                        ExtendedZoneRadius    = 2,
+                        ExtendedZoneRadius    = 0,
                     };
 
                 case Tier.Medium:
@@ -193,7 +193,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         AILODFarDistance      = 300f,
                         AILODThrottleFactor   = 0.5f,
                         RpcAoIRadius          = 256f,
-                        ExtendedZoneRadius    = 1,
+                        ExtendedZoneRadius    = 0,
                     };
 
                 case Tier.Low:

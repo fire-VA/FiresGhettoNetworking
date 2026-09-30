@@ -23,6 +23,7 @@ namespace FiresGhettoNetworkMod
             = new Dictionary<long, Dictionary<ZDOID, ZDOSnapshot>>();
         private static readonly List<ZDOID> _expiredSnapshotIds = new List<ZDOID>();
         private static float _nextSnapshotSweepTime;
+        private static ZDOMan _snapshotsBelongTo;
 
         private sealed class ZDOSnapshot
         {
@@ -66,8 +67,6 @@ namespace FiresGhettoNetworkMod
 
         internal static bool ContextActive => _contextActive;
 
-        [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
-        [HarmonyPrefix]
         public static void SendZDOs_Prefix(ZDOMan.ZDOPeer peer, bool flush)
         {
             if (FiresGhettoNetworkMod.ConfigEnableZDODelta == null
@@ -81,8 +80,6 @@ namespace FiresGhettoNetworkMod
             _contextActive  = true;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
-        [HarmonyPostfix]
         public static void SendZDOs_Postfix(ZDOMan.ZDOPeer peer, bool flush)
         {
             _contextActive = false;
@@ -151,8 +148,6 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "RemovePeer")]
-        [HarmonyPostfix]
         public static void RemovePeer_Postfix(ZNetPeer netPeer)
         {
             if (netPeer == null) return;
@@ -168,11 +163,16 @@ namespace FiresGhettoNetworkMod
 
         /// <summary>
         /// A snapshot past the delta window is only ever overwritten by the next keyframe, so dropping it changes nothing that is sent.
+        /// Snapshots are keyed by ZDOID, whose hash reads the game's per-session user table: kept past a logout, removing one indexes
+        /// past the next session's table (ArgumentOutOfRangeException in ZDOID.GetUserID), so a new ZDOMan starts with none.
         /// </summary>
-        [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.Update))]
-        [HarmonyPostfix]
-        public static void ZDOMan_Update_ForgetExpiredSnapshots()
+        public static void ZDOMan_Update_ForgetExpiredSnapshots(ZDOMan __instance)
         {
+            if (__instance != _snapshotsBelongTo)
+            {
+                _peerSnapshots.Clear();
+                _snapshotsBelongTo = __instance;
+            }
             float now = Time.realtimeSinceStartup;
             if (now < _nextSnapshotSweepTime) return;
             _nextSnapshotSweepTime = now + SnapshotSweepIntervalSec;

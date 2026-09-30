@@ -26,8 +26,6 @@ namespace FiresGhettoNetworkMod
 
         // UpdateSupport needs m_bounds. A piece can reach it with m_colliders set and m_bounds still null when
         // heavy zone streaming creates the zone before WearNTear.Awake finishes; SetupColliders is idempotent.
-        [HarmonyPatch(typeof(WearNTear), "UpdateSupport")]
-        [HarmonyPrefix]
         public static void WearNTear_UpdateSupport_ReinitColliders_Prefix(WearNTear __instance)
         {
             if (__instance == null) return;
@@ -41,8 +39,6 @@ namespace FiresGhettoNetworkMod
         // and ends in the same state. Hash cached because RouteRPC is hot.
         private static readonly int s_requestResponsHash = "RequestRespons".GetStableHashCode();
 
-        [HarmonyPatch(typeof(ZRoutedRpc), "RouteRPC")]
-        [HarmonyPrefix]
         public static void ZRoutedRpc_RouteRPC_ShipRequestRespons_Prefix(ZRoutedRpc.RoutedRPCData rpcData)
         {
             if (rpcData == null) return;

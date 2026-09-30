@@ -29,8 +29,6 @@ namespace FiresGhettoNetworkMod
         private static int _nextLogFrame;
         private const int LogIntervalFrames = 1800;
 
-        [HarmonyPatch(typeof(Ship), nameof(Ship.CustomFixedUpdate))]
-        [HarmonyPrefix]
         public static bool Ship_CustomFixedUpdate_ParkUntilEnvironmentReady(
             Ship __instance,
             ZNetView ___m_nview,
@@ -56,9 +54,11 @@ namespace FiresGhettoNetworkMod
 
         // Clearing on world teardown: the set is static and would otherwise hold dead Ship references
         // from a previous ZNetScene across a disconnect/reconnect.
-        [HarmonyPatch(typeof(ZNetScene), "Shutdown")]
-        [HarmonyPostfix]
-        public static void ZNetScene_Shutdown_ClearParked() => _parkedByUs.Clear();
+        public static void ZNetScene_Shutdown_ClearParked()
+        {
+            _parkedByUs.Clear();
+            SssTestAreas.Clear();
+        }
 
 
         private static bool IsEnvironmentReady(Ship ship)
@@ -73,7 +73,7 @@ namespace FiresGhettoNetworkMod
             if (!zoneSystem.IsZoneLoaded(position)) return false;
 
             WaterVolume probe = null;
-            return Floating.GetWaterLevel(position, ref probe) > NoWaterSentinelThreshold;
+            return Floating.GetWaterLevel(position, ref probe) > NoWaterSentinelThreshold && VehicleOwnershipEdge.GroundReady(position);
         }
 
         private static void Park(Ship ship, Rigidbody body)

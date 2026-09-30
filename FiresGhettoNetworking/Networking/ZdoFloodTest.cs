@@ -34,9 +34,7 @@ namespace FiresGhettoNetworkMod
         private static readonly List<GameObject> s_spawned = new List<GameObject>();
         private static bool s_sampling;
 
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
-        static void OnZNetStart()
+        internal static void OnZNetStart()
         {
             if (ZRoutedRpc.instance == null) return;
             ZRoutedRpc.instance.Register<int, string, Vector3>(RpcStart, RPC_Start);

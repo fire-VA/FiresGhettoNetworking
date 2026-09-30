@@ -30,8 +30,8 @@ namespace FiresGhettoNetworkMod
 
         private static int _mainThreadId = -1;
 
-        // Decided lazily on the first zone change that has someone to notify, once per ZDOMan (world session).
-        // By then every plugin has applied its patches, so a competing fix is visible.
+        // Decided once per ZDOMan (world session) on the server's first frame with a world loaded (DecideBeforeJoins), or at
+        // the first zone change if that comes first. By then every plugin has applied its patches, so a competing fix is visible.
         private static ZDOMan _decidedFor;
         private static Mode _mode = Mode.StoodDown;
         private static ConfigEntryBase _competitorToggle;
@@ -85,6 +85,20 @@ namespace FiresGhettoNetworkMod
             {
                 DisableForSession(ex);
             }
+        }
+
+        /// <summary>
+        /// Deciding reads the game's IL, and the first read of those method bodies can stall for seconds when that memory is
+        /// paged out (rig R22b: 1,559 ms, nearly all of it blocked, inside a joining player's frame). It is done on the
+        /// server's first frame with a world loaded, before anyone can join, instead of at the first zone change.
+        /// </summary>
+        internal static void DecideBeforeJoins(ZNet net)
+        {
+            if (!(FiresGhettoNetworkMod.ConfigFixTeleportGhosts?.Value ?? false) || !net.IsServer()) return;
+            ZDOMan man = ZDOMan.instance;
+            if (man == null || ReferenceEquals(_decidedFor, man)) return;
+            try { ShouldRun(man); }
+            catch (Exception ex) { DisableForSession(ex); }
         }
 
         private static bool ShouldRun(ZDOMan man)

@@ -10,7 +10,10 @@ namespace FiresGhettoNetworkMod
     public static class ServerClientUtils
     {
         public static bool IsDedicatedServerDetected { get; private set; }
-        
+
+        // valheim.exe on Windows, valheim.x86_64 on Linux; the dedicated server is valheim_server.
+        private const string ClientExeName = "valheim";
+
         // Direct logger reference for early detection (before LoggerOptions filtering is configured)
         private static ManualLogSource _earlyLogger;
 
@@ -36,6 +39,14 @@ namespace FiresGhettoNetworkMod
                 string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";
                 exeName = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
                 string exeDir = Path.GetDirectoryName(exePath)?.ToLowerInvariant() ?? "";
+
+                // The game client can't host a dedicated server. Run headless (-batchmode -nographics, the rig's test bot) it is
+                // still a client, which the batch-mode, argument and graphics checks below would call a server.
+                if (exeName == ClientExeName)
+                {
+                    Summarize(Application.isBatchMode ? "game client, headless" : "game client");
+                    return;
+                }
 
                 // Check if executable name contains "server" (handles server1, server2, myserver, etc.)
                 if (exeName.Contains("server"))

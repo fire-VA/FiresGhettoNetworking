@@ -31,14 +31,12 @@ namespace FiresGhettoNetworkMod
         private static int s_releases;
         private static int s_simulatedSeen;
         private static int s_nonSimulatedTransfersToPeer;
+        private static int s_takenOver;   // creatures taken from their present peer owner (1.5.15)
         private static float s_nextStatLogTime;
 
         // ====================================================================
         // BUILD THE SIMULATED-PREFAB SET — Character (not Player) + Ship
         // ====================================================================
-        [HarmonyPatch(typeof(ZNetScene), "Awake")]
-        [HarmonyPostfix]
-        [HarmonyPriority(Priority.Last)]
         public static void ZNetScene_Awake_BuildSet(ZNetScene __instance)
         {
             s_simulatedPrefabs.Clear();
@@ -74,8 +72,6 @@ namespace FiresGhettoNetworkMod
                     : "Character only; ships stay peer-owned because 'Server-Side Ship Simulation' is off)."));
         }
 
-        [HarmonyPatch(typeof(ZNetScene), "Shutdown")]
-        [HarmonyPostfix]
         public static void ZNetScene_Shutdown_DropSet()
         {
             s_simulatedPrefabs.Clear();
@@ -85,7 +81,7 @@ namespace FiresGhettoNetworkMod
         // ====================================================================
         // SELECTIVE RELEASE-NEARBY-ZDOS
         //
-        // Vanilla source (REFERENCE_ZDOMan.md:513-533) reproduced here with
+        // Vanilla's ZDOMan.ReleaseNearbyZDOS logic, reproduced here with
         // ONE divergence vs V2: the transfer-to-server branch checks whether
         // the prefab is in our simulated set. If yes → SetOwner(serverUid)
         // (V2 behaviour, claim for server). If no → SetOwner(uid) (vanilla
@@ -93,8 +89,6 @@ namespace FiresGhettoNetworkMod
         //
         // Release-on-no-coverage (branch 1) is unchanged from V2 / SSS-exact.
         // ====================================================================
-        [HarmonyPatch(typeof(ZDOMan), "ReleaseNearbyZDOS")]
-        [HarmonyPrefix]
         public static bool ReleaseNearbyZDOS_Prefix(
             ZDOMan __instance,
             UnityEngine.Vector3 refPosition,
@@ -134,6 +128,19 @@ namespace FiresGhettoNetworkMod
                 long owner = zdo.GetOwner();
                 bool simulated = s_simulatedPrefabs.Contains(zdo.m_prefab);
                 if (simulated) simulatedThisPass++;
+
+                // R82 S3: the server only ever got the monsters it spawned itself ("2 of 4 Greydwarfs owned by the server";
+                // boars stayed the player's with 0 owner changes). The branches below are vanilla's stale-owner rule, which never
+                // moves a creature away from a player who still covers it, and the player's own SpawnSystem makes it that
+                // player's. Selective means "the server owns monsters": a simulated (non-tamed) creature owned by the peer whose
+                // pass this is goes to the server, once, when the server has it instantiated (so it really simulates it).
+                if (simulated && uid != serverUid && owner == uid && !zdo.GetBool(ZDOVars.s_tamed)
+                    && ZNetScene.instance != null && ZNetScene.instance.FindInstance(zdo) != null)
+                {
+                    zdo.SetOwner(serverUid);
+                    s_takenOver++;
+                    continue;
+                }
 
                 if (owner == uid || owner == serverUid)
                 {
@@ -184,7 +191,9 @@ namespace FiresGhettoNetworkMod
                     // Only route to server if the prefab is one we want the
                     // server to simulate. Otherwise behave like vanilla and
                     // hand ownership to the asking peer (uid).
-                    if (simulated)
+                    // Never a tamed one (2026-09-29): a Core companion simulates only on its owner player's peer (its
+                    // AI, commands and OwnerAssist gate on IsOwner), so it takes the vanilla path below and Core's keeper claims it back.
+                    if (simulated && !zdo.GetBool(ZDOVars.s_tamed))
                     {
                         zdo.SetOwner(serverUid);
                         s_transfersToServer++;
@@ -229,13 +238,14 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogMessage(
                     $"[ServerOwnership-V3] Last 10s: {s_passCount} passes, {s_zdosProcessed} ZDOs processed "
                     + $"({s_simulatedSeen} simulated-class), "
-                    + $"{s_transfersToServer} transfers-to-server, "
+                    + $"{s_transfersToServer} transfers-to-server, {s_takenOver} taken over from a present owner, "
                     + $"{s_nonSimulatedTransfersToPeer} transfers-to-peer (non-simulated), "
                     + $"{s_releases} releases-to-unowned.");
                 s_passCount = 0;
                 s_zdosProcessed = 0;
                 s_simulatedSeen = 0;
                 s_transfersToServer = 0;
+                s_takenOver = 0;
                 s_nonSimulatedTransfersToPeer = 0;
                 s_releases = 0;
                 s_nextStatLogTime = now + 10f;

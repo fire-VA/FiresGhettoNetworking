@@ -34,8 +34,6 @@ namespace FiresGhettoNetworkMod
             Begin(__instance != null ? __instance.gameObject : null, "ItemDrop");
         }
 
-        [HarmonyPatch(typeof(TombStone), "Awake")]
-        [HarmonyPostfix]
         public static void TombStone_Awake_Probe(TombStone __instance)
         {
             Begin(__instance != null ? __instance.gameObject : null, "TombStone");

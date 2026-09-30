@@ -71,10 +71,13 @@ namespace FiresGhettoNetworkMod
         /// </summary>
         [HarmonyPatch(typeof(ZSyncTransform), "OwnerSync")]
         [HarmonyPrefix]
-        public static bool OwnerSync_Prefix(ZSyncTransform __instance, Rigidbody ___m_body)
+        public static bool OwnerSync_Prefix(ZSyncTransform __instance, Rigidbody ___m_body, ZNetView ___m_nview)
         {
             if (ServerAuthorityPatches.TryRescueBelowKillPlane(__instance, ___m_body)) return false;
-            return !HoldBack(__instance);
+            if (HoldBack(__instance)) return false;
+            // Vanilla's write goes ahead: a moved player position is stamped for other players' Remote Motion.
+            RemoteMotion.Stamp(__instance, ___m_nview, ___m_body);
+            return true;
         }
 
         /// <summary>True when this object has already written within its allowance and vanilla's write should be skipped.</summary>

@@ -17,14 +17,14 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.4.67";
+        public const string PluginVersion = "1.5.17";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
         // can call StartCoroutine via the plugin instance.
         public static FiresGhettoNetworkMod Instance { get; private set; }
 
-        // BepInEx log source â€” banner emitters route through this (not Debug.Log)
+        // BepInEx log source — banner emitters route through this (not Debug.Log)
         // so banner lines don't stdout-echo a raw white console duplicate.
         public static BepInEx.Logging.ManualLogSource Log;
 
@@ -74,7 +74,8 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<bool> ConfigFixTeleportGhosts;
         public static ConfigEntry<bool> ConfigFixSlowSleep;
         public static ConfigEntry<bool> ConfigKeepaliveFirst;
-        public static ConfigEntry<bool> ConfigFixBoatDamageFromTimeSync;
+        public static ConfigEntry<bool> ConfigKeepWorldClockAtRealTime;
+        public static ConfigEntry<bool> ConfigSmoothServerClockCorrections;
         public static ConfigEntry<bool> ConfigFixGroundSnapThroughFloors;
         public static ConfigEntry<bool> ConfigEnableRpcRouter;
         public static ConfigEntry<bool> ConfigEnableRpcAoI;
@@ -102,7 +103,7 @@ namespace FiresGhettoNetworkMod
             Log = Logger;
             Harmony = new Harmony(PluginGUID);
 
-            // BIG obnoxious "loading" banner â€” fires FIRST before any
+            // BIG obnoxious "loading" banner — fires FIRST before any
             // other Debug.Log so it sits at the top of the FGN-related
             // console output as the load announcement. The smaller
             // antenna+signal-bar banner fires at the end of Awake to
@@ -118,7 +119,7 @@ namespace FiresGhettoNetworkMod
             // patch classes, so subsequent FGN logs (those that route
             // through Debug.Log with our [FiresGhetto] tag) get colored
             // from the very first line. The patch's own FAT-detection
-            // guard bails if FiresAdminTerrain is loaded â€” see
+            // guard bails if FiresAdminTerrain is loaded — see
             // FiresLogColorPatch class header for the dedup rationale.
             try { FiresLogColorPatch.Install(Harmony); }
             catch (Exception ex)
@@ -145,11 +146,11 @@ namespace FiresGhettoNetworkMod
             // Visible at default log level so deployment side is obvious in logs.
             if (isDedicated)
             {
-                LoggerOptions.LogMessage($"{PluginName} v{PluginVersion} â€” Running on DEDICATED SERVER, enabling server-side features.");
+                LoggerOptions.LogMessage($"{PluginName} v{PluginVersion} — Running on DEDICATED SERVER, enabling server-side features.");
             }
             else
             {
-                LoggerOptions.LogMessage($"{PluginName} v{PluginVersion} â€” Running on CLIENT or SINGLE-PLAYER/LISTEN SERVER, only client-safe features will be applied.");
+                LoggerOptions.LogMessage($"{PluginName} v{PluginVersion} — Running on CLIENT or SINGLE-PLAYER/LISTEN SERVER, only client-safe features will be applied.");
             }
 
             ValheimCommunityPatchCompat.Detect();
@@ -165,93 +166,111 @@ namespace FiresGhettoNetworkMod
             StationRouter.InitConfig(Config);
             CreatureOwnership.InitConfig(Config);
             HelmOwnership.InitConfig(Config);
+            TargetSync.InitConfig(Config);
             SectorChangeTracker.InitConfig(Config);
             FireplaceFuelTicks.InitConfig(Config);
             TransformWriteRate.InitConfig(Config);
             SyncListRefPosPatches.InitConfig(Config);
+            JoinGrace.InitConfig(Config);
+            PlayFabZlibWorker.InitConfig(Config);
+            LagFairDodge.InitConfig(Config);
+            LogoutHold.InitConfig(Config);
+            RemoteMotion.InitConfig(Config);
+            RemoteArrows.InitConfig(Config);
 
-            Harmony.PatchAll(typeof(CompressionGroup));
-            Harmony.PatchAll(typeof(NetworkingRatesGroup));
-            Harmony.PatchAll(typeof(DedicatedServerGroup));
-            Harmony.PatchAll(typeof(SyncListRefPosPatches));
-            Harmony.PatchAll(typeof(UploadBreakdown));
-            Harmony.PatchAll(typeof(DownloadBreakdown));
+            TryPatchAll(typeof(CompressionGroup));
+            TryPatchAll(typeof(NetworkingRatesGroup));
+            TryPatchAll(typeof(DedicatedServerGroup));
+            TryPatchAll(typeof(SyncListRefPosPatches));
+            TryPatchAll(typeof(UploadBreakdown));
+            TryPatchAll(typeof(DownloadBreakdown));
 
-            Harmony.PatchAll(typeof(SendZDOsHeartbeatDiagnostic));
+            TryPatchAll(typeof(SendZDOsHeartbeatDiagnostic));
 
             if (ConfigEnableFallThroughDiagnostics.Value)
             {
-                Harmony.PatchAll(typeof(FallThroughProbe));
-                Harmony.PatchAll(typeof(PieceTypeAudit));
+                TryPatchAll(typeof(FallThroughProbe));
+                TryPatchAll(typeof(PieceTypeAudit));
             }
 
-            Harmony.PatchAll(typeof(ServerDisconnectDiagnostics));
+            TryPatchAll(typeof(ServerDisconnectDiagnostics));
+            TryPatchAll(typeof(CloseWithoutSleep));
+            PlayFabZlibWorker.Apply();
 
-            Harmony.PatchAll(typeof(BulkTransferGatePatches));
+            TryPatchAll(typeof(BulkTransferGatePatches));
 
-            Harmony.PatchAll(typeof(BigZdoDiagnostic));
+            TryPatchAll(typeof(BigZdoDiagnostic));
 
-            Harmony.PatchAll(typeof(FireplaceFuelTicks));
-            Harmony.PatchAll(typeof(TransformWriteRate));
+            TryPatchAll(typeof(FireplaceFuelTicks));
+            TryPatchAll(typeof(TransformWriteRate));
 
             ZdoWireWriter.Initialize();
-            Harmony.PatchAll(typeof(ZdoWireWriter));
+            TryPatchAll(typeof(ZdoWireWriter));
 
             if (ConfigEnableZDODelta.Value)
             {
-                Harmony.PatchAll(typeof(ZDODeltaPatches));
+                TryPatchAll(typeof(ZDODeltaPatches));
                 LoggerOptions.LogInfo("ZDO delta compression enabled.");
             }
 
-            Harmony.PatchAll(typeof(DisarmOverloadTest));
+            TryPatchAll(typeof(DisarmOverloadTest));
 
-            Harmony.PatchAll(typeof(CompressionRoundTripTest));
+            TryPatchAll(typeof(CompressionRoundTripTest));
 
-            Harmony.PatchAll(typeof(SocketStressTests));
+            TryPatchAll(typeof(SocketStressTests));
 
-            Harmony.PatchAll(typeof(SendQueueHeadroomMonitor));
+            TryPatchAll(typeof(SendQueueHeadroomMonitor));
 
-            Harmony.PatchAll(typeof(LinkController));
+            TryPatchAll(typeof(LinkController));
 
-            Harmony.PatchAll(typeof(SendScheduler));
+            TryPatchAll(typeof(NetSim));
 
-            Harmony.PatchAll(typeof(ConnectionEcho));
+            TryPatchAll(typeof(LogoutHold));
+            TryPatchAll(typeof(RemoteArrows));
 
-            Harmony.PatchAll(typeof(CreatureOwnership));
+            TryPatchAll(typeof(SendScheduler));
 
-            Harmony.PatchAll(typeof(HelmOwnership));
+            TryPatchAll(typeof(ConnectionEcho));
 
-            Harmony.PatchAll(typeof(KeepaliveFirst));
+            TryPatchAll(typeof(CreatureOwnership));
+
+            TryPatchAll(typeof(HelmOwnership));
+
+            TryPatchAll(typeof(TargetSync));
+
+            TryPatchAll(typeof(KeepaliveFirst));
+
+            TryPatchAll(typeof(JoinGrace));
 
             try
             {
-                Harmony.PatchAll(typeof(RoundTripTrace));
+                TryPatchAll(typeof(RoundTripTrace));
             }
             catch (System.Exception ex)
             {
                 LoggerOptions.LogWarning($"[RoundTrip] could not be attached; round trips are still timed, without the per-stage breakdown. {ex.Message}");
             }
 
-            Harmony.PatchAll(typeof(ZdoFloodTest));
+            TryPatchAll(typeof(ZdoFloodTest));
 
             WackyDatabaseCompatibilityPatch.Init(Harmony);
 
 
 
-            Harmony.PatchAll(typeof(PlayerPositionSyncPatches));
+            TryPatchAll(typeof(PlayerPositionSyncPatches));
 
-            Harmony.PatchAll(typeof(WearNTearClientSupportPatches));
+            TryPatchAll(typeof(WearNTearClientSupportPatches));
 
-            Harmony.PatchAll(typeof(ClientCleanupThrottle));
+            TryPatchAll(typeof(ClientCleanupThrottle));
 
-            Harmony.PatchAll(typeof(GroundSnapPatches));
+            TryPatchAll(typeof(GroundSnapPatches));
 
-            Harmony.PatchAll(typeof(OwnershipHandoffPatches));
+            TryPatchAll(typeof(OwnershipHandoffPatches));
 
             try
             {
                 TeleportGhostFix.Init();
-                Harmony.PatchAll(typeof(TeleportGhostFix));
+                TryPatchAll(typeof(TeleportGhostFix));
             }
             catch (System.Exception ex)
             {
@@ -260,29 +279,29 @@ namespace FiresGhettoNetworkMod
 
             try
             {
-                Harmony.PatchAll(typeof(TerrainCompInitRace));
+                TryPatchAll(typeof(TerrainCompInitRace));
             }
             catch (System.Exception ex)
             {
                 LoggerOptions.LogWarning($"[TerrainComp] could not be attached; vanilla behaviour is unchanged. {ex.Message}");
             }
 
-            Harmony.PatchAll(typeof(SleepTimeSkipFix));
+            TryPatchAll(typeof(SleepTimeSkipFix));
 
             if (!isDedicated)
-                Harmony.PatchAll(typeof(WaveClockSmoothing));
+                TryPatchAll(typeof(WorldClock));
 
             if (!isDedicated && ConfigEnableCapeCrashDiagnostics.Value)
             {
-                Harmony.PatchAll(typeof(CapeCrashDiagnostics));
-                Harmony.PatchAll(typeof(MagicaColliderRegistrationDiagnostics));
-                Harmony.PatchAll(typeof(MagicaClothLifecycleDiagnostics));
+                TryPatchAll(typeof(CapeCrashDiagnostics));
+                TryPatchAll(typeof(MagicaColliderRegistrationDiagnostics));
+                TryPatchAll(typeof(MagicaClothLifecycleDiagnostics));
                 LoggerOptions.LogWarning("[CapeDiag] Cape crash diagnostics are ON; turn 'Enable Cape Crash Diagnostics' off once the crash is found.");
             }
 
             // Auto-tune: probe on clients, self-tune on servers.
-            Harmony.PatchAll(typeof(AutoTuneProbeHooks));
-            Harmony.PatchAll(typeof(ZoneLoadPatches));
+            TryPatchAll(typeof(AutoTuneProbeHooks));
+            TryPatchAll(typeof(ZoneLoadPatches));
             ServerAutoTune.InitServerSide();
 
             if (isDedicated)
@@ -313,8 +332,11 @@ namespace FiresGhettoNetworkMod
             }
             else
             {
-                LoggerOptions.LogInfo("Server-side features skipped â€” not running on a dedicated server.");
+                LoggerOptions.LogInfo("Server-side features skipped — not running on a dedicated server.");
             }
+
+            foreach (Type hooks in FgnHooks.ReadAttachedFeatures())
+                TryPatchAll(hooks);
 
             StartCoroutine(EmitCompactBannerWhenZNetReady());
         }
@@ -322,27 +344,27 @@ namespace FiresGhettoNetworkMod
         /// <summary>Dedicated-server traffic shaping. None of it needs Server-Side Simulation; each feature follows its own toggle.</summary>
         private static void ApplyServerTrafficPatches()
         {
-            Harmony.PatchAll(typeof(ServerFrameProfile));
-            Harmony.PatchAll(typeof(SectorChangeTracker));
-            Harmony.PatchAll(typeof(ZDOThrottlingPatches));
-            Harmony.PatchAll(typeof(AILODPatches));
+            TryPatchAll(typeof(ServerFrameProfile));
+            TryPatchAll(typeof(SectorChangeTracker));
+            TryPatchAll(typeof(ZDOThrottlingPatches));
+            TryPatchAll(typeof(AILODPatches));
 
             if (ConfigEnableRpcRouter.Value || StationRouter.ConfigEnabled.Value)
             {
-                Harmony.PatchAll(typeof(RpcRouterPatches));
-                Harmony.PatchAll(typeof(StationRouter));
+                TryPatchAll(typeof(RpcRouterPatches));
+                TryPatchAll(typeof(StationRouter));
                 DamageTextHandler.Register();
                 VAGhettoLoadSummary.EmitRpcRouter(
                     handlersRegistered: RoutedRpcManager.HandlerCount,
                     aoiRadius: RoutedRpcManager.PositionRadius(),
                     aoiEnabled: RoutedRpcManager.FilteringEnabled());
                 if (VAGhettoLoadSummary.VerboseEnabled)
-                    LoggerOptions.LogInfo("RPC Router enabled â€” handlers: " + string.Join(", ", RoutedRpcManager.HandlerMethodNames) + ".");
+                    LoggerOptions.LogInfo("RPC Router enabled — handlers: " + string.Join(", ", RoutedRpcManager.HandlerMethodNames) + ".");
             }
 
             if (ConfigEnableWNTServerOptimization.Value)
             {
-                Harmony.PatchAll(typeof(WearNTearServerPatches));
+                TryPatchAll(typeof(WearNTearServerPatches));
                 LoggerOptions.LogInfo("WearNTear server optimization enabled.");
             }
         }
@@ -351,37 +373,37 @@ namespace FiresGhettoNetworkMod
         private static void ApplyServerSideSimulationPatches()
         {
             if (ConfigEnableShipFixes.Value)
-                Harmony.PatchAll(typeof(ShipFixesGroup));
+                TryPatchAll(typeof(ShipFixesGroup));
 
-            Harmony.PatchAll(typeof(ServerShipSimulationPatches));
+            TryPatchAll(typeof(ServerShipSimulationPatches));
 
-            Harmony.PatchAll(typeof(ServerAuthorityPatches));
-            Harmony.PatchAll(typeof(ServerStabilityPatches));
-            Harmony.PatchAll(typeof(MonsterAIPatches));
+            TryPatchAll(typeof(ServerAuthorityPatches));
+            TryPatchAll(typeof(ServerStabilityPatches));
+            TryPatchAll(typeof(MonsterAIPatches));
 
             if (ConfigEnableServerOwnershipSelective.Value)
             {
                 if (ConfigEnableServerOwnership.Value)
                 {
                     LoggerOptions.LogWarning(
-                        "Both 'Server ZDO Ownership Transfer' flags are ENABLED â€” selective (V3) takes precedence; broad (V2) is being ignored. Disable one to silence this warning.");
+                        "Both 'Server ZDO Ownership Transfer' flags are ENABLED — selective (V3) takes precedence; broad (V2) is being ignored. Disable one to silence this warning.");
                 }
-                Harmony.PatchAll(typeof(ServerOwnershipPatchesV3));
+                TryPatchAll(typeof(ServerOwnershipPatchesV3));
                 CreatureOwnership.ServerOwnsCreatures = true;
                 HelmOwnership.ServerOwnsShips = ConfigEnableServerSideShipSimulation.Value;
                 LoggerOptions.LogMessage(
-                    "Server ZDO ownership (V3 SELECTIVE) ENABLED â€” Character/Ship only; drops/voxel/interactables/carts stay peer-owned.");
+                    "Server ZDO ownership (V3 SELECTIVE) ENABLED — Character/Ship only; drops/voxel/interactables/carts stay peer-owned.");
             }
             else if (ConfigEnableServerOwnership.Value)
             {
-                Harmony.PatchAll(typeof(ServerOwnershipPatches));
+                TryPatchAll(typeof(ServerOwnershipPatches));
                 CreatureOwnership.ServerOwnsCreatures = true;
                 HelmOwnership.ServerOwnsShips = true;
                 LoggerOptions.LogMessage(
-                    "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED â€” every persistent ZDO in any peer's active area will be claimed by the server.");
+                    "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED — every persistent ZDO in any peer's active area will be claimed by the server.");
                 if (!ConfigEnableServerSideShipSimulation.Value)
                     LoggerOptions.LogWarning(
-                        "V2 BROAD claims SHIPS as well, regardless of 'Server-Side Ship Simulation' being off â€” it is a "
+                        "V2 BROAD claims SHIPS as well, regardless of 'Server-Side Ship Simulation' being off — it is a "
                         + "deliberate verbatim port with no per-prefab exclusions. A server-owned hull runs its own physics, "
                         + "and ImpactEffect only fires for the owner, so boats can take phantom damage on calm water. "
                         + "Use the Selective (V3) toggle instead if your players sail; it honours that setting.");
@@ -428,7 +450,7 @@ namespace FiresGhettoNetworkMod
 
         // Waits for ZNetScene + ObjectDB to be live (same readiness
         // signal FAP uses in VaPieces.WaitForZNetReady), then emits
-        // the compact loaded banner. Failure is non-fatal â€” falls
+        // the compact loaded banner. Failure is non-fatal — falls
         // back to the plain "loaded" log so the load event is still
         // recorded in the file log.
         private IEnumerator EmitCompactBannerWhenZNetReady()
@@ -501,7 +523,7 @@ namespace FiresGhettoNetworkMod
             return 2456;
         }
 
-        // Compatibility patch for WackyDatabase â€” safely skips SnapshotItem for broken/null items
+        // Compatibility patch for WackyDatabase — safely skips SnapshotItem for broken/null items
         [HarmonyPatch]
         public static class WackyDatabaseCompatibilityPatch
         {
@@ -511,14 +533,14 @@ namespace FiresGhettoNetworkMod
                 Type functionsType = Type.GetType("wackydatabase.Util.Functions, WackysDatabase");
                 if (functionsType == null)
                 {
-                    LoggerOptions.LogInfo("WackyDatabase not detected â€” skipping compatibility patch.");
+                    LoggerOptions.LogInfo("WackyDatabase not detected — skipping compatibility patch.");
                     return;
                 }
 
                 MethodInfo snapshotMethod = functionsType.GetMethod("SnapshotItem", BindingFlags.Static | BindingFlags.Public);
                 if (snapshotMethod == null)
                 {
-                    LoggerOptions.LogWarning("WackyDatabase detected but SnapshotItem method not found â€” patch skipped.");
+                    LoggerOptions.LogWarning("WackyDatabase detected but SnapshotItem method not found — patch skipped.");
                     return;
                 }
 
@@ -528,7 +550,7 @@ namespace FiresGhettoNetworkMod
                     prefix: new HarmonyMethod(typeof(WackyDatabaseCompatibilityPatch), nameof(SnapshotItem_Prefix))
                 );
 
-                LoggerOptions.LogInfo("WackyDatabase compatibility patch applied â€” will skip snapshots for invalid/broken clones.");
+                LoggerOptions.LogInfo("WackyDatabase compatibility patch applied — will skip snapshots for invalid/broken clones.");
             }
 
             // Prefix for SnapshotItem(ItemDrop item, ...)
@@ -545,7 +567,7 @@ namespace FiresGhettoNetworkMod
                 // Second: item has no valid gameObject (common when cloneFrom prefab is missing)
                 if (item.gameObject == null)
                 {
-                    LoggerOptions.LogWarning($"WDB: Skipping snapshot for {item.name} â€” gameObject is null (missing prefab from removed mod).");
+                    LoggerOptions.LogWarning($"WDB: Skipping snapshot for {item.name} — gameObject is null (missing prefab from removed mod).");
                     return false;
                 }
 
@@ -555,11 +577,11 @@ namespace FiresGhettoNetworkMod
 
                 if (!hasRenderer && !hasMesh)
                 {
-                    LoggerOptions.LogWarning($"WDB: Skipping snapshot for {item.name} â€” no renderers or meshes (broken model).");
+                    LoggerOptions.LogWarning($"WDB: Skipping snapshot for {item.name} — no renderers or meshes (broken model).");
                     return false;
                 }
 
-                // All good â€” allow original method to run
+                // All good — allow original method to run
                 return true;
             }
         }
@@ -567,21 +589,36 @@ namespace FiresGhettoNetworkMod
 
         
 
-        private void TryPatchAll(Type type)
+        /// <summary>
+        /// One patch class. Harmony compiles each patched method as it attaches, so a patch the game's IL can't take throws here;
+        /// it is logged and that feature stays off, instead of the exception leaving Awake and skipping everything after it
+        /// (1.4.81: the WorkerMain prefix threw, and every peer ran a half-initialised FGN).
+        /// </summary>
+        private static void TryPatchAll(Type type)
         {
             if (type == null)
             {
-                Logger.LogError("Tried to patch a null type!");
+                Log?.LogError("Tried to patch a null type!");
                 return;
             }
-            Harmony.PatchAll(type);
+            try
+            {
+                Harmony.PatchAll(type);
+                FgnHooks.NoteAttached(type);
+            }
+            catch (Exception ex)
+            {
+                Exception cause = ex.InnerException ?? ex;
+                Log?.LogError($"[{PluginName}] couldn't attach {type.Name} ({cause.GetType().Name}: {cause.Message}); that feature is off, "
+                    + "the rest of FGN loads normally.");
+            }
         }
 
         // ============================================================
         // POST-PATCHALL VERIFICATION
         //
         // Logs every Harmony patch attached to (type, methodName) right
-        // now â€” owner / patch-method full name / priority. Lets us prove
+        // now — owner / patch-method full name / priority. Lets us prove
         // attachment from boot logs without waiting for the method to
         // actually fire at runtime.
         // ============================================================
@@ -711,7 +748,7 @@ namespace FiresGhettoNetworkMod
                     "2 = double the per-frame cap (faster zone load, bigger frame hitches).\n" +
                     "4 = quadruple (zone-cross stutter masking on capable machines).\n" +
                     "Auto-Tune may override this on the client based on measured frame time.\n" +
-                    "CLIENT-ONLY â€” no effect on server.",
+                    "CLIENT-ONLY — no effect on server.",
                     new AcceptableValueRange<int>(1, 8)));
 
             PlayerPositionSyncPatches.Init(Config);
@@ -785,7 +822,7 @@ namespace FiresGhettoNetworkMod
                 false,
                 "MAX-THROUGHPUT MODE. Overrides Auto-Tune AND the Send Rate Min/Max above, lifting Steam's\n" +
                 "send rate, send buffer, and recv buffer / per-message ceiling to their proven unlocked\n" +
-                "maximums â€” the same lifts fgn_socketramp uses to reach ~40 MB/s, versus the ~8 MB/s the\n" +
+                "maximums — the same lifts fgn_socketramp uses to reach ~40 MB/s, versus the ~8 MB/s the\n" +
                 "High tier caps everyday traffic at. Applies LIVE the instant you toggle it (no reconnect).\n" +
                 "For a server->client transfer, set it on BOTH sides: the server lifts its outbound, the\n" +
                 "client lifts its inbound. The recv side needs FiresSteamworksPatcher installed.\n" +
@@ -811,7 +848,7 @@ namespace FiresGhettoNetworkMod
                 "Force Crossplay",
                 ForceCrossplayOptions.vanilla,
                 "Requires restart. Selects the networking backend for a DEDICATED SERVER.\n" +
-                "vanilla = respect the command-line -crossplay flag (DEFAULT â€” does NOT change how your server connects).\n" +
+                "vanilla = respect the command-line -crossplay flag (DEFAULT — does NOT change how your server connects).\n" +
                 "steamworks = force Steam-only; DISABLES crossplay. Best performance for an all-Steam playerbase, " +
                 "but Xbox / Game Pass / PlayStation players cannot join.\n" +
                 "playfab = force crossplay ENABLED (PlayFab matchmaking) regardless of the -crossplay flag. Players then join with\n" +
@@ -831,7 +868,7 @@ namespace FiresGhettoNetworkMod
                 0,
                 new ConfigDescription(
                     "Max players advertised to matchmaking (Steam server browser â†’ BattleMetrics, PlayFab session/Party). " +
-                    "Independent of the actual in-game limit set by 'Player Limit' â€” useful when an operator wants their " +
+                    "Independent of the actual in-game limit set by 'Player Limit' — useful when an operator wants their " +
                     "server listed as '/500' for marketing while running a real 30-slot cap. " +
                     "0 = mirror 'Player Limit' (advertised matches reality). Requires restart.",
                     new AcceptableValueRange<int>(0, 9999)));
@@ -847,7 +884,7 @@ namespace FiresGhettoNetworkMod
                     "2 = double the per-frame cap (faster zone load, bigger frame hitches).\n" +
                     "4 = quadruple (zone-cross stutter masking on capable machines).\n" +
                     "Auto-Tune may override this on the client based on measured frame time.\n" +
-                    "CLIENT-ONLY â€” no effect on server.",
+                    "CLIENT-ONLY — no effect on server.",
                     new AcceptableValueRange<int>(1, 8)));
 
             ConfigZPackageReceiveBufferSize = Config.Bind(
@@ -870,10 +907,10 @@ namespace FiresGhettoNetworkMod
                 "when crossing into a heavy zone. Disable to fall back to the cap-bump transpiler\n" +
                 "(set 'Zone Load Batch Size' to control its multiplier).\n" +
                 "OFF by default: instantiating this fast can spawn a creature/item the instant its ZDO\n" +
-                "arrives â€” before the structure it rests on, when that ZDO lags a tick behind â€” which can\n" +
+                "arrives — before the structure it rests on, when that ZDO lags a tick behind — which can\n" +
                 "let tames slip locked pens or drop items through floors on zone load. Opt in for the\n" +
                 "smoother zone crossings if your world doesn't hit that.\n" +
-                "CLIENT-ONLY â€” no effect on dedicated server.");
+                "CLIENT-ONLY — no effect on dedicated server.");
 
             ConfigInstantiationBudgetMs = Config.Bind(
                 "02 - Client Performance",
@@ -973,7 +1010,7 @@ namespace FiresGhettoNetworkMod
                     "0 = no throttle (vanilla single-frame destruction).\n" +
                     "200 = ~12s to clear a 150k-instance backlog at 60 fps, with each frame's\n" +
                     "destroy cost roughly equal to instantiating 200 objects.\n" +
-                    "CLIENT-ONLY â€” no effect on dedicated server.",
+                    "CLIENT-ONLY — no effect on dedicated server.",
                     new AcceptableValueRange<int>(0, 5000)));
 
             ConfigDediFellOutRescueLayers = Config.Bind(
@@ -1013,7 +1050,7 @@ namespace FiresGhettoNetworkMod
                 "near/mid/far decision counts, nearest-peer distance range) to the\n" +
                 "consolidated [ServerStatus] line. Useful for tuning the near/far gates.\n" +
                 "Turn OFF once tuning is validated and you want a quieter log.\n" +
-                "Has no effect when Enable AI LOD Throttling is OFF â€” there's nothing to report.");
+                "Has no effect when Enable AI LOD Throttling is OFF — there's nothing to report.");
 
             ConfigDiagnosticIntervalSec = Config.Bind(
                 "01 - General",
@@ -1039,7 +1076,7 @@ namespace FiresGhettoNetworkMod
                     + "and incidentally starved player position ZDOs (the source of 'players flying / teleporting / "
                     + "hits from across the map' complaints).\n"
                     + "Disable as a kill switch if you suspect the scan is causing freezes or false-positive patching.\n"
-                    + "Both sides â€” applies on client and dedicated server.",
+                    + "Both sides — applies on client and dedicated server.",
                     null));
 
             ConfigBulkTransferBudgetPercent = Config.Bind(
@@ -1080,7 +1117,7 @@ namespace FiresGhettoNetworkMod
                 "Enable Server ZDO Ownership Transfer (EXPERIMENTAL)",
                 false,
                 new ConfigDescription(
-                    "EXPERIMENTAL â€” defaults OFF. Direct port of the original Serverside Simulations mod's\n" +
+                    "EXPERIMENTAL — defaults OFF. Direct port of the original Serverside Simulations mod's\n" +
                     "ZDOMan.ReleaseNearbyZDOS prefix. When enabled, the server takes ownership of EVERY\n" +
                     "persistent ZDO in any peer's active area (mobs, ships, terrain, structures, items, doors,\n" +
                     "the whole world). Peers no longer own anything.\n" +
@@ -1091,30 +1128,32 @@ namespace FiresGhettoNetworkMod
                     "\n" +
                     "WHEN TO LEAVE OFF: you're running a heavy modpack, you've seen mob freezes or\n" +
                     "interaction issues after a previous attempt, or you don't know yet. Leaving this off\n" +
-                    "preserves vanilla peer ownership â€” every other server-authority feature (zones,\n" +
+                    "preserves vanilla peer ownership — every other server-authority feature (zones,\n" +
                     "spawning, raids, throttling) still works without it.\n" +
                     "\n" +
                     "REQUIRES: ConfigEnableServerAuthority = true AND running on a dedicated server.\n" +
-                    "TOGGLE IS INDEPENDENT â€” flip this without touching ConfigEnableServerAuthority.",
+                    "TOGGLE IS INDEPENDENT — flip this without touching ConfigEnableServerAuthority.",
                     null));
 
             ConfigEnableServerOwnershipSelective = Config.Bind(
                 "10 - Server Authority",
-                "Enable Server ZDO Ownership Transfer â€” Selective (EXPERIMENTAL)",
+                "Enable Server ZDO Ownership Transfer — Selective (EXPERIMENTAL)",
                 false,
                 new ConfigDescription(
-                    "EXPERIMENTAL â€” defaults OFF. Selective variant of the broad ownership transfer above.\n" +
+                    "EXPERIMENTAL — defaults OFF. Selective variant of the broad ownership transfer above.\n" +
                     "Only Character (non-Player) and Ship prefabs are claimed by the server. Drops,\n" +
                     "containers, doors, signs, workstations, pickables, beds, traders, wards, voxel\n" +
                     "terrain, built structures, and carts all stay under vanilla peer ownership.\n" +
+                    "Creatures a nearby player owns (the ones its own spawner made) are taken over by the\n" +
+                    "server once the server has them loaded; tamed creatures always stay with their player.\n" +
                     "\n" +
                     "RATIONALE: broad SSS-style ownership (the toggle above) exposes interaction-RPC\n" +
-                    "race conditions â€” `removedrops` failing for mob-dropped items, voxel mining/flattening\n" +
+                    "race conditions — `removedrops` failing for mob-dropped items, voxel mining/flattening\n" +
                     "breaking intermittently under load, carts shaking/sinking when parked. Selective scope\n" +
                     "avoids all three by keeping interactables on the vanilla peer-owned path.\n" +
                     "\n" +
                     "MUTUALLY EXCLUSIVE with the broad toggle above. If both are true, this selective\n" +
-                    "variant takes precedence (the safer choice â€” drops/voxel/etc. stay working).\n" +
+                    "variant takes precedence (the safer choice — drops/voxel/etc. stay working).\n" +
                     "\n" +
                     "REQUIRES: ConfigEnableServerAuthority = true AND running on a dedicated server.",
                     null));
@@ -1122,16 +1161,17 @@ namespace FiresGhettoNetworkMod
             ConfigExtendedZoneRadius = Config.Bind(
                 "10 - Server Authority",
                 "Extended Zone Radius",
-                1,
+                0,
                 new ConfigDescription(
-                    "Additional zone layers the server pre-loads around players for smoother zone transitions.\n" +
-                    "0 = vanilla (no extra pre-load)\n" +
-                    "1 = +1 layer (recommended, ~7x7 zones total)\n" +
+                    "Additional zone layers the server pre-loads around players when Server-Side Simulation is on.\n" +
+                    "0 = vanilla (no extra pre-load, default)\n" +
+                    "1 = +1 layer (~7x7 zones total, about twice the objects the server builds per player)\n" +
                     "2 = +2 layers (~9x9 zones)\n" +
                     "3 = +3 layers (~11x11 zones)\n" +
                     "\n" +
-                    "Higher values reduce stutter when crossing zone borders but increase server CPU/RAM usage.\n" +
-                    "SERVER-ONLY â€” clients ignore this setting.",
+                    "Higher values reduce stutter when crossing zone borders but multiply server CPU/RAM usage by the\n" +
+                    "number of players, since the server builds this area around every one of them.\n" +
+                    "SERVER-ONLY — clients ignore this setting.",
                     new AcceptableValueRange<int>(0, 3)));
 
             // ---- Predictive zone pre-streaming (Workstream C) ----
@@ -1141,9 +1181,9 @@ namespace FiresGhettoNetworkMod
                 true,
                 "Bias each peer's active-area center forward along their velocity vector so the\n" +
                 "server starts loading zones BEFORE the peer crosses the boundary. Composes with\n" +
-                "'Extended Zone Radius' â€” the symmetric ring still expands, the center just slides\n" +
+                "'Extended Zone Radius' — the symmetric ring still expands, the center just slides\n" +
                 "forward. By the time the peer arrives, the predicted zones are already loaded.\n" +
-                "SERVER-ONLY â€” clients ignore this setting.");
+                "SERVER-ONLY — clients ignore this setting.");
 
             ConfigPredictionLookaheadSec = Config.Bind(
                 "10 - Server Authority",
@@ -1178,7 +1218,7 @@ namespace FiresGhettoNetworkMod
                 "Enable ZDO Throttling",
                 true,
                 "Reduce update frequency for distant ZDOs (creatures/structures far away) to save bandwidth.\n" +
-                "SERVER-ONLY â€” no effect on client.");
+                "SERVER-ONLY — no effect on client.");
 
             ConfigZDOThrottleDistance = Config.Bind(
                 "10 - Server Authority",
@@ -1197,7 +1237,7 @@ namespace FiresGhettoNetworkMod
                 true,
                 "Reduce FixedUpdate frequency for distant AI (saves server CPU).\n" +
                 "Nearby AI stays full speed for smooth combat.\n" +
-                "SERVER-ONLY â€” no effect on client.");
+                "SERVER-ONLY — no effect on client.");
 
             ConfigAILODNearDistance = Config.Bind(
                 "10 - Server Authority",
@@ -1217,7 +1257,7 @@ namespace FiresGhettoNetworkMod
                 0.5f,
                 new ConfigDescription("Update multiplier for throttled AI (0.5 = half speed, 0.25 = quarter). Lower = more savings.", new AcceptableValueRange<float>(0.25f, 0.75f)));
 
-            // Adaptive gate â€” the optimizations above only run when a peer's send queue
+            // Adaptive gate — the optimizations above only run when a peer's send queue
             // is actually backing up. Healthy server = vanilla behaviour (smoother).
             ConfigEnableAdaptiveThrottling = Config.Bind(
                 "10 - Server Authority",
@@ -1225,7 +1265,7 @@ namespace FiresGhettoNetworkMod
                 true,
                 "Only engage FGN's send-side optimizations (distant-ZDO throttling, player\n" +
                 "boost, AI LOD) when a peer's send queue is actually backing up. On a server\n" +
-                "with bandwidth to spare, FGN leaves vanilla update order untouched â€” leaner\n" +
+                "with bandwidth to spare, FGN leaves vanilla update order untouched — leaner\n" +
                 "and lower-latency. Turn OFF to force the optimizations on at all times.\n" +
                 "SERVER-ONLY.");
 
@@ -1253,7 +1293,7 @@ namespace FiresGhettoNetworkMod
                 false,
                 new ConfigDescription(
                     "OFF by default. When ON, logs every Harmony patch attached to the AI tick,\n" +
-                    "instantiation, and zone-gate methods this mod cares about â€” useful when\n" +
+                    "instantiation, and zone-gate methods this mod cares about — useful when\n" +
                     "troubleshooting mod-conflict scenarios (another mod's transpiler stomping our\n" +
                     "prefix, etc.) or when bringing up a new feature.\n" +
                     "\n" +
@@ -1306,7 +1346,7 @@ namespace FiresGhettoNetworkMod
                 "Skips the wear and support update for building pieces whose damage modifiers are all\n" +
                 "Immune or Ignore (Infinity Hammer, admin-flagged pieces), on the server that owns them.\n" +
                 "Every other piece updates exactly as in vanilla.\n" +
-                "SERVER-ONLY â€” no effect on client.");
+                "SERVER-ONLY — no effect on client.");
 
             ConfigEnableInvulnerableSupportSkip = Config.Bind(
                 "12 - Advanced",
@@ -1314,7 +1354,7 @@ namespace FiresGhettoNetworkMod
                 true,
                 "CLIENT-side counterpart to the WearNTear server optimization. Short-circuits the\n" +
                 "expensive WearNTear.UpdateSupport call (Physics.OverlapBoxNonAlloc per piece) for\n" +
-                "pieces whose damage modifiers are all Immune/Ignore â€” e.g. Infinity Hammer pieces.\n" +
+                "pieces whose damage modifiers are all Immune/Ignore — e.g. Infinity Hammer pieces.\n" +
                 "Pins m_support at the material's max value so neighbouring mortal pieces still\n" +
                 "see full support when querying. Massive steady-state CPU saving in megabases\n" +
                 "dominated by invulnerable pieces.");
@@ -1329,7 +1369,7 @@ namespace FiresGhettoNetworkMod
                 "entry (the GameObject is left alone). These are exactly the entries that would\n" +
                 "NRE vanilla RemoveObjects, so we're only purging things vanilla can't handle.\n" +
                 "Triggered by mods that block WearNTear.RPC_Remove on the server while ZDOMan\n" +
-                "still reaps the ZDO via a separate path â€” e.g. TargetPortalProtection's\n" +
+                "still reaps the ZDO via a separate path — e.g. TargetPortalProtection's\n" +
                 "Player.m_localPlayer-based permission check on a headless dedi when ZDO\n" +
                 "ownership has been moved to the server (FGN's Server-Side Simulation).\n" +
                 "\n" +
@@ -1370,18 +1410,27 @@ namespace FiresGhettoNetworkMod
                 "could time a player out while data was still arriving. With this on, keepalives go ahead of the\n" +
                 "queue. Works on whichever side has it; install on server and clients to cover both directions.");
 
-            ConfigFixBoatDamageFromTimeSync = Config.Bind(
+            ConfigKeepWorldClockAtRealTime = Config.Bind(
                 "12 - Advanced",
-                "Fix Boat Damage From Server Time Sync",
+                "Keep World Clock At Real Time",
                 true,
-                "Every 2 seconds the server corrects each player's clock, and vanilla applies the correction at once.\n" +
-                "Waves are worked out from that clock, so every correction moves the water under a ship in a single\n" +
-                "physics step, and a boat with players aboard takes the jump as slamming into the water and loses hull\n" +
-                "health. The more a connection's timing wobbles, the bigger and more frequent the hits. With this on,\n" +
-                "waves follow a clock that eases each correction in over a few seconds, so the water never jumps.\n" +
-                "Corrections of 5 seconds or more (sleeping, reconnecting) still apply at once, as in vanilla.\n" +
-                "CLIENT-SIDE. A ship is damaged by the game of the player who owns it, normally someone aboard,\n" +
-                "so every player who sails needs this on. No effect on a dedicated server.");
+                "Unity advances game time by at most 0.2 s a frame, so a server running under 5 frames a second lets the\n" +
+                "world clock fall behind real time, and every player's clock is pulled back at each re-sync: waves, ships,\n" +
+                "the day and every timer jump. With this on, the server adds the lost time back, so the world clock keeps\n" +
+                "real time however slow its frames are (only while players are online, as in vanilla).\n" +
+                "DEDICATED SERVER.");
+
+            ConfigSmoothServerClockCorrections = Config.Bind(
+                "12 - Advanced",
+                "Smooth Server Clock Corrections",
+                true,
+                "Every 2 seconds the server corrects each player's clock, and vanilla applies the correction at once, even\n" +
+                "backwards. Waves, the day, fish and every timer read that clock, so each correction is a visible jump, and a\n" +
+                "ship with players aboard takes a wave jump as slamming into the water. With this on, a correction is eased in\n" +
+                "(the clock runs between half and double speed until it catches up) and the clock never steps back.\n" +
+                "Corrections of 5 seconds or more forward (sleeping, joining) apply at once, as does moving it back 5 minutes\n" +
+                "or more (an admin changing the time).\n" +
+                "CLIENT-SIDE. Every player needs it.");
 
             ConfigEnableCapeCrashDiagnostics = Config.Bind(
                 "01 - General",
@@ -1404,7 +1453,7 @@ namespace FiresGhettoNetworkMod
                 "under each dropped item/tombstone and logs the ones at risk (and any that actually\n" +
                 "fall), and a one-shot startup audit that names build pieces left non-Solid (the load\n" +
                 "order that lets an item spawn before its support). The per-spawn probe adds real cost\n" +
-                "and log volume on a busy server, so leave this OFF for normal play and the live read â€”\n" +
+                "and log volume on a busy server, so leave this OFF for normal play and the live read —\n" +
                 "turn it on only to investigate a suspected fall-through. These probes only observe and\n" +
                 "log; they do not change any physics.");
 
@@ -1455,7 +1504,8 @@ namespace FiresGhettoNetworkMod
         ConfigFixTeleportGhosts,
         ConfigFixSlowSleep,
         ConfigKeepaliveFirst,
-        ConfigFixBoatDamageFromTimeSync,
+        ConfigKeepWorldClockAtRealTime,
+        ConfigSmoothServerClockCorrections,
         ConfigEnableFallThroughDiagnostics,
         ConfigEnableBulkTransferBoost,
         ConfigBulkTransferBudgetPercent,
@@ -1463,7 +1513,7 @@ namespace FiresGhettoNetworkMod
         ConfigEnableServerOwnershipSelective
             };
             // Note: AutoTune.* configs are bound later (in Awake, after BindConfigs returns),
-            // so they don't get change-logger hooks â€” their own log lines cover that.
+            // so they don't get change-logger hooks — their own log lines cover that.
 
             foreach (var baseCfg in allConfigs)
             {

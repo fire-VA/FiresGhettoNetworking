@@ -38,9 +38,7 @@ namespace FiresGhettoNetworkMod
             ConfigEnabled.SettingChanged += (_, __) => MaybeStartSampling();
         }
 
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
-        static void OnZNetStart()
+        internal static void OnZNetStart()
         {
             if (ZRoutedRpc.instance != null)
             {

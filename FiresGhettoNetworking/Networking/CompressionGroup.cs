@@ -162,25 +162,19 @@ namespace FiresGhettoNetworkMod
         }
 
         // ====================== CONNECTION + NEGOTIATION ======================
-        [HarmonyPatch(typeof(ZNet), "OnNewConnection")]
-        [HarmonyPostfix]
-        static void OnNewConnection(ZNetPeer peer)
+        internal static void OnNewConnection(ZNetPeer peer)
         {
             // Just track the socket — the routed-RPC handler is registered globally at the ready gate,
             // and the client (not this hook) drives the exchange once it's fully connected.
             CompressionStatus.AddPeer(peer?.m_socket);
         }
 
-        [HarmonyPatch(typeof(ZNet), nameof(ZNet.Disconnect))]
-        [HarmonyPostfix]
-        static void OnDisconnect(ZNetPeer peer)
+        internal static void OnDisconnect(ZNetPeer peer)
         {
             CompressionStatus.RemovePeer(peer?.m_socket);
         }
 
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
-        static void OnZNetStart()
+        internal static void OnZNetStart()
         {
             // Register on ZRoutedRpc.instance at ZNet.Start — the same point fgn_comptest's working
             // routed RPCs register, re-bound on the fresh instance each world load. Single ZPackage
@@ -203,9 +197,7 @@ namespace FiresGhettoNetworkMod
                 }));
         }
 
-        [HarmonyPatch(typeof(ZNet), nameof(ZNet.Shutdown))]
-        [HarmonyPostfix]
-        static void OnZNetShutdown()
+        internal static void OnZNetShutdown()
         {
             ReportInterval("since the last report");
             s_session.Clear();
@@ -322,9 +314,7 @@ namespace FiresGhettoNetworkMod
         /// call re-deflated each queued packet the header check could not skip (those Deflate did not shrink) on every
         /// send, every frame and every flush, for as long as a backed-up peer kept it waiting.
         /// </summary>
-        [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Send), new[] { typeof(ZPackage) })]
-        [HarmonyTranspiler]
-        static IEnumerable<CodeInstruction> Steam_CompressOnEnqueue(IEnumerable<CodeInstruction> instructions)
+        internal static IEnumerable<CodeInstruction> Steam_CompressOnEnqueue(IEnumerable<CodeInstruction> instructions)
         {
             MethodInfo getArray = AccessTools.Method(typeof(ZPackage), nameof(ZPackage.GetArray));
             MethodInfo packetForQueue = AccessTools.Method(typeof(CompressionGroup), nameof(PacketForSendQueue));
@@ -385,9 +375,7 @@ namespace FiresGhettoNetworkMod
         // Decode on the frame itself, never on a per-socket flag, so no handshake timing can leave a frame unread. A packet
         // that begins with the magic but fails PacketFrame's checks is left as it arrived; its method hash is the magic, which
         // no RPC is registered under, so Valheim ignores it.
-        [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Recv))]
-        [HarmonyPostfix]
-        static void Steam_RecvCompressed(ref ZPackage __result, ZSteamSocket __instance)
+        internal static void Steam_RecvCompressed(ref ZPackage __result, ZSteamSocket __instance)
         {
             if (__result == null || __result.Size() < PacketFrame.HeaderBytes) return;
             int method = __result.ReadInt();

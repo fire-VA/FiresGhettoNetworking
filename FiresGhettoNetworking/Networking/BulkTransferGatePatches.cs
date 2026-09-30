@@ -65,9 +65,7 @@ namespace FiresGhettoNetworkMod
         private static int s_serverSyncCopyCount = 1;
         private static int s_budgetedGate;
 
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
-        static void ApplyOnZNetStart()
+        internal static void ApplyOnZNetStart()
         {
             if (s_applied) return;
             s_applied = true;

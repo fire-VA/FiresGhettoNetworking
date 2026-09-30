@@ -63,8 +63,6 @@ namespace FiresGhettoNetworkMod
 
         private static PayloadKind KindOf(int seq) => (PayloadKind)(seq % KindCount);
 
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
         public static void OnZNetStart()
         {
             if (ZRoutedRpc.instance == null) return;

@@ -86,8 +86,6 @@ namespace FiresGhettoNetworkMod
             return offset.sqrMagnitude > maxForward * maxForward ? offset.normalized * maxForward : offset;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "RemovePeer")]
-        [HarmonyPostfix]
         public static void RemovePeer_ClearMotion_Postfix(ZNetPeer netPeer)
         {
             if (netPeer == null) return;
@@ -120,6 +118,7 @@ namespace FiresGhettoNetworkMod
                 return true;
             }
 
+            SssTestAreas.RemindIfActive();
             try
             {
                 CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(ExtendedZoneRadius()));
@@ -167,6 +166,8 @@ namespace FiresGhettoNetworkMod
                 Vector2s zone = ZoneSystem.GetZone(GetPredictedRefPos(peer));
                 ZDOMan.instance.FindSectorObjects(zone, simulationDistance, _cdoNearScratch, _cdoDistantScratch);
             }
+            foreach (Vector3 point in SssTestAreas.Points)
+                ZDOMan.instance.FindSectorObjects(ZoneSystem.GetZone(point), simulationDistance, _cdoNearScratch, _cdoDistantScratch);
         }
 
         /// <summary>
@@ -331,8 +332,6 @@ namespace FiresGhettoNetworkMod
             ServerStatusDiagnostics.s_activeAreaLoaded_lastMissingZoneY = firstMissY;
         }
 
-        [HarmonyPatch(typeof(ZoneSystem), "Update")]
-        [HarmonyPostfix]
         public static void ZoneSystem_Update_Postfix(ZoneSystem __instance)
         {
             if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetPeers().Count == 0) return;
@@ -340,6 +339,8 @@ namespace FiresGhettoNetworkMod
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
                 if (peer.IsReady())
                     LoadNextZoneAround(__instance, GetPredictedRefPos(peer), radius);
+            foreach (Vector3 point in SssTestAreas.Points)
+                LoadNextZoneAround(__instance, point, radius);
         }
 
         /// <summary>
@@ -381,8 +382,16 @@ namespace FiresGhettoNetworkMod
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
                 if (peer.IsReady() && SimDistance.ZoneInRadius(ZoneSystem.GetZone(GetPredictedRefPos(peer)), pointZone, activeArea))
                     return true;
+            foreach (Vector3 testPoint in SssTestAreas.Points)
+                if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(testPoint), pointZone, activeArea))
+                    return true;
             return false;
         }
+
+        /// <summary>Weapon swing trails are visuals; on server-built copies of players they index trail points a headless server never records.</summary>
+        [HarmonyPatch(typeof(MeleeWeaponTrail), nameof(MeleeWeaponTrail.CustomFixedUpdate))]
+        [HarmonyPrefix]
+        public static bool MeleeWeaponTrail_CustomFixedUpdate_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
         [HarmonyPatch(typeof(Tameable), "Awake")]
         [HarmonyPrefix]
@@ -428,8 +437,6 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>A grave is a live Rigidbody launched upward on spawn; an unfrozen dedi sinks it through the floor and persists that.</summary>
-        [HarmonyPatch(typeof(TombStone), "Awake")]
-        [HarmonyPostfix]
         public static void TombStone_Awake_DediKinematic_Postfix(TombStone __instance)
         {
             if (!ServerClientUtils.ZNetIsDedicated()) return;

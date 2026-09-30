@@ -67,10 +67,10 @@ namespace FiresGhettoNetworkMod
             int min = EffectiveConfig.SteamSendRateMin();
             int max = EffectiveConfig.SteamSendRateMax();
 
-            SetSteamConfig("k_ESteamNetworkingConfig_SendRateMin", min);
-            SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", max);
+            bool minAccepted = SetSteamConfig("k_ESteamNetworkingConfig_SendRateMin", min);
+            bool maxAccepted = SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", max);
 
-            LogAppliedIfChanged("SendRates", $"Steam send rates applied: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
+            LogAppliedIfChanged("SendRates", $"Steam send rates {Outcome(minAccepted && maxAccepted)}: Min {min / 1024} KB/s, Max {max / 1024} KB/s");
         }
 
         private static readonly Dictionary<string, string> s_lastAppliedLog = new Dictionary<string, string>();
@@ -343,8 +343,8 @@ namespace FiresGhettoNetworkMod
             if (!_sendBufferSupported) return;
 
             int bytes = EffectiveConfig.SteamSendBufferBytes();
-            SetSteamConfig("k_ESteamNetworkingConfig_SendBufferSize", bytes);
-            LogAppliedIfChanged("SendBuffer", $"Steam send buffer applied: {bytes / 1024} KB");
+            bool accepted = SetSteamConfig("k_ESteamNetworkingConfig_SendBufferSize", bytes);
+            LogAppliedIfChanged("SendBuffer", $"Steam send buffer {Outcome(accepted)}: {bytes / 1024} KB");
         }
 
         /// <summary>
@@ -368,8 +368,8 @@ namespace FiresGhettoNetworkMod
             if (!_recvBufferSupported) return;
 
             int bytes = EffectiveConfig.SteamRecvBufferBytes();
-            SetSteamConfig("k_ESteamNetworkingConfig_RecvBufferSize", bytes);
-            LogAppliedIfChanged("RecvBuffer", $"Steam recv buffer applied: {bytes / 1024} KB");
+            bool accepted = SetSteamConfig("k_ESteamNetworkingConfig_RecvBufferSize", bytes);
+            LogAppliedIfChanged("RecvBuffer", $"Steam recv buffer {Outcome(accepted)}: {bytes / 1024} KB");
         }
 
         /// <summary>
@@ -394,8 +394,8 @@ namespace FiresGhettoNetworkMod
             if (!_recvMaxMessageSupported) return;
 
             int bytes = EffectiveConfig.SteamRecvMaxMessageBytes();
-            SetSteamConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", bytes);
-            LogAppliedIfChanged("RecvMaxMessage", $"Steam recv-max-message applied: {bytes / 1024} KB");
+            bool accepted = SetSteamConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", bytes);
+            LogAppliedIfChanged("RecvMaxMessage", $"Steam recv-max-message {Outcome(accepted)}: {bytes / 1024} KB");
         }
 
         // True when the running Steamworks build exposes the per-connection send-buffer
@@ -425,9 +425,7 @@ namespace FiresGhettoNetworkMod
         }
 
         // ====================== UPDATE RATE PATCH ======================
-        [HarmonyPatch(typeof(ZDOMan), "SendZDOToPeers2")]
-        [HarmonyPrefix]
-        static void AdjustUpdateInterval(ref float dt)
+        internal static void AdjustUpdateInterval(ref float dt)
         {
             if (SendScheduler.Active()) return;
             switch (EffectiveConfig.UpdateRate())
@@ -446,9 +444,7 @@ namespace FiresGhettoNetworkMod
         }
 
         // ====================== ENSURE RATES APPLY ON SERVER START ======================
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
-        static void EnsureRatesOnStart()
+        internal static void EnsureRatesOnStart()
         {
             ApplySendRates();
             ApplySendBufferSize();
@@ -466,12 +462,87 @@ namespace FiresGhettoNetworkMod
         // ====================== SEND RATE PATCHES (Steamworks) ======================
         // Members only present with FiresSteamworksPatcher (recv-buffer family) are skipped, so the value caps at
         // Steam's default.
-        private static void SetSteamConfig(string enumMemberName, int value)
+        private static bool SetSteamConfig(string enumMemberName, int value)
         {
-            if (!TryGetSteamConfigMember(enumMemberName, out var setting)) return;
+            if (!TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
             CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (id {(int)setting}) = {value} (global): calling SetConfigValue");
             bool accepted = SetConfigInt32(setting, ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Global, IntPtr.Zero, value);
             CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (global): returned {accepted}");
+            return accepted;
+        }
+
+        private static string Outcome(bool accepted) => accepted ? "applied" : "REFUSED by Steam (SetConfigValue returned false)";
+
+        // ====================== WHAT EACH CONNECTION REALLY HAS ======================
+        // "Applied" above is only what was asked for globally. Each connection's own values are read back from Steam and logged
+        // when they change, so a refused or overridden setting shows (the 2026-09-28 BC join sync drained ~128 KB per client
+        // frame with a 2 MB buffer asked for).
+        private const double ConnectionConfigCheckSeconds = 5.0;
+        private static readonly string[] ReadBackSettings =
+        {
+            "k_ESteamNetworkingConfig_RecvBufferSize",
+            "k_ESteamNetworkingConfig_RecvBufferMessages",
+            "k_ESteamNetworkingConfig_RecvMaxMessageSize",
+            "k_ESteamNetworkingConfig_SendBufferSize",
+            "k_ESteamNetworkingConfig_SendRateMax",
+        };
+        private const string ConfigPrefix = "k_ESteamNetworkingConfig_";
+        private static readonly Dictionary<uint, string> s_lastConnectionConfig = new Dictionary<uint, string>();
+        private static double s_nextConnectionConfigCheck;
+        private static IntPtr s_int32Result;
+
+        internal static void ReportConnectionConfigPeriodically()
+        {
+            if (ZNet.instance == null) return;
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (now < s_nextConnectionConfigCheck) return;
+            s_nextConnectionConfigCheck = now + ConnectionConfigCheckSeconds;
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+            {
+                uint conn = GetConnectionHandle(peer);
+                if (conn == 0u) continue;
+                var parts = new List<string>(ReadBackSettings.Length);
+                foreach (string setting in ReadBackSettings)
+                    parts.Add($"{setting.Substring(ConfigPrefix.Length)} {DescribeConnectionConfig(setting, conn)}");
+                string line = string.Join(", ", parts);
+                if (s_lastConnectionConfig.TryGetValue(conn, out string last) && last == line) continue;
+                s_lastConnectionConfig[conn] = line;
+                string who = peer.m_server ? "the server" : (string.IsNullOrEmpty(peer.m_playerName) ? peer.m_uid.ToString() : peer.m_playerName);
+                LoggerOptions.LogMessage($"[SteamConfig] connection to {who}, read back from Steam: {line}");
+            }
+        }
+
+        private static string DescribeConnectionConfig(string enumMemberName, uint conn)
+        {
+            if (!TryReadConnectionConfig(enumMemberName, conn, out int value, out ESteamNetworkingGetConfigValueResult result))
+                return result == default ? "unreadable" : result.ToString().Replace("k_ESteamNetworkingGetConfigValue_", "error ");
+            string inherited = result == ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OKInherited ? " (inherited)" : string.Empty;
+            return enumMemberName.EndsWith("Messages", StringComparison.Ordinal) ? $"{value}{inherited}" : $"{value / 1024} KB{inherited}";
+        }
+
+        internal static bool TryReadConnectionConfig(string enumMemberName, uint conn, out int value, out ESteamNetworkingGetConfigValueResult result)
+        {
+            value = 0;
+            result = default;
+            if (conn == 0u || !TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
+            try
+            {
+                if (s_int32Result == IntPtr.Zero) s_int32Result = Marshal.AllocHGlobal(sizeof(int));
+                ulong size = sizeof(int);
+                var scope = ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection;
+                var handle = new IntPtr((long)conn);
+                result = ZNet.instance != null && ZNet.instance.IsDedicated()
+                    ? SteamGameServerNetworkingUtils.GetConfigValue(setting, scope, handle, out _, s_int32Result, ref size)
+                    : SteamNetworkingUtils.GetConfigValue(setting, scope, handle, out _, s_int32Result, ref size);
+                if (result != ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OK
+                    && result != ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OKInherited) return false;
+                value = Marshal.ReadInt32(s_int32Result);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         [HarmonyPatch(typeof(ZSteamSocket), "RegisterGlobalCallbacks")]
@@ -487,9 +558,7 @@ namespace FiresGhettoNetworkMod
         // Vanilla SendZDOs: skip the peer while queue > 10240, budget = 10240 - queue, skip under 2048. The queue check
         // becomes the peer's own window (recording when the window held the peer back), the budget uses the same window,
         // and the package it fills is clamped to Queue Size so a wide window never means one huge package.
-        [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
-        [HarmonyTranspiler]
-        static IEnumerable<CodeInstruction> SendZDOs_WindowTranspiler(IEnumerable<CodeInstruction> instructions)
+        internal static IEnumerable<CodeInstruction> SendZDOs_WindowTranspiler(IEnumerable<CodeInstruction> instructions)
         {
             var code = new List<CodeInstruction>(instructions);
             var gate = AccessTools.Method(typeof(LinkController), nameof(LinkController.SendGateWindow));

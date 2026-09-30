@@ -27,9 +27,6 @@ namespace FiresGhettoNetworkMod
         private const int VanillaMinBudgetBytes = 2048;
         private const float RollupSeconds = 10f;
 
-        [HarmonyPatch(typeof(ZDOMan), "SendZDOs")]
-        [HarmonyPrefix]
-        [HarmonyPriority(Priority.Last)]
         public static void SendZDOs_Heartbeat_Prefix(ZDOMan.ZDOPeer peer, bool flush)
         {
             if (FiresGhettoNetworkMod.ConfigEnableSendHeartbeatLog == null
@@ -78,8 +75,6 @@ namespace FiresGhettoNetworkMod
             s_stats[uid] = st;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "RemovePeer")]
-        [HarmonyPostfix]
         public static void RemovePeer_ClearStats_Postfix(ZNetPeer netPeer)
         {
             if (netPeer == null) return;

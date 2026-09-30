@@ -30,7 +30,10 @@ namespace FiresGhettoNetworkMod
             public int IdleStreak;
         }
 
-        private const int MaxIdleStreak = 3;
+        private const int MaxIdleStreak = 5;
+        // Empty due ticks tolerated (each rechecked a quarter interval later) before a player is backed off as idle.
+        private const int IdleGraceTicks = 2;
+        private const double EmptyRecheckFraction = 0.25;
         private const double IdleMaxWaitSeconds = 0.2;
 
         private static readonly Dictionary<ZDOMan.ZDOPeer, Slot> s_slots = new Dictionary<ZDOMan.ZDOPeer, Slot>();
@@ -61,8 +64,7 @@ namespace FiresGhettoNetworkMod
 
         public static float TargetHz() => VanillaSendHz * VanillaFloor.Percent(EffectiveConfig.UpdateRate()) / 100f;
 
-        [HarmonyPatch(typeof(ZNet), "Start"), HarmonyPostfix]
-        static void OnZNetStart()
+        internal static void OnZNetStart()
         {
             ResetSlots();
             s_yieldTo = ForeignScheduler();
@@ -73,11 +75,9 @@ namespace FiresGhettoNetworkMod
                     + $"within {Mathf.Clamp(ConfigBudgetMs.Value, MinBudgetMs, MaxBudgetMs):F1} ms per frame.");
         }
 
-        [HarmonyPatch(typeof(ZNet), "Shutdown"), HarmonyPostfix]
-        static void OnZNetShutdown() => ResetSlots();
+        internal static void OnZNetShutdown() => ResetSlots();
 
-        [HarmonyPatch(typeof(ZDOMan), "RemovePeer"), HarmonyPostfix]
-        static void OnRemovePeer(ZNetPeer netPeer)
+        internal static void OnRemovePeer(ZNetPeer netPeer)
         {
             if (netPeer == null || s_slots.Count == 0) return;
             ZDOMan.ZDOPeer gone = null;
@@ -90,8 +90,7 @@ namespace FiresGhettoNetworkMod
             if (gone != null) s_slots.Remove(gone);
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "SendZDOToPeers2"), HarmonyPrefix]
-        static bool SendZDOToPeers2_Prefix(ZDOMan __instance)
+        internal static bool SendZDOToPeers2_Prefix(ZDOMan __instance)
         {
             if (!Active()) return true;
             SendDuePlayers(__instance);
@@ -133,7 +132,13 @@ namespace FiresGhettoNetworkMod
                 slot.IdleStreak = sent ? 0 : Math.Min(slot.IdleStreak + 1, MaxIdleStreak);
                 if (due)
                 {
-                    double wait = Math.Min(interval * (1 << slot.IdleStreak), Math.Max(interval, IdleMaxWaitSeconds));
+                    // An empty due tick usually means the next update is a few ms away (a moving player's own updates come every
+                    // ~50 ms on their clock, which drifts against this one), so look again soon instead of doubling the wait: R37
+                    // relayed a moving bot at 10-14/s with a 96 ms median gap because every empty tick waited 100 ms. Only a
+                    // player with nothing new for IdleGraceTicks ticks in a row backs off.
+                    double wait = sent ? interval
+                        : slot.IdleStreak <= IdleGraceTicks ? interval * EmptyRecheckFraction
+                        : Math.Min(interval * (1 << (slot.IdleStreak - IdleGraceTicks)), Math.Max(interval, IdleMaxWaitSeconds));
                     slot.NextDue = Math.Max(slot.NextDue + wait, now);
                 }
                 LinkController.CountSend(peer);

@@ -27,21 +27,28 @@ The mod is layered. Installing it does not turn everything on — most of the he
 Everything here is server-side and needs nothing installed on your players' machines:
 
 - Player limit + advertised player limit, crossplay backend selection
-- Steam send rate / send buffer, send queue size, ZDO send rate — ⚠️ the Steam rate and buffer items reach **Steam peers only**
+- Steam send rate / send buffer, send queue size, ZDO send rate — ⚠️ the Steam rate and buffer items reach **Steam peers only**; see [Steam vs crossplay](#steam-vs-crossplay-playfab--what-each-player-actually-gets)
 - Per-peer adaptive send rate (each client ramps toward its own real link capacity)
 - **Bulk-transfer gate** — raises the 20 KB queue limit inside every loaded ServerSync / ServerCharacters copy, so large config syncs on join stop stalling and dropping peers. This is one of the biggest real-world wins and it is entirely server-side
 - Server-side auto-tune, plus all diagnostics and admin commands (`fgn_headroom`, `fgn_flood`, `fgn_socketramp`, `fgn_comptest`, `fgn_zdoflood`, `fgn_links`)
+- **World clock kept at real time** — a slow server frame no longer lets the day, waves and timers fall behind (`Keep World Clock At Real Time`)
+- **Join grace** — a player on a slow machine is not dropped after 30 seconds while a big world loads; the server waits up to 5 minutes for their first spawn (`Join Grace Seconds`, 0 = vanilla)
+- **Crossplay compression off the main thread** — PlayFab's own compression runs on a worker thread, so one large message no longer freezes the server for up to a second (`Fix PlayFab Compression Stalls`)
 - Everything under **Server-Side Simulation**, if you enable it (see below)
 
 ### Server + client
 
 Installing on both adds the client-side half:
 
-- **Deflate packet compression** — negotiated per peer, so it only engages when both ends have the mod. A vanilla client simply never negotiates and stays uncompressed
+- **Deflate packet compression** — negotiated per peer, so it only engages when both ends have the mod. A vanilla client simply never negotiates and stays uncompressed. ⚠️ Steam connections only — a crossplay peer never compresses even with the mod on both ends
 - Client-side interpolation and prediction — smooths other players' movement
 - Client auto-tune: zone-load batching, instantiation budget, receive-buffer sizing, destroy throttling
 - HyperBoost receive side (also needs FiresSteamworksPatcher)
-- **Boat damage fix** — every 2 seconds the server corrects each player's clock, and vanilla jumps the waves to match, which a boat with players aboard takes as slamming into the water. The mod eases those corrections in so the water never jumps. A ship is damaged by the game of whoever owns it (normally someone aboard), so every player who sails needs the mod
+- **Smooth server clock corrections (the boat damage fix)** — every 2 seconds the server corrects each player's clock, and vanilla jumps the waves, the day and timers to match, which a boat with players aboard takes as slamming into the water. The mod eases those corrections in so nothing jumps or runs backwards (`Smooth Server Clock Corrections`, which replaces the old `Fix Boat Damage From Server Time Sync`). A ship is damaged by the game of whoever owns it (normally someone aboard), so every player who sails needs the mod
+- **Crossplay logout save** — on a crossplay (PlayFab) connection, logging out or quitting from a world waits (at most 5 seconds) until the server has received everything, so your character save is not lost (`Finish Sending Before Logout`)
+- **Remote Motion (on by default)** — draws other players from their own time-stamped updates, with far less jitter than vanilla. See [Client-side settings](#client-side-settings-the-only-ones-you-should-touch-you-heathens)
+- **Remote Arrows** — an arrow or other shot fired by another player who has the mod flies on your screen from where that player is right now, so your copy of it lands where theirs did (`Remote Arrows`, on by default)
+- **Shared monster targets** — every game knows who a monster is after, even when another game runs that monster, and a monster keeps its target when it changes owner. Companions and other players react to the right fight (`Sync Monster Targets`, on by default)
 - **The ship follows its helmsman** — whoever takes the helm gets the ship, so steering answers right away instead of going through another player's game (`Give The Ship To Its Helmsman`, on by default). Only the ship's current owner needs the mod
 
 ### Default settings
@@ -71,6 +78,8 @@ Note that mobs are still simulated by the nearest **client** at this point. The 
 This is the switch that moves creature simulation itself onto the server. Ownership is simulation: whoever owns a creature runs its AI, pathing, attacks, movement physics and death checks. There is a broad variant and a Selective one (creatures, plus ships only if you have also enabled server-side ship physics).
 
 **We do not recommend enabling this.** It is the least-tested path in the mod, and handing rigidbody simulation to a headless server has knock-on effects — vehicles are the usual casualty. Every other server-authority feature above works without it. If you do want to experiment, use **Selective** rather than broad, and expect to keep an eye on your boats and carts.
+
+Either way, tamed creatures (pets, companions) are never handed to the server; they stay with the players, as in vanilla. Since 1.5.15, Selective also takes over a monster a nearby player is running (never a tamed one) once the server has it loaded, instead of waiting for that player to leave.
 
 ## Auto-Tune (the new feature in 1.2.1)
 
@@ -150,6 +159,9 @@ Valheim has two network backends. Steam-to-Steam players ride `ZSteamSocket`. An
 | Server-authority patches (ownership, ships, zones, spawning) | ✅ | ✅ |
 | Boat damage fix / helmsman ownership | ✅ | ✅ |
 | Client auto-tune (zone batching, instantiation budget) | ✅ | ✅ |
+| Remote Motion (optional) | ✅ | ✅ |
+| Compression stall fix | — not needed | ✅ PlayFab only |
+| Logout save (finish sending before logout) | — not needed | ✅ PlayFab only |
 
 **Rule of thumb:** anything that changes *how the bytes move* is Steam-only. Anything that changes *how many bytes there are* works for everyone. The second group is the larger half of the mod, so a crossplay server still gains plenty — it just does not get the transport tuning.
 
@@ -219,7 +231,16 @@ If you're a player joining someone else's server, your config has dozens of sett
  If you believe you know best, feel free to adjust, but adjusting settings incorrectly 
  can easily make the mod have the opposite effect from intended...
 
-The Player Sync section has four options:
+The Player Sync section has these options:
+
+- **Remote Motion (experimental)** *(default: on)*
+  Draws other players from their own time-stamped updates: a short buffer, carried on by their velocity when an update is late, and corrections blended in instead of snapped. While it is on it replaces the interpolation and prediction options below. It needs the other player to run FGN 1.5.0 or later; anyone else is drawn as vanilla. On by default since 1.5.5 (Delay 20 ms, Extrapolation Cap 100 ms, Blend 100 ms), after testing against vanilla; a config file that still had the old untouched defaults is moved to the new ones once. Leave its Delay, Extrapolation Cap and Blend values alone unless you are measuring.
+
+- **Remote Arrows** *(default: on)*
+  Flies other players' shots on your screen from where the shooter is now, so what you see lands where it really did. Players without the mod are shown as vanilla.
+
+- **Send Remote Motion Timestamps** *(default: on)*
+  Stamps your own position updates (8 bytes each) so players who use Remote Motion can draw you with it. Harmless to players without the mod.
 
 - **Enable Client-Side Interpolation** *(default: off)*
   Smooths other players' movement on your screen by interpolating between received network positions, eliminating the small snapping that comes from discrete network ticks. Most players don't need this — the rest of the mod's improvements deliver positions smoothly enough on their own, and interpolation adds a small render-lag. Turn ON if you still see other players snap/teleport on a healthy connection.
@@ -246,6 +267,12 @@ Every 5 minutes the mod writes a short report, so you can see what it is doing w
 - `[Links]` (dedicated server) — each player's connection: send window, queue, and round trip broken into stages. `fgn_links` prints it on demand.
 - `[Upload]` (clients, with `Log Level` set to Info) — what your game sent to the server, by message and by object type.
 - `fgn_rtt` in a client console times a round trip to the server stage by stage.
+- A dedicated server also logs a health summary every 5 minutes: frame rate, lost game time, the worst frame split by part, with the slowest RPC handler.
+
+Two admin test commands, for measuring, never saved:
+
+- `fgn_netsim` adds artificial lag and jitter to your own connection for a limited time.
+- `fgn_sss_areas N` makes the server also simulate N busy areas, to see what Server-Side Simulation would cost with more players (`fgn_sss_areas 0` clears it).
 
 ## Installation
 

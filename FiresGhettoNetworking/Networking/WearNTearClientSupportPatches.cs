@@ -31,8 +31,6 @@ namespace FiresGhettoNetworkMod
             throw new NotImplementedException("Harmony reverse patch failed for WearNTear.GetMaxSupport");
         }
 
-        [HarmonyPatch(typeof(WearNTear), "UpdateSupport")]
-        [HarmonyPrefix]
         public static bool UpdateSupport_Prefix(WearNTear __instance)
         {
             // `!cfg?.Value ?? false` would parse as `(!cfg?.Value) ?? false` and

@@ -59,9 +59,7 @@ namespace FiresGhettoNetworkMod
         // Diagnostic: log the FINAL backend when ZNet actually starts. If it differs from what
         // ApplyForceCrossplay set, something reset it after ParseServerArguments (and we'll know to
         // re-assert it on a later hook).
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
-        static void LogBackendAtZNetStart()
+        internal static void LogBackendAtZNetStart()
         {
             LoggerOptions.LogInfo($"[Crossplay] ZNet.Start — online backend is now {ZNet.m_onlineBackend} (dedi={isDedicatedDetected}).");
             if (isDedicatedDetected) LoggerOptions.LogMessage($"Player limit: {DescribePlayerLimit()}.");

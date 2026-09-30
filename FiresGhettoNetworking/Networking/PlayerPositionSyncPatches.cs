@@ -45,6 +45,8 @@ namespace FiresGhettoNetworkMod
                 "ZDO priority boost, larger Steam buffers) usually deliver positions smoothly enough on their own,\n" +
                 "and interpolation adds a small render-lag that some players prefer to avoid. Turn ON if you still\n" +
                 "see other players snap/teleport even on a healthy connection.\n" +
+                "NOTE: for now vanilla (off) is smoother. At normal update rates this draws other players mostly at their last\n" +
+                "received position, so they lurch forward at the update rate. A replacement is being built and measured.\n" +
                 "CLIENT-ONLY — no server impact.");
 
             ConfigEnablePlayerPrediction = config.Bind(
@@ -54,6 +56,8 @@ namespace FiresGhettoNetworkMod
                 "Extrapolates other players' positions forward between network updates using their last known velocity.\n" +
                 "Can help on high latency (>100ms) but may cause overshooting at low ping.\n" +
                 "Disabled by default — only enable if interpolation alone feels laggy.\n" +
+                "NOTE: for now vanilla (off) is smoother. Prediction only acts with interpolation on, and it overshoots at every\n" +
+                "change of direction, so strafing players jiggle back and forth. A replacement is being built and measured.\n" +
                 "CLIENT-ONLY — no server impact.");
 
             ConfigSmoothingMinInterval = config.Bind(
@@ -155,10 +159,11 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>Per received packet: rebuilds the velocity estimate and the rolling packet interval. Clients only.</summary>
-        [HarmonyPatch(typeof(ZDO), nameof(ZDO.Deserialize))]
-        [HarmonyPostfix]
         public static void ZDO_Deserialize_Postfix(ZDO __instance)
         {
+            // Remote Motion takes stamped player updates first (it replaces the options below while on).
+            RemoteMotion.Receive(__instance);
+            if (RemoteMotion.Drawing) return;
             if (ConfigEnableClientInterpolation == null || ConfigEnablePlayerPrediction == null) return;
             if (!ConfigEnableClientInterpolation.Value && !EffectiveConfig.EnablePlayerPrediction()) return;
             if (ZNet.instance == null || ZNet.instance.IsServer()) return;
@@ -246,8 +251,18 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         public static void Player_LateUpdate_Postfix(Player __instance)
         {
-            if (__instance == null || __instance == Player.m_localPlayer) return;
+            if (__instance == null) return;
+            if (__instance == Player.m_localPlayer)
+            {
+                LagFairDodge.Sample(__instance);
+                return;
+            }
             if (ZNet.instance == null || ZNet.instance.IsServer()) return;
+            if (RemoteMotion.Drawing)
+            {
+                RemoteMotion.Draw(__instance);   // players without stamps stay vanilla
+                return;
+            }
             if (ConfigEnableClientInterpolation == null || !ConfigEnableClientInterpolation.Value) return;
 
             ZNetView nview = __instance.m_nview;

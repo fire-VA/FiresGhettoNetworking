@@ -4,10 +4,9 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Applies vanilla's ownership-edge snap (ZSyncTransform.OwnerSync) at the top of FixedUpdate instead of
-    /// in LateUpdate, so a creature's first owned physics step starts from the ZDO position rather than a
-    /// dead-reckoned one that may have drifted into geometry. Velocity and m_wasOwner are left to vanilla;
-    /// creatures only.
+    /// Applies vanilla's ownership-edge snap (ZSyncTransform.OwnerSync) at the top of FixedUpdate instead of in LateUpdate,
+    /// so a creature's first owned physics step starts from the ZDO position rather than a dead-reckoned one; ships and carts
+    /// also take their ZDO velocity and wait for the ground under them (VehicleOwnershipEdge).
     /// </summary>
     [HarmonyPatch]
     public static class OwnershipHandoffPatches
@@ -26,14 +25,26 @@ namespace FiresGhettoNetworkMod
         private const float ReportIntervalSec = 30f;
         private static float _nextReportTime;
 
+        /// <summary>FGN's one CustomFixedUpdate hook: vanilla's ClientSync stays off a player Remote Motion draws (it would move the
+        /// body by its own lerp and velocity between frames), then the ownership-edge snap below.</summary>
         [HarmonyPatch(typeof(ZSyncTransform), nameof(ZSyncTransform.CustomFixedUpdate))]
         [HarmonyPrefix]
-        public static void ZSyncTransform_CustomFixedUpdate_PreSnapOnOwnershipGain(
+        public static bool ZSyncTransform_CustomFixedUpdate_Prefix(ZSyncTransform __instance, ZNetView ___m_nview, Rigidbody ___m_body)
+        {
+            if (RemoteMotion.Handles(___m_nview) || RemoteArrows.Handles(___m_nview)) return false;
+            ZSyncTransform_CustomFixedUpdate_PreSnapOnOwnershipGain(__instance, ___m_nview, ___m_body);
+            return true;
+        }
+
+        private static void ZSyncTransform_CustomFixedUpdate_PreSnapOnOwnershipGain(
             ZSyncTransform __instance,
             ZNetView ___m_nview,
             Rigidbody ___m_body)
         {
             if (__instance == null || ___m_nview == null || !___m_nview.IsValid())
+                return;
+
+            if (VehicleOwnershipEdge.HoldsAny && VehicleOwnershipEdge.KeepHolding(__instance, ___m_nview.IsOwner()))
                 return;
 
             ZDO zdo = ___m_nview.GetZDO();
@@ -45,7 +56,12 @@ namespace FiresGhettoNetworkMod
                 return;
 
             var character = __instance.GetComponent<Character>();
-            if (character == null || character is Player)
+            if (character == null)
+            {
+                VehicleOwnershipEdge.OnOwnershipGained(__instance, zdo, ___m_body);
+                return;
+            }
+            if (character is Player)
                 return;
 
             Vector3 target = zdo.GetPosition();

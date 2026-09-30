@@ -81,28 +81,29 @@ namespace FiresGhettoNetworkMod
 
         public static void InitConfig(ConfigFile config)
         {
-            ConfigEnabled = config.Bind("10 - Server Authority", "Balance Creature Ownership", true,
+            ConfigEnabled = config.Bind("10 - Server Authority", "Balance Creature Ownership", false,
                 "Vanilla gives a creature to whichever nearby player the server checks first and keeps it there. With this on, a\n" +
                 "creature being fought moves to the player fighting it, otherwise to a nearby player with clearly lower ping, so its\n" +
                 "movement, attacks and the hits on it are worked out on the best-placed machine. The current owner's game hands the\n" +
                 "creature over itself, as vanilla does with a chest someone opens, so no update in flight can undo the move, and hits\n" +
                 "already on their way are passed on. Bosses, tames, ridden creatures and creatures mid-attack are never moved.\n" +
+                "Every move restarts the creature's AI (its target, path and attack timers live on the owner's machine), so in\n" +
+                "groups that fight together it can look like desync. Off by default.\n" +
                 "Off while Server-Side Simulation owns creatures. DEDICATED SERVER; only players with FGN hand creatures over.");
             ConfigPingMarginMs = config.Bind("10 - Server Authority", "Ownership Ping Margin", 40,
                 new ConfigDescription("How much lower, in ms, a nearby player's ping must be before a creature nobody is fighting moves to them.",
                     new AcceptableValueRange<int>(10, 300)));
         }
 
-        [HarmonyPatch(typeof(ZNet), "OnNewConnection"), HarmonyPostfix]
-        static void OnNewConnection(ZNet __instance, ZNetPeer peer)
+        internal static void OnNewConnection(ZNet __instance, ZNetPeer peer)
         {
             if (peer?.m_rpc == null) return;
             if (__instance.IsServer()) peer.m_rpc.Register<ZDOID, bool, string>(ResultRpc, OnResult);
             else peer.m_rpc.Register<ZDOID, long>(HandOffRpc, OnHandOff);
+            HelmOwnership.RegisterPeerRpcs(__instance, peer);
         }
 
-        [HarmonyPatch(typeof(ZNet), "Shutdown"), HarmonyPostfix]
-        static void OnShutdown()
+        internal static void OnShutdown()
         {
             s_owned.Clear();
             s_streaks.Clear();
@@ -150,9 +151,9 @@ namespace FiresGhettoNetworkMod
                 && ZNet.instance != null && ZNet.instance.IsDedicated();
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "Update"), HarmonyPostfix]
-        static void Balance(ZDOMan __instance)
+        internal static void Balance(ZDOMan __instance)
         {
+            HelmOwnership.ReturnEmptyShipsToServer(__instance);
             if (!Active()) return;
             double now = Time.realtimeSinceStartupAsDouble;
             if (now < s_nextPass) return;
@@ -345,6 +346,8 @@ namespace FiresGhettoNetworkMod
         static bool OnDamage(Character __instance, HitData hit)
         {
             if (hit == null || Player.m_localPlayer == null) return true;
+            // This is FGN's one Character.RPC_Damage hook; the PvP lag-fair dodge rides on it.
+            if (LagFairDodge.Forgive(__instance, hit)) return false;
             var view = s_characterView(__instance);
             if (view == null || !view.IsValid()) return true;
             var zdo = view.GetZDO();

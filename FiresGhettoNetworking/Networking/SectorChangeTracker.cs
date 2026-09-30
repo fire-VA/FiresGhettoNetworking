@@ -140,15 +140,13 @@ namespace FiresGhettoNetworkMod
                     new AcceptableValueRange<float>(2f, 300f)));
         }
 
-        [HarmonyPatch(typeof(ZNet), "Start"), HarmonyPostfix]
-        static void OnStart(ZNet __instance)
+        internal static void OnStart(ZNet __instance)
         {
             s_tracking = __instance.IsServer();
             ResetTracking();
         }
 
-        [HarmonyPatch(typeof(ZNet), "Shutdown"), HarmonyPostfix]
-        static void OnShutdown()
+        internal static void OnShutdown()
         {
             s_tracking = false;
             ResetTracking();
@@ -164,8 +162,7 @@ namespace FiresGhettoNetworkMod
             s_frame = 1;
         }
 
-        [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPrefix]
-        static void NextFrame() => s_frame++;
+        internal static void NextFrame() => s_frame++;
 
         // Loading files in puts objects straight into their sectors without going through AddToSector, so nothing stamps
         // them. Vanilla only does that before anyone has connected, but a mod that loads later would otherwise leave
@@ -173,8 +170,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.LoadChunks)), HarmonyPostfix]
         static void OnLoadChunks() => ResetTracking();
 
-        [HarmonyPatch(typeof(ZDOMan), "RemovePeer"), HarmonyPostfix]
-        static void OnRemovePeer(ZNetPeer netPeer)
+        internal static void OnRemovePeer(ZNetPeer netPeer)
         {
             ZDOMan.ZDOPeer gone = null;
             foreach (var peer in s_scans.Keys)
@@ -212,8 +208,7 @@ namespace FiresGhettoNetworkMod
             if (s_tracking) Mark(__instance);
         }
 
-        [HarmonyPatch(typeof(ZDO), nameof(ZDO.Deserialize)), HarmonyPostfix]
-        static void OnDeserialize(ZDO __instance)
+        internal static void OnDeserialize(ZDO __instance)
         {
             if (s_tracking) Mark(__instance);
         }
@@ -224,8 +219,7 @@ namespace FiresGhettoNetworkMod
             if (s_tracking) Mark(__instance);
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "CreateSyncList"), HarmonyPrefix]
-        static void ScanBegin(ZDOMan.ZDOPeer peer)
+        internal static void ScanBegin(ZDOMan.ZDOPeer peer)
         {
             s_scanPeer = null;
             s_scan = null;
@@ -247,8 +241,7 @@ namespace FiresGhettoNetworkMod
             s_scan = scans;
         }
 
-        [HarmonyPatch(typeof(ZDOMan), "CreateSyncList"), HarmonyFinalizer]
-        static void ScanEnd()
+        internal static void ScanEnd()
         {
             s_scanPeer = null;
             s_scan = null;

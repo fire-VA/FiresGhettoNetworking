@@ -114,8 +114,6 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
         public static void OnZNetStart()
         {
             if (ZRoutedRpc.instance == null) return;

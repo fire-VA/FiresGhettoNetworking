@@ -24,8 +24,6 @@ namespace FiresGhettoNetworkMod
         // Sliding window of recent disconnect timestamps for burst detection.
         private static readonly List<float> _recentDisconnects = new List<float>();
 
-        [HarmonyPatch(typeof(ZNet), "OnNewConnection")]
-        [HarmonyPostfix]
         public static void OnNewConnection_StampConnectTime(ZNetPeer peer)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
@@ -33,8 +31,6 @@ namespace FiresGhettoNetworkMod
             _connectedSince[peer.m_socket] = Time.realtimeSinceStartup;
         }
 
-        [HarmonyPatch(typeof(ZNet), nameof(ZNet.Disconnect))]
-        [HarmonyPrefix]
         public static void Disconnect_LogPeer(ZNetPeer peer)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;

@@ -137,8 +137,7 @@ namespace FiresGhettoNetworkMod
         private static ServerFrameProfile.SubsystemTicks s_frameDrainSubsystems;
         private static ServerFrameProfile.SubsystemTicks s_previousFrameDrainSubsystems;
 
-        [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Recv)), HarmonyTranspiler]
-        static IEnumerable<CodeInstruction> NoteEachSteamArrival(IEnumerable<CodeInstruction> instructions)
+        internal static IEnumerable<CodeInstruction> NoteEachSteamArrival(IEnumerable<CodeInstruction> instructions)
         {
             var code = new List<CodeInstruction>(instructions);
             MethodInfo noteArrival = AccessTools.Method(typeof(RoundTripTrace), nameof(NoteArrival));
@@ -169,6 +168,7 @@ namespace FiresGhettoNetworkMod
             s_lastArrivalBytes = message.m_cbSize;
             s_drainPackets++;
             s_drainBytes += message.m_cbSize;
+            RecvPace.Note(message.m_cbSize);
         }
 
         [HarmonyPatch(typeof(ZRpc), nameof(ZRpc.Update)), HarmonyPrefix]

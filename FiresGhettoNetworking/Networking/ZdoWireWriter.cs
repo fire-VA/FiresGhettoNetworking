@@ -153,8 +153,6 @@ namespace FiresGhettoNetworkMod
             if (!s_nestedReady) LoggerOptions.LogWarning("[ZdoWrite] vanilla nested-package writes kept: FGN's copy-free write did not match vanilla's.");
         }
 
-        [HarmonyPatch(typeof(ZNet), "Start")]
-        [HarmonyPostfix]
         public static void ZNet_Start_DetectForeignSerializer()
         {
             if (s_foreignScanDone) return;

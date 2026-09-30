@@ -20,8 +20,6 @@ namespace FiresGhettoNetworkMod
             return false;
         }
 
-        [HarmonyPatch(typeof(ZRoutedRpc), "RouteRPC")]
-        [HarmonyPrefix]
         public static bool RouteRPC_Prefix(ZRoutedRpc __instance, ZRoutedRpc.RoutedRPCData rpcData, bool __runOriginal)
         {
             if (!__runOriginal) return false;

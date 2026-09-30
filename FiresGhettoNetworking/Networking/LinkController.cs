@@ -128,8 +128,7 @@ namespace FiresGhettoNetworkMod
             s_totalSent = AccessTools.FieldRefAccess<ZSteamSocket, int>("m_totalSent");
         }
 
-        [HarmonyPatch(typeof(ZNet), "Start"), HarmonyPostfix]
-        static void OnZNetStart()
+        internal static void OnZNetStart()
         {
             s_links.Clear();
             if (ZRoutedRpc.instance != null)
@@ -137,6 +136,9 @@ namespace FiresGhettoNetworkMod
                 ZRoutedRpc.instance.Register(RpcLinksRequest, new Action<long>(RPC_LinksRequest));
                 ZRoutedRpc.instance.Register<string>(RpcLinksReply, RPC_LinksReply);
             }
+            SssTestAreas.RegisterCommandAndRpcs();
+            LagFairDodge.RegisterRpcs();
+            NetSim.RegisterCommand();
             if (s_commandRegistered) return;
             s_commandRegistered = true;
             new Terminal.ConsoleCommand("fgn_links",
@@ -145,14 +147,15 @@ namespace FiresGhettoNetworkMod
                 new Terminal.ConsoleEvent(OnLinksCommand));
         }
 
-        [HarmonyPatch(typeof(ZNet), "Shutdown"), HarmonyPostfix]
-        static void OnZNetShutdown() => s_links.Clear();
+        internal static void OnZNetShutdown()
+        {
+            s_links.Clear();
+            NetSim.TurnOff("the session ended");
+        }
 
-        [HarmonyPatch(typeof(ZNet), "OnDestroy"), HarmonyPostfix]
-        static void OnZNetDestroy() => s_links.Clear();
+        internal static void OnZNetDestroy() => s_links.Clear();
 
-        [HarmonyPatch(typeof(ZDOMan), "RemovePeer"), HarmonyPostfix]
-        static void OnRemovePeer(ZNetPeer netPeer)
+        internal static void OnRemovePeer(ZNetPeer netPeer)
         {
             if (netPeer == null || !s_links.TryGetValue(netPeer, out var link)) return;
             if (ZNet.instance != null && ZNet.instance.IsDedicated() && link.HasStatus)
@@ -251,9 +254,10 @@ namespace FiresGhettoNetworkMod
                 if (link.Window > max) link.Window = max;
         }
 
-        private static Link LinkOf(ZDOMan.ZDOPeer peer)
+        private static Link LinkOf(ZDOMan.ZDOPeer peer) => LinkOf(peer?.m_peer);
+
+        private static Link LinkOf(ZNetPeer netPeer)
         {
-            var netPeer = peer?.m_peer;
             if (netPeer == null) return null;
             if (!s_links.TryGetValue(netPeer, out var link))
             {
@@ -265,6 +269,32 @@ namespace FiresGhettoNetworkMod
             }
             return link;
         }
+
+        /// <summary>
+        /// Links used to start at a player's first world update, which comes only after the server accepts its PeerInfo. A mod
+        /// can hold that PeerInfo while it sends join data (FAT's BC join sync, 151 MB), so a first-time joiner downloaded on
+        /// Steam's own estimate instead of the pinned rate, and that estimate can sit near Send Rate Min (rig R6: 1.4 MB/s to
+        /// the bot beside 8.4 MB/s to a player whose estimate happened to climb). Every connection is stepped from the moment it
+        /// connects, and the link of a peer that leaves before joining is dropped here, since ZDOMan never sees it.
+        /// </summary>
+        private static void StepEveryConnection(ZNet net)
+        {
+            List<ZNetPeer> peers = net.GetPeers();
+            foreach (ZNetPeer peer in peers)
+                if (peer?.m_socket != null) UpdateLink(LinkOf(peer));
+
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (now < s_nextPrune) return;
+            s_nextPrune = now + PruneSeconds;
+            s_departed.Clear();
+            foreach (ZNetPeer peer in s_links.Keys)
+                if (!peers.Contains(peer)) s_departed.Add(peer);
+            foreach (ZNetPeer peer in s_departed) s_links.Remove(peer);
+        }
+
+        private const double PruneSeconds = 5.0;
+        private static readonly List<ZNetPeer> s_departed = new List<ZNetPeer>();
+        private static double s_nextPrune;
 
         private static bool AdaptiveWindowEnabled() => ConfigAdaptiveWindow == null || ConfigAdaptiveWindow.Value;
 
@@ -295,7 +325,14 @@ namespace FiresGhettoNetworkMod
             link.Connection = 0u;
             link.RatePinned = false;
             link.GoodputPrimed = false;
+        }
+
+        // Once per crossplay link, when the peer is known by name: a PlayFab socket exists before the handshake, where the name is
+        // still empty and the uid 0, and M1's first notice read "0 is connected".
+        private static void NoticeCrossplay(Link link)
+        {
             if (!link.Crossplay || link.CrossplayNoticed) return;
+            if (!link.Peer.m_server && string.IsNullOrEmpty(link.Peer.m_playerName)) return;
             link.CrossplayNoticed = true;
             string connection = link.Peer.m_server ? "Connected to the server" : PeerName(link.Peer) + " is connected";
             LoggerOptions.LogMessage($"[Crossplay] {connection} over crossplay (PlayFab). FGN compression, Steam send rates and the "
@@ -307,6 +344,7 @@ namespace FiresGhettoNetworkMod
         private static void SampleSteamStatus(Link link, double now)
         {
             TrackSocket(link);
+            NoticeCrossplay(link);
 
             if (link.Steam == null || !TryStatus(link.Steam, out var status))
             {
@@ -360,6 +398,9 @@ namespace FiresGhettoNetworkMod
             }
             link.LastTotalSent = totalSent;
         }
+
+        internal static HSteamNetConnection ConnectionOf(ZSteamSocket socket) =>
+            s_connection != null && socket != null ? s_connection(socket) : HSteamNetConnection.Invalid;
 
         internal static bool TryStatus(ZSteamSocket socket, out SteamNetConnectionRealTimeStatus_t status)
         {
@@ -571,14 +612,23 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogMessage(report);
         }
 
-        [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPostfix]
-        static void ReportPeriodically(ZNet __instance)
+        internal static void ReportPeriodically(ZNet __instance)
         {
+            WorldClock.MeasureFrame();
+            RecvPace.ReportPeriodically();
+            NetworkingRatesGroup.ReportConnectionConfigPeriodically();
+            if (__instance.IsServer())
+            {
+                TeleportGhostFix.DecideBeforeJoins(__instance);
+                StepEveryConnection(__instance);
+            }
+            LinkPace.ReportPeriodically();
             if (s_links.Count == 0 || !__instance.IsDedicated()) return;
             double now = Time.realtimeSinceStartupAsDouble;
             if (s_nextReport <= 0.0) s_nextReport = now + ReportSeconds;
             if (now < s_nextReport) return;
             s_nextReport = now + ReportSeconds;
+            ServerHealth.EmitSummary();
             LoggerOptions.LogInfo(BuildReport());
         }
 
