@@ -1,36 +1,7 @@
-* v1.5.17 - steadier world clock, crossplay save and stall fixes, ships follow the driver, smoother players and arrows, shared monster targets
-  - a slow server no longer lets the world clock fall behind, and your game eases the server's clock corrections in instead of jumping (or going backwards), so waves, ships, the day and timers stop jumping ([12 - Advanced] Keep World Clock At Real Time on the server, Smooth Server Clock Corrections on clients)
-  - "Fix Boat Damage From Server Time Sync" is replaced by "Smooth Server Clock Corrections" (on by default); if you had turned the old one off, turn the new one off
-  - crossplay (PlayFab): compression runs on FGN's own thread, so a large message no longer freezes the server for up to a second or delays PvP hits ([12 - Advanced] Fix PlayFab Compression Stalls)
-  - crossplay (PlayFab): logging out, quitting from a world, or closing the game window now waits (at most 5 seconds) until the server has received everything, so your character save is no longer lost ([04 - Networking] Finish Sending Before Logout)
-  - other players' movement is sent at the full 20 updates a second again, instead of 10-14
-  - whoever takes the helm owns the ship in every mode, including Server-Side Ship Simulation; with ship simulation, an empty ship at rest goes back to the server after 5 seconds
-  - a ship or cart you take over starts where everyone else saw it, moving as it was, and is never dropped into ground that hasn't loaded yet
-  - the server no longer takes over carts
-  - joining players on slow machines are no longer dropped after 30 seconds while a big world loads; the server waits up to 5 minutes for their first spawn ([12 - Advanced] Join Grace Seconds, 0 = vanilla)
-  - the admin list and player list are sent again when each player first spawns, since some config-sync mods made joining players miss them
-  - first-time joiners download at the full configured rate from the moment they connect
-  - a player disconnecting no longer freezes the server for a tenth of a second
-  - the server no longer stalls the first time a player changes area after startup
-  - fixed an error after logging out and joining again without restarting the game
-  - dedicated servers no longer spam weapon-trail errors with Server-Side Simulation on
-  - players' games upload much less: fish and fireplaces no longer send every small change
-  - the server finds changed objects in busy bases faster, with a new full recheck every 15 seconds instead of every 2 ([04 - Networking] Recheck Everything Every)
-  - new: Remote Motion draws other players from their own time-stamped updates, with far less jitter than vanilla; on by default (Delay 20 ms, Extrapolation Cap 100 ms, Blend 100 ms) ([03 - Player Sync] Remote Motion (experimental)); a config file that still had the untouched old defaults is moved to the new ones once, and each change is logged; your game sends the timestamps by default, so other players can draw you with it; a dedicated server never uses it
-  - new: Remote Arrows: an arrow or other shot from another player with the mod flies on your screen from where that player is now, so your copy lands where theirs did ([03 - Player Sync] Remote Arrows, on by default)
-  - new: monster targets are shared, so every game knows who a monster is after, even when another game runs it, and a monster keeps its target when it changes owner ([04 - Networking] Sync Monster Targets, on by default)
-  - ships: taking over a moving ship no longer causes a phantom "wave slam" hit on the new owner's game
-  - a long frame on your game no longer counts twice against the world clock
-  - ZDO ownership transfer (experimental): tamed creatures (pets, companions) are never handed to the server; Selective also takes over a monster a nearby player is running (never a tamed one) once the server has it loaded
-  - dedicated servers skip FGN's quit and logout handling entirely (it is only for players' games)
-  - fixed two vanilla errors when the game quits while the main menu is still loading after a logout
-  - new, optional PvP server setting: a hit that lands just after your dodge ended, because of lag, still counts as dodged; experimental and off by default ([10 - Server Authority] PvP Lag-Fair Dodge, needs FGN on the players' games)
-  - new defaults: Balance Creature Ownership is off (handing creatures between players restarts their AI, which looked like desync in group fights) and Extended Zone Radius is 0; auto-tune no longer raises Extended Zone Radius; existing config files keep their current values
-  - fixed the garbled name of the "Enable Server ZDO Ownership Transfer — Selective (EXPERIMENTAL)" setting in the 1.4.55-1.4.67 GitHub builds; if you used one of those, check that setting again
-  - if a single fix can't attach (for example after a game update), only that fix turns off instead of the whole mod
-  - clearer server logs: a health summary every 5 minutes (frame rate, lost game time, worst frame and the slowest mod handler), a warning when Server-Side Simulation is overloading the server, and a note naming any mod whose message was dropped because it arrived too early
-  - new admin test tools: fgn_netsim adds artificial lag and jitter to your connection for a limited time (never saved); fgn_sss_areas N makes the server also simulate N busy areas, to measure what Server-Side Simulation would cost with more players (0 clears it)
-  - update the server and every client to the same version
+* v1.5.17 - PlayFab, Server-Side Simulation and ownership updates
+  - PlayFab: better crossplay connection
+  - Server-Side Simulation: stability fixes and more testing
+  - ZDO ownership (worlds without Server-Side Simulation): the player with the lowest ping now owns the mobs
 
 * v1.4.55 - less garbage and less traffic from sending objects
   - every object sent over the network is written straight into the packet, without the temporary lists, closures and copies vanilla makes for each one, so the game has far less garbage to collect; the bytes sent are the same as before ([12 - Advanced] Allocation-free ZDO Writes turns it off)
