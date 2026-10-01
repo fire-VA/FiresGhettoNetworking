@@ -9,4 +9,4 @@ using System.Runtime.InteropServices;
 
 // Keep in step with FiresGhettoNetworkMod.PluginVersion.
 [assembly: AssemblyVersion("1.4.67.0")]
-[assembly: AssemblyFileVersion("1.4.67.0")]
+[assembly: AssemblyFileVersion("1.5.18.0")]

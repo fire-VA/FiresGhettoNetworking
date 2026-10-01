@@ -71,7 +71,9 @@ Turning on the master switch activates:
 
 Note that mobs are still simulated by the nearest **client** at this point. The server decides when and where they spawn, and filters the traffic, but it is not running their brains.
 
-**With ValheimCommunityPatch on the server, Server-Side Simulation stays off** for that session and the server log says why. VCP replaces the server's object create/destroy pass with its own, built around the world origin, and removes everything the server creates for players, so the two would fight endlessly. The traffic features above keep working either way.
+**ValheimCommunityPatch (VCP) is not compatible with FGN.** VCP replaces the server's object create/destroy pass with its own, built around the world origin, and removes everything the server creates for players, so the two would fight endlessly. If VCP is on the server anyway, Server-Side Simulation stays off for that session and the server log says why. If you want VCP, use its authors' networking mod, [NetworkPerformanceSystem](https://thunderstore.io/c/valheim/p/MidnightMods/NetworkPerformanceSystem/) by MidnightMods, instead of FGN.
+
+Other "optimization" mods can replace the same server code too (see Compatibility below). Where FGN can tell, it keeps Server-Side Simulation off and the server log says why.
 
 ### ZDO ownership transfer — not recommended
 
@@ -284,8 +286,8 @@ Two admin test commands, for measuring, never saved:
 
 - Designed to coexist with many mods, I use it on my own server with 60 other mods, and have tested it with many others
 - Works alongside any content mods that don't touch ZNetScene/ZDOMan internals. (doesn't work with most other networking mods, besides better z log and timeout limits, both highly recommended to go with this)
-- If you also run BetterNetworking, Serverside Simulations, or another networking mod — disable one. Running two networking mods at once will produce conflicting patches. This mod covers what those two do.
-- ValheimCommunityPatch works alongside it: where both do the same job, this mod stands down and lets VCP handle it (see Server-Side Simulation ON above).
+- **Don't stack "optimization" or networking mods.** Many of them patch the same parts of the game, so two together can undo or break each other, and this mod already covers what most networking mods do. Test them and pick the ones that work best for your setup.
+- One concrete case: **ValheimCommunityPatch** replaces the same object scheduling FGN works on. With VCP on the server, Server-Side Simulation stays off and the log says why. If you want VCP, use its authors' [NetworkPerformanceSystem](https://thunderstore.io/c/valheim/p/MidnightMods/NetworkPerformanceSystem/) by MidnightMods instead of FGN.
 
 
 ## Credits

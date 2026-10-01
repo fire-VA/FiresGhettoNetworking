@@ -15,8 +15,6 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGuid = "MidnightsFX.ValheimCommunityPatch";
 
-        private const string SpawnQueuePatchType = "ValheimCommunityPatch.Patches.Performance.SpawnEventQueuePatch";
-        private const string UnloadPatchType = "ValheimCommunityPatch.Patches.Performance.ZoneDiffRemovalPatch";
         private const string TerrainRecoveryPatchType = "ValheimCommunityPatch.Patches.Terrain.TerrainCompNullHmapPatch";
 
         private static bool s_terrainRecoveryAttached;
@@ -33,10 +31,14 @@ namespace FiresGhettoNetworkMod
 
         public static void Detect()
         {
-            SchedulesObjectCreation = HasPrefixFrom(
-                AccessTools.DeclaredMethod(typeof(ZNetScene), "CreateDestroyObjects", Type.EmptyTypes), SpawnQueuePatchType);
+            // Any VCP prefix on these methods counts, whatever its class is called: VCP 0.32 moved creation from
+            // SpawnEventQueuePatch (CreateDestroyObjects) to SpawnQueueCachePatch (CreateObjectsSorted), and the old
+            // class-name check missed it, so FGN's client time-slicing bypassed VCP's queue.
+            SchedulesObjectCreation =
+                HasPrefixFrom(AccessTools.DeclaredMethod(typeof(ZNetScene), "CreateDestroyObjects", Type.EmptyTypes), null)
+                || HasPrefixFrom(AccessTools.DeclaredMethod(typeof(ZNetScene), "CreateObjectsSorted"), null);
             SchedulesObjectRemoval = HasPrefixFrom(
-                AccessTools.DeclaredMethod(typeof(ZNetScene), "RemoveObjects", new[] { typeof(List<ZDO>), typeof(List<ZDO>) }), UnloadPatchType);
+                AccessTools.DeclaredMethod(typeof(ZNetScene), "RemoveObjects", new[] { typeof(List<ZDO>), typeof(List<ZDO>) }), null);
             s_terrainRecoveryAttached = HasPrefixFrom(
                 AccessTools.DeclaredMethod(typeof(TerrainComp), "Update", Type.EmptyTypes), TerrainRecoveryPatchType);
             if (s_terrainRecoveryAttached)
@@ -52,13 +54,14 @@ namespace FiresGhettoNetworkMod
                     + "dedicated server.");
         }
 
+        /// <summary>A VCP prefix on the method; with a type name, only one declared in that class.</summary>
         private static bool HasPrefixFrom(MethodBase target, string patchTypeName)
         {
             if (target == null) return false;
             HarmonyLib.Patches info = Harmony.GetPatchInfo(target);
             return info?.Prefixes != null
                 && info.Prefixes.Any(prefix => prefix.owner == PluginGuid
-                    && prefix.PatchMethod?.DeclaringType?.FullName == patchTypeName);
+                    && (patchTypeName == null || prefix.PatchMethod?.DeclaringType?.FullName == patchTypeName));
         }
     }
 }

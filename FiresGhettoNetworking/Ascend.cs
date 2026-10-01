@@ -12,12 +12,18 @@ namespace FiresGhettoNetworkMod
 {
     [BepInPlugin(PluginGUID, PluginName, PluginVersion)]
     [BepInDependency(ValheimCommunityPatchCompat.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(ValheimPerformanceOptimizationsGuid, BepInDependency.DependencyFlags.SoftDependency)]
 
     public class FiresGhettoNetworkMod : BaseUnityPlugin
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.5.17";
+        public const string PluginVersion = "1.5.18";
+
+        // ValheimPerformanceOptimizations (ontrigger) replaces ZNetScene.CreateDestroyObjects (always skipping vanilla, around
+        // ZNet's reference position) and ZDOMan.ReleaseNearbyZDOS, the two methods Server-Side Simulation and ZDO ownership
+        // transfer replace on the server. Soft dependency = load order only, so it is in PluginInfos when Awake runs.
+        public const string ValheimPerformanceOptimizationsGuid = "dev.ontrigger.vpo";
         internal static Harmony Harmony { get; private set; }
 
         // Static reference so non-MonoBehaviour subsystems (AutoTuneProbe coroutine, etc.)
@@ -320,6 +326,15 @@ namespace FiresGhettoNetworkMod
                         + "create/destroy pass with its own, built around world origin, and destroys every object FGN creates "
                         + "for players. Remove ValheimCommunityPatch from the server to use Server-Side Simulation, or turn "
                         + "'Enable Server-Side Simulation' off to silence this warning.");
+                }
+                else if (BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(ValheimPerformanceOptimizationsGuid))
+                {
+                    LoggerOptions.LogWarning(
+                        "Server-Side Simulation (and ZDO ownership transfer) is OFF for this session: ValheimPerformanceOptimizations "
+                        + "replaces the server's object create/destroy pass and its ownership pass with its own, built around the "
+                        + "server's reference position, so it would undo what FGN does for players. Remove "
+                        + "ValheimPerformanceOptimizations from the server to use Server-Side Simulation, or turn 'Enable Server-Side "
+                        + "Simulation' off to silence this warning.");
                 }
                 else
                 {

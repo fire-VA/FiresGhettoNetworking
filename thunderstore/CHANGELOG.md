@@ -1,3 +1,6 @@
+* v1.5.18 - updates and optimizations for 1.0
+  - Server-Side Simulation stays off when ValheimPerformanceOptimizations or ValheimCommunityPatch is installed, as they replace the same code
+
 * v1.5.17 - PlayFab, Server-Side Simulation and ownership updates
   - PlayFab: better crossplay connection
   - Server-Side Simulation: stability fixes and more testing
