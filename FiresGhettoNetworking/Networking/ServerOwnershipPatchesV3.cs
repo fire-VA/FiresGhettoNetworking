@@ -235,7 +235,7 @@ namespace FiresGhettoNetworkMod
             float now = UnityEngine.Time.realtimeSinceStartup;
             if (now >= s_nextStatLogTime)
             {
-                LoggerOptions.LogMessage(
+                if (LoggerOptions.DebugEnabled) LoggerOptions.LogDebug(
                     $"[ServerOwnership-V3] Last 10s: {s_passCount} passes, {s_zdosProcessed} ZDOs processed "
                     + $"({s_simulatedSeen} simulated-class), "
                     + $"{s_transfersToServer} transfers-to-server, {s_takenOver} taken over from a present owner, "

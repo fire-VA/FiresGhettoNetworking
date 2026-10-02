@@ -82,16 +82,11 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("10 - Server Authority", "Balance Creature Ownership", false,
-                "Vanilla gives a creature to whichever nearby player the server checks first and keeps it there. With this on, a\n" +
-                "creature being fought moves to the player fighting it, otherwise to a nearby player with clearly lower ping, so its\n" +
-                "movement, attacks and the hits on it are worked out on the best-placed machine. The current owner's game hands the\n" +
-                "creature over itself, as vanilla does with a chest someone opens, so no update in flight can undo the move, and hits\n" +
-                "already on their way are passed on. Bosses, tames, ridden creatures and creatures mid-attack are never moved.\n" +
-                "Every move restarts the creature's AI (its target, path and attack timers live on the owner's machine), so in\n" +
-                "groups that fight together it can look like desync. Off by default.\n" +
-                "Off while Server-Side Simulation owns creatures. DEDICATED SERVER; only players with FGN hand creatures over.");
+                "Moves a creature to the player fighting it, or to a nearby player with clearly lower ping. Each move resets its AI,\n" +
+                "so group fights can look desynced. Does nothing under Server-Side Simulation. Dedicated server; FGN players only.");
             ConfigPingMarginMs = config.Bind("10 - Server Authority", "Ownership Ping Margin", 40,
-                new ConfigDescription("How much lower, in ms, a nearby player's ping must be before a creature nobody is fighting moves to them.",
+                new ConfigDescription("Balance Creature Ownership: how much lower, in ms, a nearby player's ping must be before a creature nobody is "
+                    + "fighting moves to them. Higher means fewer moves. Dedicated server.",
                     new AcceptableValueRange<int>(10, 300)));
         }
 

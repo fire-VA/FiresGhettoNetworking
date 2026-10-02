@@ -33,10 +33,9 @@ namespace FiresGhettoNetworkMod
         {
             ConfigGraceSeconds = config.Bind("12 - Advanced", "Join Grace Seconds", DefaultGraceSeconds,
                 new ConfigDescription(
-                    "How long a joining player may send nothing (their game frozen while it loads the world) before the server drops\n" +
-                    "them. Vanilla drops anyone silent for 30 s, which cuts off slow machines loading a big world. This grace lasts\n" +
-                    "until their first spawn and never longer than this many seconds after they connect; then vanilla's timeout applies.\n" +
-                    "0 = vanilla. SERVER-SIDE.",
+                    "Vanilla drops anyone silent for 30 s, which cuts off slow machines that freeze while loading a big world.\n" +
+                    "A joining player is instead kept until their first spawn, for at most this many seconds after connecting;\n" +
+                    "after that vanilla's timeout applies. 0 = vanilla. Server only.",
                     new AcceptableValueRange<int>(0, MaxGraceSeconds)));
         }
 

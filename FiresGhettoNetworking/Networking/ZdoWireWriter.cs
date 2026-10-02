@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using HarmonyLib;
 using UnityEngine;
 
@@ -50,6 +51,10 @@ namespace FiresGhettoNetworkMod
         // with any foreign bool-returning prefix on ZDO.Serialize, FGN's writer and delta frames stand down.
         private static bool s_yieldToForeignSerializer;
         private static bool s_foreignScanDone;
+        // Another mod replaces ZPackage.Write(ZPackage) or ReadPackage (ValheimCommunityPatch 0.32's ZPackageWriteAllocPatch
+        // does, unconditionally). Harmony runs every prefix, so if both wrote, each nested package went out twice and every
+        // reader fell out of step (ZDO.Deserialize EndOfStream, negative package lengths, corrupted objects).
+        private static bool s_yieldNested;
 
         [ThreadStatic] private static bool t_writingVanillaReference;
 
@@ -184,6 +189,30 @@ namespace FiresGhettoNetworkMod
                 s_yieldToForeignSerializer = true;
                 LoggerOptions.LogWarning($"[ZdoWrite] foreign-serializer scan failed ({ex.Message}); FGN's ZDO writer and delta compression are off as a precaution.");
             }
+
+            try
+            {
+                var nestedWrite = AccessTools.Method(typeof(ZPackage), nameof(ZPackage.Write), new[] { typeof(ZPackage) });
+                var nestedRead = AccessTools.Method(typeof(ZPackage), nameof(ZPackage.ReadPackage), new[] { typeof(ZPackage).MakeByRefType() });
+                foreach (var method in new[] { nestedWrite, nestedRead })
+                {
+                    var info = method == null ? null : Harmony.GetPatchInfo(method);
+                    var foreign = info?.Prefixes?.FirstOrDefault(prefix => prefix.owner != FiresGhettoNetworkMod.PluginGUID
+                        && prefix.PatchMethod != null && prefix.PatchMethod.ReturnType == typeof(bool));
+                    if (foreign == null) continue;
+                    s_yieldNested = true;
+                    LoggerOptions.LogWarning(
+                        $"[ZdoWrite] '{foreign.owner}' already replaces ZPackage.{method.Name}(ZPackage) "
+                        + $"({foreign.PatchMethod.DeclaringType?.FullName}.{foreign.PatchMethod.Name}). FGN's copy-free nested "
+                        + "package writes and reads are OFF so no package is written twice; the other mod's stays in effect.");
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                s_yieldNested = true;
+                LoggerOptions.LogWarning($"[ZdoWrite] nested-package scan failed ({ex.Message}); FGN's copy-free nested writes are off as a precaution.");
+            }
             s_foreignScanDone = true;
         }
 
@@ -210,7 +239,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool ZPackage_WritePackage_Prefix(ZPackage __instance, ZPackage pkg)
         {
-            if (!s_nestedReady || pkg == null || pkg == __instance || !Enabled) return true;
+            if (!s_nestedReady || !s_foreignScanDone || s_yieldNested || pkg == null || pkg == __instance || !Enabled) return true;
             WriteNestedWithoutCopy(__instance, pkg);
             return false;
         }
@@ -219,7 +248,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool ZPackage_ReadPackage_Prefix(ZPackage __instance, ref ZPackage pkg)
         {
-            if (!s_nestedReady || pkg == null || pkg == __instance || !Enabled) return true;
+            if (!s_nestedReady || !s_foreignScanDone || s_yieldNested || pkg == null || pkg == __instance || !Enabled) return true;
             ReadNestedWithoutCopy(__instance, pkg);
             return false;
         }

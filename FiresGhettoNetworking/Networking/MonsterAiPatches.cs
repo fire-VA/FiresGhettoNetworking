@@ -201,8 +201,9 @@ namespace FiresGhettoNetworkMod
 
         private static void LogEventDiagnosticSkippedNoPlayers(SpawnSystem ss, RandomEvent activeEvent, RandomEvent runningEvent)
         {
+            if (!LoggerOptions.DebugEnabled) return;
             Vector3 c = ss.transform.position;
-            LoggerOptions.LogInfo(
+            LoggerOptions.LogDebug(
                 $"[EventDiag] SpawnSystem@({c.x:F0},{c.z:F0}) SKIPPED: no players in zone. " +
                 $"ActiveEvent='{(activeEvent != null ? activeEvent.m_name : "null")}' " +
                 $"RunningEvent='{(runningEvent != null ? runningEvent.m_name : "null")}' " +
@@ -211,9 +212,10 @@ namespace FiresGhettoNetworkMod
 
         private static void LogEventDiagnosticRanEventPath(SpawnSystem ss, RandomEvent activeEvent, RandomEvent runningEvent, List<SpawnSystem.SpawnData> currentSpawners)
         {
+            if (!LoggerOptions.DebugEnabled) return;
             Vector3 c = ss.transform.position;
             int count = currentSpawners != null ? currentSpawners.Count : -1;
-            LoggerOptions.LogInfo(
+            LoggerOptions.LogDebug(
                 $"[EventDiag] SpawnSystem@({c.x:F0},{c.z:F0}) RAN event path. " +
                 $"ActiveEvent='{(activeEvent != null ? activeEvent.m_name : "null")}' " +
                 $"RunningEvent='{(runningEvent != null ? runningEvent.m_name : "null")}' " +

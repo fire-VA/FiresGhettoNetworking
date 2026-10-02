@@ -449,10 +449,14 @@ namespace FiresGhettoNetworkMod
             s_session.CopyTo(s_reported);
 
             foreach (string line in UploadBreakdown.TakeReport(period))
-                LoggerOptions.LogInfo(line);
+                LoggerOptions.LogDebug(line);
 
+            // [RpcDrops] stays at Info: ITTO's fgn_test rpcdrops step and the rig watcher read it.
             foreach (string line in DownloadBreakdown.TakeReport(period))
-                LoggerOptions.LogInfo(line);
+            {
+                if (line.StartsWith("[RpcDrops]", StringComparison.Ordinal)) LoggerOptions.LogInfo(line);
+                else LoggerOptions.LogDebug(line);
+            }
 
             // A session shorter than the report interval never reaches the periodic links report, so the frame
             // breakdown would be thrown away. Whichever of the two asks first gets it.
@@ -464,7 +468,7 @@ namespace FiresGhettoNetworkMod
 
             if (interval.Sent.All(tally => tally.Packets == 0) && interval.Decoded.Packets == 0 && interval.Rejected == 0) return;
             foreach (string line in DescribeTotals(interval, period))
-                LoggerOptions.LogInfo(line);
+                LoggerOptions.LogDebug(line);
         }
 
         private static IEnumerable<string> DescribeTotals(Totals totals, string period)

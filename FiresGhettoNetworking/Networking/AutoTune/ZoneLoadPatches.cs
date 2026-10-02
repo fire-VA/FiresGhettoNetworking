@@ -78,21 +78,20 @@ namespace FiresGhettoNetworkMod.AutoTune
             List<ZDO> currentNearObjects,
             List<ZDO> currentDistantObjects)
         {
-            // Server: dedicated server's CreateDestroyObjects path lives in
-            // ServerAuthorityPatches and explicitly calls __instance.CreateObjects.
-            // We don't want to time-slice the server — its instantiation cadence
-            // is feeding clients, not driving a player camera. Bail and let
-            // vanilla run (with the transpiler-bumped cap if active).
+            // Server: the dedicated server's CreateDestroyObjects path lives in ServerAuthorityPatches and calls
+            // __instance.CreateObjects; it gets its own budget (ServerCreate), not the client's.
+            bool server;
             try
             {
-                if (ZNet.instance != null && ZNet.instance.IsServer())
-                    return true;
+                server = ZNet.instance != null && ZNet.instance.IsServer();
             }
             catch
             {
                 // ZNet.instance access failed — very early in startup. Defer to vanilla.
                 return true;
             }
+            if (server)
+                return ServerCreate(__instance, currentNearObjects, currentDistantObjects);
 
             if (!EffectiveConfig.TimeSliceInstantiationEnabled())
                 return true;
@@ -183,6 +182,147 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
 
             return false;
+        }
+
+        // R30G (BlueHills, one player, SSS + Selective): the dedi building the city around that player ran at 18.8 fps
+        // with a 1,559 ms frame ("object creation 1473"), against 29.3-29.7 fps with SSS off. Vanilla's InLoadingScreen()
+        // is true whenever there is no local player, so a dedicated server always takes the 100-a-frame loading-screen
+        // cap with no time limit, and sorts by its own reference position rather than the players'. Under SSS the server
+        // now creates within 'Server Instantiation Budget Ms' (0 = vanilla), nearest to ANY player first, in vanilla's
+        // terrain -> buildings -> rest order and only once each zone is ready for that type. At least one object a frame.
+        private const int ServerMaxPerFrame = 100;
+        private static readonly List<Vector3> s_peerPositions = new List<Vector3>();
+        // 1.5.21 (BlueHills proof, 1.5.20): the budget was checked only BETWEEN creates, so one heavy city piece blew past it
+        // ("unity: Object.Instantiate 1,044 ms / 46 frames", ~35 ms of creation per stall frame against an 8 ms budget). Each
+        // prefab's last measured cost (ticks, smoothed) now decides whether the next create still fits; the frame stops in
+        // order (it never skips ahead past a building to the items resting on it), and always creates at least one.
+        private static readonly Dictionary<int, long> s_prefabCostTicks = new Dictionary<int, long>();
+        private const int CostSmoothingOld = 3, CostSmoothingNew = 1;   // new = (3*old + 1*sample) / 4
+
+        private static bool FitsBudget(ZDO zdo, int created, long elapsed, long budgetTicks)
+        {
+            if (created == 0) return true;
+            return !s_prefabCostTicks.TryGetValue(zdo.GetPrefab(), out long cost) || elapsed + cost <= budgetTicks;
+        }
+
+        private static GameObject TimedCreate(ZNetScene scene, ZDO zdo, Stopwatch sw)
+        {
+            long before = sw.ElapsedTicks;
+            GameObject go = s_createObject(scene, zdo);
+            long sample = sw.ElapsedTicks - before;
+            int prefab = zdo.GetPrefab();
+            s_prefabCostTicks[prefab] = s_prefabCostTicks.TryGetValue(prefab, out long old)
+                ? (old * CostSmoothingOld + sample * CostSmoothingNew) / (CostSmoothingOld + CostSmoothingNew)
+                : sample;
+            ServerFrameSplit.CreatedOne(prefab, sample);
+            return go;
+        }
+
+        private static bool ServerCreate(ZNetScene scene, List<ZDO> near, List<ZDO> distant)
+        {
+            int budgetMs = FiresGhettoNetworkMod.ConfigServerInstantiationBudgetMs?.Value ?? 0;
+            if (budgetMs <= 0 || !ZNet.instance.IsDedicated()) return true;
+            if (ValheimCommunityPatchCompat.SchedulesObjectCreation) return true;
+            if (!TryResolveVanillaHelpers()) return true;
+
+            int nearCount = near != null ? near.Count : 0;
+            int distantCount = distant != null ? distant.Count : 0;
+            if (nearCount == 0 && distantCount == 0) return false;
+
+            s_peerPositions.Clear();
+            foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers()) s_peerPositions.Add(peer.m_refPos);
+            long budgetTicks = (long)budgetMs * Stopwatch.Frequency / 1000L;
+            int created = 0;
+            try
+            {
+                // 1.5.22 (BlueHills proof of 1.5.21: "create 45.88 ms a frame (0 objects)"): the whole backlog of uncreated near
+                // ZDOs (up to ~129k in a city) was scored and fully sorted every frame, and the budget clock was already running,
+                // so the sort alone spent it and the loop broke before its first create: the server stopped creating at all.
+                // Now only the nearest ServerMaxPerFrame creatable ZDOs are kept (a bounded heap in vanilla's ZDOCompare order,
+                // O(n log k) instead of a full sort), and the budget clock covers the creates only, the first one always made.
+                if (nearCount > 0 && ZoneSystem.instance.IsActiveAreaLoaded())
+                {
+                    s_pendingNear.Clear();
+                    foreach (ZDO zdo in near)
+                    {
+                        if (zdo.Created) continue;
+                        if (!ZoneSystem.instance.IsZoneReadyForType(zdo.GetSector(), zdo.Type)) continue;
+                        zdo.m_tempSortValue = NearestPeerSqr(zdo.GetPosition());
+                        KeepNearest(zdo, ServerMaxPerFrame);
+                    }
+                    s_pendingNear.Sort(s_vanillaOrder);
+                }
+                var sw = Stopwatch.StartNew();
+                foreach (ZDO zdo in s_pendingNear)
+                {
+                    if (created >= ServerMaxPerFrame || (created > 0 && sw.ElapsedTicks >= budgetTicks)) break;
+                    if (!FitsBudget(zdo, created, sw.ElapsedTicks, budgetTicks)) break;
+                    if (TimedCreate(scene, zdo, sw) != null) created++;
+                }
+                s_pendingNear.Clear();
+                if (distantCount > 0)
+                {
+                    foreach (ZDO zdo in distant)
+                    {
+                        if (created >= ServerMaxPerFrame || (created > 0 && sw.ElapsedTicks >= budgetTicks)) break;
+                        if (zdo.Created) continue;
+                        if (!FitsBudget(zdo, created, sw.ElapsedTicks, budgetTicks)) break;
+                        if (TimedCreate(scene, zdo, sw) != null) created++;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Objects created before the throw are marked Created, so vanilla picks up exactly where this stopped.
+                s_pendingNear.Clear();
+                s_timeSliceDisabled = true;
+                LoggerOptions.LogWarning($"[SSS] Server instantiation budget threw and is off for the rest of this session; vanilla instantiation takes over. {ex}");
+                return true;
+            }
+            return false;
+        }
+
+        // A max-heap of at most k ZDOs in s_pendingNear (root = the one that sorts last in vanilla's order): keeps the k that
+        // sort first without sorting the whole backlog.
+        private static void KeepNearest(ZDO zdo, int k)
+        {
+            List<ZDO> heap = s_pendingNear;
+            if (heap.Count < k)
+            {
+                heap.Add(zdo);
+                int i = heap.Count - 1;
+                while (i > 0)
+                {
+                    int parent = (i - 1) / 2;
+                    if (s_vanillaOrder(heap[i], heap[parent]) <= 0) break;
+                    (heap[i], heap[parent]) = (heap[parent], heap[i]);
+                    i = parent;
+                }
+                return;
+            }
+            if (s_vanillaOrder(zdo, heap[0]) >= 0) return;
+            heap[0] = zdo;
+            int at = 0, n = heap.Count;
+            while (true)
+            {
+                int left = 2 * at + 1, right = left + 1, largest = at;
+                if (left < n && s_vanillaOrder(heap[left], heap[largest]) > 0) largest = left;
+                if (right < n && s_vanillaOrder(heap[right], heap[largest]) > 0) largest = right;
+                if (largest == at) break;
+                (heap[at], heap[largest]) = (heap[largest], heap[at]);
+                at = largest;
+            }
+        }
+
+        private static float NearestPeerSqr(Vector3 position)
+        {
+            float best = float.MaxValue;
+            foreach (Vector3 at in s_peerPositions)
+            {
+                float d = Utils.DistanceSqr(at, position);
+                if (d < best) best = d;
+            }
+            return best;
         }
 
         // ====================================================================

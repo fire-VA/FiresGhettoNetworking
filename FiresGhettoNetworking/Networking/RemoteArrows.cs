@@ -65,9 +65,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("03 - Player Sync", "Remote Arrows", true,
-                "Draws arrows and other projectiles that other players shoot along their real flight, where they are on the shooter's\n" +
-                "screen, instead of ~0.13 s behind (4-6 m at bow speed). Needs Remote Motion on and the shooter on FGN 1.5.5+; others\n" +
-                "are drawn as vanilla. Hits are unchanged (the shooter's game decides them). CLIENT-ONLY.");
+                "Draws other players' arrows where they really are in flight, not a few metres behind. Needs Remote Motion on and\n" +
+                "the shooter running FGN with this on (it also marks your own shots). Visual only; hits are decided by the shooter.");
         }
 
         private static bool Drawing => ConfigEnabled != null && ConfigEnabled.Value;
@@ -80,6 +79,8 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch(typeof(Projectile), nameof(Projectile.Setup)), HarmonyPostfix]
         static void StampLaunch(Projectile __instance, Vector3 velocity, ZNetView ___m_nview)
         {
+            // Off means off on this side too: no three extra keys on every projectile. Receivers draw an unstamped one as vanilla.
+            if (!Drawing) return;
             if (___m_nview == null || !___m_nview.IsValid() || !___m_nview.IsOwner()) return;
             ZDO zdo = ___m_nview.GetZDO();
             zdo.Set(StartHash, __instance.transform.position);
@@ -206,11 +207,11 @@ namespace FiresGhettoNetworkMod
             s_nextReport = now + ReportEverySeconds;
             int seen = s_flown + s_noStamp + s_noClock;
             if (seen == 0) return;
-            LoggerOptions.LogInfo($"[RemoteArrows] last {ReportEverySeconds:F0} s: {seen} remote projectile(s): {s_flown} flown here "
+            if (LoggerOptions.DebugEnabled) LoggerOptions.LogDebug($"[RemoteArrows] last {ReportEverySeconds:F0} s: {seen} remote projectile(s): {s_flown} flown here "
                 + $"(stopped at a character {s_stoppedCharacter}, at a solid {s_stoppedSolid}; handed back: {s_offCourse} off course"
                 + (s_offCourse > 0 ? $" (worst {s_worstOffCourse:F1} m from the synced position)" : string.Empty)
                 + $", {s_clockLost} shooter's clock lost, {s_timedOut} over {MaxFlightSeconds:F0} s), not flown: {s_noStamp} unstamped (shooter "
-                + $"without FGN 1.5.5+), {s_noClock} with no clock for the shooter (Remote Motion off or no stamps yet); drawn ahead of the synced "
+                + $"without FGN 1.5.5+ or with Remote Arrows off), {s_noClock} with no clock for the shooter (Remote Motion off or no stamps yet); drawn ahead of the synced "
                 + $"position by {(s_leadCount > 0 ? s_leadSum / s_leadCount * 1000.0 : 0.0):F0} ms on average"
                 + (s_waited > 0 ? $"; {s_waited} waited for the shooter's clock (worst {s_worstWait * 1000.0:F0} ms behind the launch)" : string.Empty) + ".");
             s_flown = s_noStamp = s_noClock = s_stoppedCharacter = s_stoppedSolid = s_offCourse = s_clockLost = s_timedOut = 0;

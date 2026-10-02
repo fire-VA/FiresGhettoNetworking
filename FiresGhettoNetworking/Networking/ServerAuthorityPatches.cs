@@ -105,6 +105,8 @@ namespace FiresGhettoNetworkMod
         private static readonly List<ZDO> _cdoNearScratch = new List<ZDO>(8192);
         private static readonly List<ZDO> _cdoDistantScratch = new List<ZDO>(8192);
         private static readonly HashSet<ZDO> _cdoSeenSet = new HashSet<ZDO>();
+        private static int _cdoSources;   // areas collected this frame (ready peers + SSS test areas)
+        private static float _cdoNextPass;   // realtime of the next server object pass ('Server Object Pass Hz')
         private static readonly List<ZDO> _cdoNearFiltered = new List<ZDO>(8192);
         private static readonly List<ZDO> _cdoDistantFiltered = new List<ZDO>(8192);
 
@@ -118,15 +120,31 @@ namespace FiresGhettoNetworkMod
                 return true;
             }
 
+            // 1.5.23 (BlueHills proof 3, one player in a city: "filter 12.15 ms, remove 8.32 ms" a frame, every frame): the pass
+            // runs at 'Server Object Pass Hz' (default 10) instead of every frame. Each pass that does run collects FRESH lists, so
+            // RemoveObjects never sees a stale one (a stale list would destroy objects the server just spawned); in between, nothing
+            // is created or removed and vanilla's pass is skipped too.
+            int passHz = FiresGhettoNetworkMod.ConfigServerPassHz?.Value ?? 0;
+            if (passHz > 0)
+            {
+                float now = Time.realtimeSinceStartup;
+                if (now < _cdoNextPass) return false;
+                _cdoNextPass = now + 1f / passHz;
+            }
+
             SssTestAreas.RemindIfActive();
             try
             {
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(ExtendedZoneRadius()));
+                long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
                 FilterAndDedupeZdos(_cdoNearScratch, _cdoNearFiltered, requireLoadedZone: true);
                 FilterAndDedupeZdos(_cdoDistantScratch, _cdoDistantFiltered, requireLoadedZone: false);
                 RecordCreateDestroyObjectsDiagnostics();
+                long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
 
                 __instance.CreateObjects(_cdoNearFiltered, _cdoDistantFiltered);
+                long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
 
                 // REACTIVE orphan prune. The previous code walked the ENTIRE
                 // m_instances dictionary every frame (30 Hz) to pre-empt a rare
@@ -146,6 +164,8 @@ namespace FiresGhettoNetworkMod
                     PruneOrphanInstances(__instance);
                     __instance.RemoveObjects(_cdoNearFiltered, _cdoDistantFiltered);
                 }
+                ServerFrameSplit.Frame(t1 - t0, t2 - t1, t3 - t2, System.Diagnostics.Stopwatch.GetTimestamp() - t3,
+                    _cdoNearFiltered.Count, _cdoDistantFiltered.Count);
                 return false;
             }
             catch (System.NullReferenceException ex)
@@ -160,14 +180,19 @@ namespace FiresGhettoNetworkMod
         {
             _cdoNearScratch.Clear();
             _cdoDistantScratch.Clear();
+            _cdoSources = 0;
             foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers())
             {
                 if (!peer.IsReady()) continue;
                 Vector2s zone = ZoneSystem.GetZone(GetPredictedRefPos(peer));
                 ZDOMan.instance.FindSectorObjects(zone, simulationDistance, _cdoNearScratch, _cdoDistantScratch);
+                _cdoSources++;
             }
             foreach (Vector3 point in SssTestAreas.Points)
+            {
                 ZDOMan.instance.FindSectorObjects(ZoneSystem.GetZone(point), simulationDistance, _cdoNearScratch, _cdoDistantScratch);
+                _cdoSources++;
+            }
         }
 
         /// <summary>
@@ -192,11 +217,14 @@ namespace FiresGhettoNetworkMod
                 int prefab = zdo.m_prefab;
                 if (prefab != 0 && scene != null && !scene.HasPrefab(prefab)) continue;
                 if (loadedZones != null && !loadedZones.ContainsKey(zdo.GetSector())) continue;
-                if (_cdoSeenSet.Add(zdo)) dest.Add(zdo);
+                // 1.5.22: one source area (one player, no test areas) has no duplicates, so the per-ZDO HashSet is skipped
+                // ("filter 15.83 ms a frame" at ~134k near objects with one player on BlueHills).
+                if (_cdoSources <= 1 || _cdoSeenSet.Add(zdo)) dest.Add(zdo);
             }
         }
 
-        private static int ExtendedZoneRadius() => RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
+        // Always the config value, Auto-Tune on or off (Fire 2026-10-01): every tier says 0, and a server that raised it keeps it.
+        internal static int ExtendedZoneRadius() => RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
 
         private static void RecordCreateDestroyObjectsDiagnostics()
         {
@@ -393,17 +421,18 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool MeleeWeaponTrail_CustomFixedUpdate_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
-        [HarmonyPatch(typeof(Tameable), "Awake")]
-        [HarmonyPrefix]
-        public static bool Tameable_Awake_Prefix() => !ServerClientUtils.ZNetIsDedicated();
-
-        [HarmonyPatch(typeof(Tameable), "Update")]
-        [HarmonyPrefix]
-        public static bool Tameable_Update_Prefix() => !ServerClientUtils.ZNetIsDedicated();
-
+        // 1.5.25 (user report via Fire, SSS + Selective: putting a saddle on a tame printed "Failed to find rpc method 1127325378",
+        // = "AddSaddle", and the saddle item was gone): Tameable.Awake and Update used to be skipped on a dedicated server, so a tame
+        // the server owns had none of its RPCs ("Command", "SetName", "RPC_UnSummon", "AddSaddle", "SetSaddle"), no feeding hook and
+        // no TamingUpdate. They run again; only SetText stays off (it reads the platform's local user, which a headless server lacks).
         [HarmonyPatch(typeof(Tameable), "SetText")]
         [HarmonyPrefix]
         public static bool Tameable_SetText_Prefix() => !ServerClientUtils.ZNetIsDedicated();
+
+        /// <summary>Tameable.Tame (and other server-run code) counts a player stat; a dedicated server has no player profile.</summary>
+        [HarmonyPatch(typeof(Game), nameof(Game.IncrementPlayerStat))]
+        [HarmonyPrefix]
+        public static bool Game_IncrementPlayerStat_NoProfilePrefix(PlayerProfile ___m_playerProfile) => ___m_playerProfile != null;
 
         [HarmonyPatch(typeof(AudioMan), "Update")]
         [HarmonyPrefix]

@@ -59,10 +59,10 @@ namespace FiresGhettoNetworkMod
             CloseFrame();
             float seconds = Mathf.Max(0.001f, now - s_windowStart);
             int frames = Mathf.Max(1, Time.frameCount - s_windowStartFrame);
-            if (s_windowBytes >= BulkWindowBytes)
+            if (s_windowBytes >= BulkWindowBytes && LoggerOptions.DebugEnabled)
             {
                 float perFrame = s_windowBytes / (float)Mathf.Max(1, s_windowFramesWithData) / BytesPerKilobyte;
-                LoggerOptions.LogMessage($"[RecvPace] last {seconds:F0} s: {s_windowBytes / BytesPerMegabyte:F1} MB in {s_windowMessages} Steam "
+                LoggerOptions.LogDebug($"[RecvPace] last {seconds:F0} s: {s_windowBytes / BytesPerMegabyte:F1} MB in {s_windowMessages} Steam "
                     + $"message(s) over {s_windowFramesWithData} of {frames} frame(s) at {frames / seconds:F0} fps "
                     + $"({s_windowBytes / BytesPerMegabyte / seconds:F1} MB/s): {perFrame:F0} KB a frame with data, peak "
                     + $"{s_windowPeakBytes / BytesPerKilobyte:F0} KB and {s_windowPeakMessages} message(s) in one frame.");

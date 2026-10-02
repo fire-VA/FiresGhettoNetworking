@@ -1,4 +1,5 @@
 ﻿using HarmonyLib;
+using FiresGhettoNetworkMod.AutoTune;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -36,8 +37,10 @@ namespace FiresGhettoNetworkMod
             ServerStatusDiagnostics.s_aiLod_peersLastSeen = peerCount;
             UpdateNearestDistanceObservedRange(nearestDist);
 
-            float nearMeters = FiresGhettoNetworkMod.ConfigAILODNearDistance.Value;
-            float farMeters  = FiresGhettoNetworkMod.ConfigAILODFarDistance.Value;
+            // Through EffectiveConfig so Server Auto-Tune's tier values are the ones used while it is on.
+            // Near only splits the [ServerStatus] counts: near and mid both run at full rate.
+            float nearMeters = EffectiveConfig.AILODNearDistance();
+            float farMeters  = EffectiveConfig.AILODFarDistance();
 
             if (nearestDist <= nearMeters)
             {
@@ -85,7 +88,7 @@ namespace FiresGhettoNetworkMod
 
         private static bool DecideFarBandTickOrSkip(Character mob, float dt)
         {
-            float throttleInterval = 1f / FiresGhettoNetworkMod.ConfigAILODThrottleFactor.Value;
+            float throttleInterval = 1f / EffectiveConfig.AILODThrottleFactor();
             float jitteredPhase = Time.time + mob.GetHashCode() * PerInstanceHashJitterMultiplier;
             bool shouldSkipThisTick = jitteredPhase % throttleInterval > dt;
 

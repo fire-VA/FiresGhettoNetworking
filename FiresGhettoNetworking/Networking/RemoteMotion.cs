@@ -56,21 +56,19 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("03 - Player Sync", "Remote Motion (experimental)", true,
-                "Draws other players from their own time-stamped updates: a short buffer, carried on by their velocity when an update is\n" +
-                "late, corrections blended instead of snapped. Measured offline against vanilla: less error and lag, less overshoot at\n" +
-                "turns, half the judder. Needs the other player to run FGN 1.5.0+; others are drawn as vanilla. Replaces the\n" +
-                "interpolation/prediction options while on. CLIENT-ONLY.");
+                "Draws other FGN players smoothly from their time-stamped updates; others, and players on a ship or cart, are\n" +
+                "drawn as vanilla. Replaces Client-Side Interpolation and Prediction while on. Client only.");
             ConfigSendStamps = config.Bind("03 - Player Sync", "Send Remote Motion Timestamps", true,
-                "Stamps your own position updates with their physics time (8 bytes an update) so other players' Remote Motion can\n" +
-                "draw you. Harmless to players without FGN.");
+                "Adds a timestamp (8 bytes) to your own movement updates so other players' Remote Motion can draw you smoothly.\n" +
+                "Players without FGN ignore it. Leave on unless you are chasing a problem.");
             ConfigDelayMs = config.Bind("03 - Player Sync", "Remote Motion Delay (ms)", DefaultDelayMs,
-                new ConfigDescription("How far behind the newest update other players are drawn. Lower is snappier but overshoots more.",
+                new ConfigDescription("Remote Motion: how far behind their newest update other players are drawn. Lower is snappier but overshoots more. Client only.",
                     new AcceptableValueRange<int>(0, 200)));
             ConfigExtrapolationCapMs = config.Bind("03 - Player Sync", "Remote Motion Extrapolation Cap (ms)", DefaultCapMs,
-                new ConfigDescription("How long a player is carried on by their velocity when their next update is late.",
+                new ConfigDescription("Remote Motion: how long a player keeps moving along their last velocity when their next update is late. Client only.",
                     new AcceptableValueRange<int>(0, 500)));
             ConfigBlendMs = config.Bind("03 - Player Sync", "Remote Motion Blend (ms)", DefaultBlendMs,
-                new ConfigDescription("How long a correction from a new update takes to fade (0 = snap).", new AcceptableValueRange<int>(0, 500)));
+                new ConfigDescription("Remote Motion: how long a correction from a new update takes to blend in (0 = snap straight to it). Client only.", new AcceptableValueRange<int>(0, 500)));
             // Fire, 2026-09-28 (after the R44/R44b A/B): ON at 20/100/100. A cfg still holding the untouched old defaults (off, 40/200/50)
             // gets the new ones once; any value a player changed stays.
             if (!ConfigEnabled.Value && ConfigDelayMs.Value == 40 && ConfigExtrapolationCapMs.Value == 200 && ConfigBlendMs.Value == 50)

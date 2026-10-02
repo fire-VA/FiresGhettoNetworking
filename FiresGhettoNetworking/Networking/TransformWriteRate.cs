@@ -43,24 +43,18 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Limit Transform Write Rate", true,
-                "Objects that never stop moving write their position into the world state once per drawn frame, which on a\n" +
-                "fast machine is several times more often than the server sends anything. The extra writes are thrown away\n" +
-                "before they reach the network, but each one still marks the area around it as changed and makes the server\n" +
-                "recheck everything standing there. With this on, the objects listed below write no faster than the server\n" +
-                "sends.");
+                "Limits the objects listed below (fish, by default), which record their position every frame, to Transform Writes\n" +
+                "Per Second, so the server rechecks their area less. A hooked fish is never limited. Applies where the object runs.");
 
             ConfigPrefabs = config.Bind("04 - Networking", "Transform Write Rate Objects",
                 "Fish1,Fish2,Fish3,Fish4_cave,Fish5,Fish6,Fish7,Fish8,Fish9,Fish10,Fish11,Fish12",
-                "Which objects the limit above applies to, by prefab name, separated by commas. Only objects that move\n" +
-                "constantly and are not directly controlled by a player belong here.");
+                "Prefab names, separated by commas, that Limit Transform Write Rate applies to. Only add objects that move\n" +
+                "constantly on their own; never players, ships or carts.");
 
             ConfigWritesPerSecond = config.Bind("04 - Networking", "Transform Writes Per Second", 10f,
                 new ConfigDescription(
-                    "How many times a second a listed object may write its position. Anything above about thirty is thrown\n" +
-                    "away by the send loop regardless. Below that, other players see the object move in fewer, larger steps:\n" +
-                    "their game carries it along its last known heading and eases it onto each new position, and only jumps\n" +
-                    "it outright once the guess is more than five metres out, which slow swimmers never reach. Lower saves\n" +
-                    "more. Raise it if listed objects look like they are stuttering.",
+                    "How many times a second a listed object may record its position. Lower saves more server work; raise it\n" +
+                    "if listed objects look like they stutter for other players. Going above how often updates are sent changes nothing.",
                     new AcceptableValueRange<float>(2f, 120f)));
         }
 

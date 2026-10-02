@@ -179,7 +179,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             if (autoApply)
             {
                 AutoTuneState.SetServer(tier);
-                LoggerOptions.LogMessage($"[AutoTune] SERVER auto-tune APPLIED: tier={tier} (cores={cores}, RAM={ramMb}MB).");
+                LogAppliedTier(tier, cores, ramMb);
             }
             else if (logHint)
             {
@@ -214,6 +214,21 @@ namespace FiresGhettoNetworkMod.AutoTune
             if (cores >= 8 && ramMb >= 16 * 1024) return Tier.High;
             if (cores >= 4 && ramMb >= 8  * 1024) return Tier.Medium;
             return Tier.Low;
+        }
+
+        // What the server runs with, read back through the same accessors the patches use. Send rates and queue size are
+        // logged by AutoTuneApplier when it writes them. The zone radius is the tier's value, not EffectiveConfig's: that one
+        // asks RenderLimitsCompat.Present, which caches its answer, and at Awake plugins loading after FGN are not listed yet.
+        private static void LogAppliedTier(Tier tier, int cores, int ramMb)
+        {
+            TierPreset preset = TierPresets.For(tier);
+            LoggerOptions.LogMessage($"[AutoTune] SERVER auto-tune APPLIED: tier={tier} (cores={cores}, RAM={ramMb}MB). In use: "
+                + $"ZDO Throttle Distance {EffectiveConfig.ZDOThrottleDistance():0}m, "
+                + $"AI LOD Near {EffectiveConfig.AILODNearDistance():0}m / Far {EffectiveConfig.AILODFarDistance():0}m / "
+                + $"Throttle Factor {EffectiveConfig.AILODThrottleFactor():0.00}, "
+                + $"RPC AoI Radius {RoutedRpcManager.PositionRadius():0}m, "
+                + "(the config values of these are ignored while 'Enable Server Auto-Tune' is on); "
+                + $"Extended Zone Radius {FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value} from the config (0 while Render Limits is installed).");
         }
 
         private static void LogSelfTuneSuggestion(Tier tier, int cores, int ramMb)

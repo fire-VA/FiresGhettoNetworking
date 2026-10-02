@@ -35,6 +35,9 @@ namespace FiresGhettoNetworkMod.AutoTune
         private const float FixedSettleFallbackSeconds = 10f;
 
         private const int BwPayloadMinBytes = 1024;
+        // Below the config's 512 KB on purpose: a sample goes out as one RPC, one Steam message, and Steam refuses messages
+        // over 512 KB (send limit, and the receiver's default RecvMaxMessageSize), so 512 KB plus the RPC header would never
+        // arrive. The client measures the bytes it actually got, so a capped sample still reads true.
         private const int BwPayloadMaxBytes = 256 * 1024;
         private const int DefaultBwPayloadBytes = 128 * 1024;
 
@@ -1205,7 +1208,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
                 if (_latencyProbeAborted)
                 {
-                    LoggerOptions.LogMessage($"[AutoTune] Rolling re-probe aborted (raw=[{string.Join(",", _latencyRawSamplesMs)}]); leaving tier at {AutoTuneState.ClientTier}.");
+                    LoggerOptions.LogDebug($"[AutoTune] Rolling re-probe aborted (raw=[{string.Join(",", _latencyRawSamplesMs)}]); leaving tier at {AutoTuneState.ClientTier}.");
                     continue;
                 }
 
@@ -1247,7 +1250,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     }
                     else
                     {
-                        LoggerOptions.LogInfo($"[AutoTune] Rolling tier change pending: {currentApplied} → {consensus} (obs {_pendingRollingObservations}/{required}; this probe: latency={_latencyTier} median={_latencyMedianMs}ms; window=[{string.Join(",", _rollingTiers)}])");
+                        LoggerOptions.LogDebug($"[AutoTune] Rolling tier change pending: {currentApplied} → {consensus} (obs {_pendingRollingObservations}/{required}; this probe: latency={_latencyTier} median={_latencyMedianMs}ms; window=[{string.Join(",", _rollingTiers)}])");
                     }
                 }
                 else
@@ -1256,7 +1259,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     // (the boundary jitter swung back our way). Reset streak to currentApplied.
                     _pendingRollingTier = currentApplied;
                     _pendingRollingObservations = 0;
-                    LoggerOptions.LogInfo($"[AutoTune] Rolling re-probe stable at {consensus} (this probe: latency={_latencyTier} median={_latencyMedianMs}ms iqrJitter={_latencyJitterMs}ms; window=[{string.Join(",", _rollingTiers)}])");
+                    LoggerOptions.LogDebug($"[AutoTune] Rolling re-probe stable at {consensus} (this probe: latency={_latencyTier} median={_latencyMedianMs}ms iqrJitter={_latencyJitterMs}ms; window=[{string.Join(",", _rollingTiers)}])");
                 }
             }
 

@@ -29,11 +29,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigLivePlayerPositions = config.Bind("04 - Networking", "Live Player Positions", true,
-                "Chooses which world objects to send each player using their character's live position instead of the "
-                + "reference position they last reported, which vanilla refreshes only every 2 seconds. A moving player "
-                + "otherwise has their update built around where they were up to two seconds ago, which gathers the "
-                + "sectors behind them and sorts the objects in front of them last. Falls back to the reported position "
-                + "for any player whose character is not resolvable. SERVER-SIDE.");
+                "Picks and orders the world objects sent to each player around where their character is now, not where they "
+                + "last reported (vanilla refreshes that every 2 s), so a fast player gets what is ahead first. Server only.");
         }
 
         /// <summary>

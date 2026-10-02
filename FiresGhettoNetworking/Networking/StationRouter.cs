@@ -45,12 +45,9 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("12 - Advanced", "Fix Lost Station Inserts", true,
-                "Vanilla takes the item out of your inventory, then asks whoever your game thinks runs that smelter, kiln,\n" +
-                "fermenter, cooking station, fire, shield generator or ballista to add it. If that player has left, is out of\n" +
-                "range or has only just been handed the station, the request is ignored and the item is lost. With this on, the\n" +
-                "server delivers the request to the station's real owner once their game knows it owns it, and hands a station\n" +
-                "nobody is running to the player using it.\n" +
-                "DEDICATED SERVER ONLY. No client install needed.");
+                "Vanilla can lose an item put into or taken from a smelter, kiln, fire or other station when your game is wrong about\n" +
+                "who runs it. With this on, the server routes it to whoever really does. Takes effect live. Dedicated server only;\n" +
+                "players do not need FGN.");
         }
 
         internal static void OnZNetShutdown()
@@ -60,9 +57,12 @@ namespace FiresGhettoNetworkMod
             s_stationPrefabs.Clear();
         }
 
+        // Read on every routed RPC rather than at startup, so the fix turns on and off live.
+        internal static bool Enabled => ConfigEnabled != null && ConfigEnabled.Value;
+
         internal static bool TryRoute(ZRoutedRpc routedRpc, ZRoutedRpc.RoutedRPCData data)
         {
-            if (ConfigEnabled == null || !ConfigEnabled.Value) return false;
+            if (!Enabled) return false;
             if (!s_methods.Contains(data.m_methodHash) || data.m_targetZDO.IsNone() || ZDOMan.instance == null) return false;
             var zdo = ZDOMan.instance.GetZDO(data.m_targetZDO);
             if (zdo == null || !IsStation(zdo.GetPrefab())) return false;

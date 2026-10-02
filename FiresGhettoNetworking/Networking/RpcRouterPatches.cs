@@ -16,6 +16,8 @@ namespace FiresGhettoNetworkMod
         {
             if (!__runOriginal) return false;
             if (!VanillaAccess.RoutedRpcIsServer(__instance)) return true;
+            // Attached at startup either way (so the station fix toggles live); with both features off this is vanilla.
+            if (!RoutedRpcManager.RouterEnabled() && !StationRouter.Enabled) return true;
             RoutedRpcManager.ProcessRoutedRPC(__instance, rpc, pkg);
             return false;
         }

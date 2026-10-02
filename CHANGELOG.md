@@ -1,3 +1,9 @@
+* v1.5.28 - updates and optimizations for Valheim 1.0
+  - saddles and taming work on Server-Side Simulation servers; clearer config descriptions; timed reports moved to a new Debug log level
+
+* v1.5.19 - updates and optimizations for Valheim 1.0
+  - fixes corrupted objects when used with ValheimCommunityPatch
+
 * v1.5.18 - updates and optimizations for 1.0
   - Server-Side Simulation stays off when ValheimPerformanceOptimizations or ValheimCommunityPatch is installed, as they replace the same code
 

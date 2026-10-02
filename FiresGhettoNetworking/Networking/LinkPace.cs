@@ -37,9 +37,10 @@ namespace FiresGhettoNetworkMod
                 if (connection == HSteamNetConnection.Invalid) continue;
                 string who = Name(peer);
                 if (s_routeLogged.Add(connection.m_HSteamNetConnection)) LogRoute(who, connection);
+                if (!LoggerOptions.DebugEnabled) continue;
                 if (!LinkController.TryStatus(steam, out SteamNetConnectionRealTimeStatus_t status)) continue;
                 if (status.m_cbPendingReliable + status.m_cbSentUnackedReliable < BulkBytes) continue;
-                LoggerOptions.LogMessage($"[LinkPace] to {who}: Steam's send rate {status.m_nSendRateBytesPerSecond / BytesPerMegabyte:F1} MB/s, "
+                LoggerOptions.LogDebug($"[LinkPace] to {who}: Steam's send rate {status.m_nSendRateBytesPerSecond / BytesPerMegabyte:F1} MB/s, "
                     + $"out {status.m_flOutBytesPerSec / BytesPerMegabyte:F2} MB/s in {status.m_flOutPacketsPerSec:F0} packets/s, "
                     + $"in {status.m_flInPacketsPerSec:F0} packets/s; pending reliable {status.m_cbPendingReliable / BytesPerKilobyte:F0} KB, "
                     + $"sent unacked {status.m_cbSentUnackedReliable / BytesPerKilobyte:F0} KB, Steam wait "

@@ -1,5 +1,6 @@
 using HarmonyLib;
 using System.Collections.Generic;
+using FiresGhettoNetworkMod.AutoTune;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -27,8 +28,11 @@ namespace FiresGhettoNetworkMod
             float throttleDistanceSqr = 0f;
             if (throttleEnabled)
             {
-                float throttleDistance = FiresGhettoNetworkMod.ConfigZDOThrottleDistance.Value;
-                throttleDistanceSqr = throttleDistance * throttleDistance;
+                // Through EffectiveConfig so Server Auto-Tune's tier distance is the one used while it is on.
+                float throttleDistance = EffectiveConfig.ZDOThrottleDistance();
+                // 0 means off. Read as a distance it marked every loose object as distant.
+                if (throttleDistance <= 0f) throttleEnabled = false;
+                else throttleDistanceSqr = throttleDistance * throttleDistance;
             }
 
             bool playerBoostEnabled = PlayerPositionSyncPatches.ConfigEnablePlayerPositionBoost != null

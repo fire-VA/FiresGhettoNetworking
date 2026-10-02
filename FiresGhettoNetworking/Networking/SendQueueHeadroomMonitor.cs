@@ -32,9 +32,9 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("10 - Diagnostics", "Send Queue Headroom Monitor", false,
-                "Server-only, opt-in. When ON, samples each peer's outbound send-queue every 5s and logs the "
-                + "peak each minute, so you can see how close live traffic gets to the cliff fgn_socketramp finds. "
-                + "OFF (default) = the sampler never runs = zero performance cost. fgn_headroom prints a snapshot on demand.");
+                "Checks every player's outgoing send queue every 5 s and logs the largest each minute, as a share of the "
+                + "Steam send buffer, to show how close live traffic gets to filling it. Costs nothing while off. The "
+                + "fgn_headroom console command prints a snapshot either way. Server only (dedicated or hosting).");
             ConfigEnabled.SettingChanged += (_, __) => MaybeStartSampling();
         }
 

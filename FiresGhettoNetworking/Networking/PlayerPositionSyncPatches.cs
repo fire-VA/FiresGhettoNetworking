@@ -22,57 +22,40 @@ namespace FiresGhettoNetworkMod
                 "03 - Player Sync",
                 "Enable High-Frequency Position Updates",
                 true,
-                "Boosts server send priority for player ZDOs so they sync before terrain/object ZDOs.\n" +
-                "Reduces the floaty delayed movement you see on other players.\n" +
-                "SERVER-ONLY — no effect on client.");
+                "Sends other players' movement ahead of world objects when a connection is backed up (always, with\n" +
+                "'Adaptive Throttling' off). Does not change how often updates are sent. Dedicated server only.");
 
             ConfigPlayerPositionUpdateMultiplier = config.Bind(
                 "03 - Player Sync",
                 "Position Update Multiplier",
                 2.5f,
                 new ConfigDescription(
-                    "How aggressively player ZDOs are prioritized over other ZDOs (1.0 = vanilla, 2.5 = recommended).\n" +
-                    "Higher values push player positions to the front of the send queue more strongly.",
+                    "How strongly the setting above moves players ahead of world objects (1 = no boost). Higher puts\n" +
+                    "other players nearer the front of each update. Dedicated server only.",
                     new AcceptableValueRange<float>(1.0f, 5.0f)));
 
             ConfigEnableClientInterpolation = config.Bind(
                 "03 - Player Sync",
                 "Enable Client-Side Interpolation",
                 false,
-                "Smooths other players' movement on your client by interpolating between received network positions.\n" +
-                "Eliminates the snapping/teleporting caused by discrete 50ms network updates.\n" +
-                "Disabled by default — the rest of the mod's networking improvements (higher update rate, server\n" +
-                "ZDO priority boost, larger Steam buffers) usually deliver positions smoothly enough on their own,\n" +
-                "and interpolation adds a small render-lag that some players prefer to avoid. Turn ON if you still\n" +
-                "see other players snap/teleport even on a healthy connection.\n" +
-                "NOTE: for now vanilla (off) is smoother. At normal update rates this draws other players mostly at their last\n" +
-                "received position, so they lurch forward at the update rate. A replacement is being built and measured.\n" +
-                "CLIENT-ONLY — no server impact.");
+                "Older smoothing for other players' movement. Ignored while Remote Motion is on, which replaces it;\n" +
+                "only worth trying with Remote Motion off, and vanilla (off) usually looks smoother. Client only.");
 
             ConfigEnablePlayerPrediction = config.Bind(
                 "03 - Player Sync",
                 "Enable Client-Side Prediction",
                 false,
-                "Extrapolates other players' positions forward between network updates using their last known velocity.\n" +
-                "Can help on high latency (>100ms) but may cause overshooting at low ping.\n" +
-                "Disabled by default — only enable if interpolation alone feels laggy.\n" +
-                "NOTE: for now vanilla (off) is smoother. Prediction only acts with interpolation on, and it overshoots at every\n" +
-                "change of direction, so strafing players jiggle back and forth. A replacement is being built and measured.\n" +
-                "CLIENT-ONLY — no server impact.");
+                "Adds a guess ahead along other players' last velocity to the older smoothing above. Only works with\n" +
+                "Client-Side Interpolation on and Remote Motion off, and overshoots whenever a player changes direction.\n" +
+                "Client only.");
 
             ConfigSmoothingMinInterval = config.Bind(
                 "03 - Player Sync",
                 "Smoothing Min Interval (s)",
                 0.0f,
                 new ConfigDescription(
-                    "When a remote player's packets arrive faster than this interval (seconds),\n" +
-                    "smoothing is disabled entirely and vanilla movement renders directly.\n" +
-                    "Default 0 = always smooth (recommended). The earlier default of 0.05\n" +
-                    "(vanilla 20Hz) collapsed the smoothing-strength formula to ~0 under\n" +
-                    "healthy traffic, which made BOTH this slider and Smoothing Max feel\n" +
-                    "like no-ops and produced visible snaps every time inter-packet jitter\n" +
-                    "crossed the threshold. Raise above 0 only if you specifically want\n" +
-                    "fast packets to bypass smoothing (LAN / very low-latency servers).",
+                    "For Client-Side Interpolation only. A player whose updates arrive less than this many seconds\n" +
+                    "apart is drawn as vanilla, unsmoothed. 0 = always smooth.",
                     new AcceptableValueRange<float>(0.0f, 0.20f)));
 
             ConfigSmoothingMaxInterval = config.Bind(
@@ -80,11 +63,8 @@ namespace FiresGhettoNetworkMod
                 "Smoothing Max Interval (s)",
                 0.20f,
                 new ConfigDescription(
-                    "When a remote player's packets arrive slower than this interval (seconds),\n" +
-                    "smoothing runs at full strength. Between Min and Max the strength fades\n" +
-                    "in linearly so the handoff is invisible. Raise it for a more aggressive\n" +
-                    "fade-in (less smoothing on borderline-laggy connections); lower it for a\n" +
-                    "snappier ramp to full smoothing.",
+                    "For Client-Side Interpolation only. A player whose updates arrive this far apart (seconds) or more\n" +
+                    "gets full smoothing; between Min and Max it fades in. Lower means more smoothing on good connections.",
                     new AcceptableValueRange<float>(0.05f, 0.50f)));
         }
 

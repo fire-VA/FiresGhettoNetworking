@@ -101,24 +101,16 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigAdaptiveWindow = config.Bind("04 - Networking", "Adaptive Send Window", true,
-                "Sizes how much world data may be on its way to each player at once from that player's own connection. It grows "
-                + "while the connection keeps up and shrinks as soon as Steam reports queueing, lost packets or rising ping. "
-                + "Vanilla gives everyone the same 10 KB, which a slow link overflows and a fast but distant link cannot fill. "
-                + "Off = Steam players use Queue Size. Crossplay players are sized by Crossplay In-Flight KB instead: PlayFab "
-                + "gives no figures to size a window from, and counts only a quarter of its unacknowledged data as queued.\n"
-                + "Applies on both sides: a server sizes what it sends each player, a client what it sends the server.");
+                "Sizes how much world data each Steam connection may have in flight from that link's own health, instead of "
+                + "vanilla's fixed 10 KB. Off = Queue Size for everyone; crossplay players use Crossplay In-Flight KB. Client and server.");
             ConfigMaxWindowKB = config.Bind("04 - Networking", "Max Send Window", 1024,
-                new ConfigDescription("Upper limit, in KB per player, for Adaptive Send Window.",
+                new ConfigDescription("The most data, in KB, Adaptive Send Window lets be on its way over one connection at once. Has no effect "
+                    + "while Adaptive Send Window is off. Client and server.",
                     new AcceptableValueRange<int>(64, 8192)));
             ConfigCrossplayInFlightKB = config.Bind("04 - Networking", "Crossplay In-Flight KB", DefaultCrossplayInFlightKb,
                 new ConfigDescription(
-                    "How much world data may really be on its way to a crossplay (PlayFab) player at once.\n"
-                    + "PlayFab's socket reports only a quarter of its unacknowledged bytes as queued, so vanilla's 10 KB gate "
-                    + "actually lets a crossplay player run about 40 KB outstanding — four times what a Steam player gets, on "
-                    + "the one transport that waits three seconds before resending a lost packet and blocks everything behind "
-                    + "it meanwhile. This setting is the real figure; the quarter is divided back out for you.\n"
-                    + "Lower means a lost packet costs less and recovers sooner; higher means more data in flight on a long "
-                    + "link. CLIENT and SERVER.",
+                    "How much world data may be in flight over a crossplay (PlayFab) connection, in KB (vanilla is about 40). "
+                    + "Lower makes a lost packet cost less; higher sends more on a long link. Client and server.",
                     new AcceptableValueRange<int>(8, 128)));
             ConfigAdaptiveWindow.SettingChanged += (_, __) => ResetWindows();
             ConfigMaxWindowKB.SettingChanged += (_, __) => ClampWindows();

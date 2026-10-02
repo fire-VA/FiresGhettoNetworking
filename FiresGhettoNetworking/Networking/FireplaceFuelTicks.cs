@@ -37,11 +37,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Slow Fuel Ticks On Long Burning Fires", true,
-                "Every fireplace and torch writes its fuel level to the network every two seconds, even one carrying\n" +
-                "hours of fuel, and every write sends the object to all players who can see it. With this on, a fire\n" +
-                "that cannot run out before the next check is only written every thirty seconds. Fuel drains from a\n" +
-                "stored timestamp, so the amount burned is exactly the same either way, and a fire close to running\n" +
-                "out is left on the normal two second check.");
+                "Slow-burning fires such as torches send their fuel level every 30 s instead of every 2 s; fuel burns the same.\n" +
+                "Fast-burning fires keep the 2 s update. Applies on whichever machine runs the fire.");
         }
 
         [HarmonyPatch(typeof(Fireplace), "UpdateFireplace")]

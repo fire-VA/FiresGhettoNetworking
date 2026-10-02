@@ -211,8 +211,9 @@ namespace FiresGhettoNetworkMod
             string nearestRange = s_aiLod_minNearestDist < float.MaxValue
                 ? $"{s_aiLod_minNearestDist:F0}-{s_aiLod_maxNearestDist:F0}m"
                 : "n/a";
-            float nearMeters = FiresGhettoNetworkMod.ConfigAILODNearDistance?.Value ?? DefaultAILODNearMeters;
-            float farMeters  = FiresGhettoNetworkMod.ConfigAILODFarDistance?.Value  ?? DefaultAILODFarMeters;
+            // The gates AILODPatches actually used, so the Auto-Tune tier's values when it is on.
+            float nearMeters = FiresGhettoNetworkMod.ConfigAILODNearDistance != null ? AutoTune.EffectiveConfig.AILODNearDistance() : DefaultAILODNearMeters;
+            float farMeters  = FiresGhettoNetworkMod.ConfigAILODFarDistance  != null ? AutoTune.EffectiveConfig.AILODFarDistance()  : DefaultAILODFarMeters;
 
             sb.Append(" | AILOD: ").Append(s_aiLod_examined).Append(" ex")
               .Append(" (skipTamed=").Append(s_aiLod_playerOrTamed).Append(")")

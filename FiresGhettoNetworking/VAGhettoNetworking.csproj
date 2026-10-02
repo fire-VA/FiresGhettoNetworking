@@ -258,6 +258,9 @@
     <Compile Include="Networking\RenderLimitsCompat.cs" />
     <Compile Include="Networking\RpcRouterPatches.cs" />
     <Compile Include="Networking\ServerAuthorityPatches.cs" />
+    <Compile Include="Networking\ServerFrameSplit.cs" />
+    <Compile Include="Networking\RefPosAudit.cs" />
+    <Compile Include="Networking\VoxelSurfaceProbe.cs" />
     <Compile Include="Networking\ServerClientUtils.cs" />
     <Compile Include="Networking\SendCongestion.cs" />
     <Compile Include="Networking\SendZDOsHeartbeatDiagnostic.cs" />

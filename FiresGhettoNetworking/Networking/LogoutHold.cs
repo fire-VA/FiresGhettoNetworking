@@ -61,10 +61,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Finish Sending Before Logout", true,
-                "Crossplay (PlayFab) only. Vanilla logs out (and quits) in a single frame and throws away whatever a crossplay\n" +
-                "connection still held, such as a character save sent at logout. With this on, logout waits (the game keeps running,\n" +
-                "at most 5 s) until the server has acknowledged everything, and quitting from a world logs out first, then quits.\n" +
-                "Client only.");
+                "Crossplay (PlayFab) only. Logout waits up to 5 s for the server to confirm what was queued (such as your character\n" +
+                "save) instead of dropping it, and quitting from a world logs out first. Client only.");
             s_dedicated = SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null;
             if (!s_dedicated)
             {

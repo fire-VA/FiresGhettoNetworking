@@ -31,10 +31,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Sync Monster Targets", true,
-                "Shares who each monster is after. Vanilla keeps a monster's target only on the game that owns it, so everyone\n" +
-                "else (other players' companions, and every client when the server simulates monsters) sees it as after nobody.\n" +
-                "With this on, the owning game adds the target to the monster's synced data, only when it changes (a few bytes).\n" +
-                "Readers need no FGN: the keys are 'fgn_target' (a ZDOID) and 'fgn_target_by' (the writer's session id).");
+                "Shares who each monster is after, so other games (companions, clients when the server runs monsters) see its\n" +
+                "target and a new owner keeps chasing it. Applies wherever monsters are run. Mods can read 'fgn_target'/'fgn_target_by'.");
         }
 
         // One hook on BaseAI.SetTargetInfo: vanilla's owner-side call every target update, which gets the target's ZDOID and
@@ -89,7 +87,7 @@ namespace FiresGhettoNetworkMod
             if (now >= s_nextAdoptLog)
             {
                 s_nextAdoptLog = now + 10f;
-                LoggerOptions.LogMessage($"[FGN] target sync: {s_adopted} monster(s) kept their target across an owner change "
+                LoggerOptions.LogDebug($"[FGN] target sync: {s_adopted} monster(s) kept their target across an owner change "
                                          + $"(last: {monster.name} after {target.name})");
             }
             return true;

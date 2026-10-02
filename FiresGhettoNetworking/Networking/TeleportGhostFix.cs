@@ -260,7 +260,7 @@ namespace FiresGhettoNetworkMod
             if (_windowStart < 0f) _windowStart = now;
             if (now - _windowStart < ReportIntervalSec) return;
 
-            LoggerOptions.LogInfo($"[TeleportGhostFix] last {now - _windowStart:F0}s: {_windowObjects} object(s) left a peer's area without vanilla noticing; {_windowNotices} drop notice(s) sent (e.g. '{PrefabName(_windowExamplePrefab)}').");
+            if (LoggerOptions.DebugEnabled) LoggerOptions.LogDebug($"[TeleportGhostFix] last {now - _windowStart:F0}s: {_windowObjects} object(s) left a peer's area without vanilla noticing; {_windowNotices} drop notice(s) sent (e.g. '{PrefabName(_windowExamplePrefab)}').");
             _windowStart = now;
             _windowObjects = 0;
             _windowNotices = 0;

@@ -44,10 +44,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("12 - Advanced", "Fix PlayFab Compression Stalls", true,
-                "Crossplay (PlayFab) only. Vanilla compresses and decompresses every crossplay message on one thread that holds a lock\n" +
-                "shared with the main thread for the whole batch, so a send, including every PvP hit a server relays, can wait\n" +
-                "hundreds of milliseconds behind a large message. With this on, the lock is held only to hand one message in or out.\n" +
-                "Same messages, same order. Requires restart.");
+                "Crossplay (PlayFab) only. Stops vanilla's crossplay compression blocking the game, which can delay sends (even\n" +
+                "relayed PvP hits) by hundreds of ms. Same messages, same order. Client and server; requires restart.");
         }
 
         /// <summary>At load, when the fix is on: FGN's loop takes vanilla's place. One result line either way; any failure leaves

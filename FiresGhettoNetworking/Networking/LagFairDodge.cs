@@ -9,7 +9,7 @@ namespace FiresGhettoNetworkMod
     /// their dodge's invincibility ended counts as dodged when the dodge covered any moment in the last min(2 × ping + 100 ms,
     /// 200 ms): the time in which the attacker could still have been looking at the dodge. The victim's own game applies damage in
     /// vanilla, so it decides here, and needs FGN; the SERVER turns it on (config, default off) and tells each FGN client that
-    /// asks. Only dodgeable hits from another player change; everything else, and every hit on a server without it, is vanilla.
+    /// asks; a listen-server host reads its own setting. Only dodgeable hits from another player change; everything else, and every hit on a server without it, is vanilla.
     /// No hooks of its own: CreatureOwnership's Character.RPC_Damage prefix asks Forgive, PlayerPositionSyncPatches'
     /// Player.LateUpdate postfix calls Sample for the local player, and LinkController's ZNet.Start postfix calls RegisterRpcs.
     /// </summary>
@@ -36,10 +36,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("10 - Server Authority", "PvP Lag-Fair Dodge", false,
-                "PvP only. A hit from another player that reaches you just after your dodge's invincibility ended still counts as\n" +
-                "dodged if the dodge covered any moment in the last 2 × your ping + 100 ms (at most 200 ms), the time in which the\n" +
-                "attacker may still have been looking at your dodge. Fixes \"I dodged but still got hit\" at a small cost to attackers.\n" +
-                "Set on the SERVER; it applies to players who run FGN. Off by default.");
+                "PvP only. A hit landing just after your dodge ended (up to 200 ms, based on ping) still counts as dodged, fixing\n" +
+                "\"I dodged but still got hit\" at a small cost to attackers. Set it on the server; applies to players running FGN.");
         }
 
         /// <summary>Per session: the rules RPCs, and nothing known about this server until it answers.</summary>
@@ -79,12 +77,19 @@ namespace FiresGhettoNetworkMod
             if (me == null) return;
             float now = Time.time;
             if (me.IsDodgeInvincible()) s_lastInvincible = now;
-            if (ZNet.instance == null || ZNet.instance.IsServer() || ZRoutedRpc.instance == null) return;
-            if (!s_asked && ZNet.instance.GetServerPeer() != null)
+            if (ZNet.instance == null || ZRoutedRpc.instance == null) return;
+            if (ZNet.instance.IsServer())
+            {
+                // A listen-server host is the server: there is nobody to ask, its own setting is the rule (read live).
+                if (ZNet.instance.IsDedicated()) return;
+                s_serverOn = ConfigEnabled != null && ConfigEnabled.Value;
+            }
+            else if (!s_asked && ZNet.instance.GetServerPeer() != null)
             {
                 s_asked = true;
                 ZRoutedRpc.instance.InvokeRoutedRPC(RulesRequestRpc);
             }
+            // On a host this is the average ping of its connected players (vanilla GetNetStats on a server).
             if (s_serverOn && now - s_pingReadAt >= PingRefreshSeconds)
             {
                 s_pingReadAt = now;

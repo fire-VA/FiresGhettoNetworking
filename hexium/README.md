@@ -73,7 +73,7 @@ Note that mobs are still simulated by the nearest **client** at this point. The 
 
 **ValheimCommunityPatch (VCP) is not compatible with FGN.** VCP replaces the server's object create/destroy pass with its own, built around the world origin, and removes everything the server creates for players, so the two would fight endlessly. If VCP is on the server anyway, Server-Side Simulation stays off for that session and the server log says why. If you want VCP, use its authors' networking mod, [NetworkPerformanceSystem](https://thunderstore.io/c/valheim/p/MidnightMods/NetworkPerformanceSystem/) by MidnightMods, instead of FGN.
 
-Other "optimization" mods can replace the same server code too (see Compatibility below). Where FGN can tell, it keeps Server-Side Simulation off and the server log says why.
+**Valheim Performance Optimizations is incompatible too:** with it on the server, Server-Side Simulation and ZDO ownership transfer stay off and the log says why (see Compatibility below).
 
 ### ZDO ownership transfer — not recommended
 
@@ -122,13 +122,14 @@ When the mod runs on a dedicated server with `Enable Server Auto-Tune = true` (t
 - ZDO update throttle distance
 - AI LOD near/far distances
 - RPC Area-of-Interest radius
-- Extended zone pre-load radius
 
-| Server tier | Send rate | Send buffer | Send queue | ZDO send rate | Throttle distance | AI LOD near / far | RPC AoI | Extended zones |
-|---|---|---|---|---|---|---|---|---|
-| LOW | 512 KB/s – 2 MB/s | 2 MB | vanilla (10 KB) | 100% | 350 m | 80 / 200 m | 192 m | +0 |
-| MED | 768 KB/s – 16 MB/s | 8 MB | 48 KB | 100% | 500 m | 100 / 300 m | 256 m | +1 |
-| HIGH | 1 MB/s – 32 MB/s | 32 MB | 80 KB | 150% | 700 m | 150 / 500 m | 384 m | +2 |
+| Server tier | Send rate | Send buffer | Send queue | ZDO send rate | Throttle distance | AI LOD near / far | RPC AoI |
+|---|---|---|---|---|---|---|---|
+| LOW | 512 KB/s – 2 MB/s | 2 MB | vanilla (10 KB) | 100% | 350 m | 80 / 200 m | 192 m |
+| MED | 768 KB/s – 16 MB/s | 8 MB | 48 KB | 100% | 500 m | 100 / 300 m | 256 m |
+| HIGH | 1 MB/s – 32 MB/s | 32 MB | 80 KB | 150% | 700 m | 150 / 500 m | 384 m |
+
+`Extended Zone Radius` is not part of a tier: it always comes from your config. The startup line `SERVER auto-tune APPLIED` lists the values in use.
 
 Every tier stays at or above vanilla's values; the startup log confirms it with `AutoTune VanillaFloor self-check passed`. 
 
@@ -265,9 +266,8 @@ but im not smart enough to know how to hide the config to only clients while all
 
 Every 5 minutes the mod writes a short report, so you can see what it is doing without guessing:
 
-- `[Compression]` — how much traffic compression saved, sent and received.
-- `[Links]` (dedicated server) — each player's connection: send window, queue, and round trip broken into stages. `fgn_links` prints it on demand.
-- `[Upload]` (clients, with `Log Level` set to Info) — what your game sent to the server, by message and by object type.
+- `[Links]` (dedicated server, with `Log Level` set to Info) — each player's connection: send window, queue, and round trip broken into stages. `fgn_links` prints it on demand.
+- With `Log Level` set to Debug, the timed reports too: `[Compression]` (how much traffic compression saved), `[Upload]` / `[Download]` (what your game sent and received, by message and by object type) and the other per-minute counters.
 - `fgn_rtt` in a client console times a round trip to the server stage by stage.
 - A dedicated server also logs a health summary every 5 minutes: frame rate, lost game time, the worst frame split by part, with the slowest RPC handler.
 
@@ -286,8 +286,9 @@ Two admin test commands, for measuring, never saved:
 
 - Designed to coexist with many mods, I use it on my own server with 60 other mods, and have tested it with many others
 - Works alongside any content mods that don't touch ZNetScene/ZDOMan internals. (doesn't work with most other networking mods, besides better z log and timeout limits, both highly recommended to go with this)
+- **Incompatible: ValheimCommunityPatch (MidnightsFX).** It replaces the same object and network code FGN does, so with it installed FGN switches off its ZDO writer, delta compression and copy-free package writes (and Server-Side Simulation on a server). If you want VCP, use its authors' [NetworkPerformanceSystem](https://thunderstore.io/c/valheim/p/MidnightMods/NetworkPerformanceSystem/) by MidnightMods instead of FGN.
+- **Incompatible: Valheim Performance Optimizations (ontrigger).** It replaces the server's object streaming and ownership code, so with it on a server FGN switches off Server-Side Simulation and ZDO ownership transfer.
 - **Don't stack "optimization" or networking mods.** Many of them patch the same parts of the game, so two together can undo or break each other, and this mod already covers what most networking mods do. Test them and pick the ones that work best for your setup.
-- One concrete case: **ValheimCommunityPatch** replaces the same object scheduling FGN works on. With VCP on the server, Server-Side Simulation stays off and the log says why. If you want VCP, use its authors' [NetworkPerformanceSystem](https://thunderstore.io/c/valheim/p/MidnightMods/NetworkPerformanceSystem/) by MidnightMods instead of FGN.
 
 
 ## Credits

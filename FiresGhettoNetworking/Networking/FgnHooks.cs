@@ -190,7 +190,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch]
         private static class ZNetUpdate
         {
-            static bool Prepare() => s_profile || s_sectors || s_links || s_echo;
+            static bool Prepare() => s_profile || s_sectors || s_links || s_echo || s_dedicated;
 
             [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPrefix, HarmonyPriority(Priority.First)]
             static void Prefix()
@@ -202,6 +202,7 @@ namespace FiresGhettoNetworkMod
             [HarmonyPatch(typeof(ZNet), "Update"), HarmonyPostfix, HarmonyPriority(Priority.Last)]
             static void Postfix(ZNet __instance)
             {
+                if (s_dedicated) RefPosAudit.Tick(__instance);
                 if (s_links) LinkController.ReportPeriodically(__instance);
                 if (s_echo) ConnectionEcho.SendEchoes(__instance);
                 if (s_profile) ServerFrameProfile.NetEnd();

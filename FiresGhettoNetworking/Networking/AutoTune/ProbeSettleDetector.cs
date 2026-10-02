@@ -95,7 +95,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 if (sinceReportSeconds >= ProgressReportIntervalSeconds)
                 {
                     sinceReportSeconds = 0f;
-                    LoggerOptions.LogInfo(
+                    LoggerOptions.LogDebug(
                         $"[AutoTune] Settling — {waitedSeconds:0}s waited, link {linkBytesPerSecond / BytesPerKilobyte:0.0} KB/s, "
                         + $"queue {sendQueueKilobytes:0.0} KB, worst frame {worstFrameThisSample:0}ms, steady for {windowSeconds:0.0}s"
                         + (lastBlocker == null ? "" : $" — waiting on {lastBlocker}"));

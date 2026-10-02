@@ -49,13 +49,12 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Send To Every Player Each Frame", true,
-                "Vanilla sends world updates to one player per frame, so every player's update rate drops as the server fills: "
-                + "about 3 updates a second each with ten players on a 30 fps dedicated server. With this on, every player gets "
-                + "the ZDO Send Rate, within Send Budget Per Frame. Applies on both sides.");
+                "Vanilla sends world updates to one player per frame, so updates slow as the server fills. With this on, every "
+                + "player gets them at the ZDO Send Rate, within Send Budget Per Frame. Client and server.");
             ConfigBudgetMs = config.Bind("04 - Networking", "Send Budget Per Frame", 4f,
                 new ConfigDescription(
-                    "Milliseconds per frame the send scheduler may spend building world updates. Players left over when a frame's "
-                    + "budget runs out are served first next frame, and at least one player is always served per frame, as in vanilla.",
+                    "Milliseconds per frame Send To Every Player Each Frame may spend building world updates. Players left over "
+                    + "are served first next frame, and at least one is always served. Raise it on a busy server with CPU to spare.",
                     new AcceptableValueRange<float>(MinBudgetMs, MaxBudgetMs)));
             ConfigEnabled.SettingChanged += (_, __) => ResetSlots();
         }

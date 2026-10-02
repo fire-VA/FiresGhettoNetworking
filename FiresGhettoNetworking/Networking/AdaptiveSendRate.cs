@@ -14,13 +14,12 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("06 - Auto-Tune", "Adaptive Send Rate", true,
-                "Pins each player's Steam send rate and steps it from that player's own connection. It starts at the Auto-Tune "
-                + "or manual Send Rate Max, rises while Steam is holding data back for that player, and backs off toward the rate "
-                + "actually getting through, never below Send Rate Min, when packets go missing or ping climbs. Defers to "
-                + "HYPERBOOST while that is on. SERVER-SIDE only.");
+                "Sets each Steam player's send rate from their own connection: starts at Send Rate Max, backs off (never below "
+                + "Send Rate Min) on lost packets or rising ping, then recovers. Off while HYPERBOOST is on. Server only.");
             ConfigLog = config.Bind("10 - Diagnostics", "Log Adaptive Send Rate Ticks", false,
-                "Logs each player's link once a second: ping, send window, data in flight, Steam wait, delivery, pacing, "
-                + "goodput and the send rate decision. Noisy, for tuning only. SERVER-SIDE only.");
+                "Logs every send rate step for each connection, about once a second: ping, send window, data in flight, Steam "
+                + "wait, delivery, pacing, goodput and the decision. Noisy; for tuning only. Logs on a server (Adaptive Send "
+                + "Rate) and on a client (Adaptive Upload).");
             ConfigEnabled.SettingChanged += (_, __) =>
             {
                 LinkController.ResetRates();

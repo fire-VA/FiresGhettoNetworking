@@ -37,5 +37,17 @@ namespace FiresGhettoNetworkMod
             if (logger != null && FiresGhettoNetworkMod.ConfigLogLevel != null && FiresGhettoNetworkMod.ConfigLogLevel.Value >= LogLevel.Info)
                 logger.LogInfo(data);
         }
+
+        // 1.5.28 (Fire 2026-10-01: periodic diagnostics are debug logs, not info). Passes only at FGN's Log Level Debug, the
+        // value added after Info in FGN's own LogLevel enum (Ascend.cs). Written through LogInfo because the
+        // BepInEx.cfg disk/console LogLevels hide Debug. Guard a line built every tick with DebugEnabled so it costs nothing off.
+        public static bool DebugEnabled =>
+            FiresGhettoNetworkMod.ConfigLogLevel != null && FiresGhettoNetworkMod.ConfigLogLevel.Value >= LogLevel.Debug;
+
+        public static void LogDebug(object data)
+        {
+            if (logger != null && DebugEnabled)
+                logger.LogInfo(data);
+        }
     }
 }

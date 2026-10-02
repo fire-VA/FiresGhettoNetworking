@@ -119,24 +119,18 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Skip Unchanged Areas", true,
-                "Every world update to a player rescans every object around them for anything they have not been sent, which in a\n" +
-                "big base means tens of thousands of objects many times a second. With this on, the server skips the parts of that\n" +
-                "area where nothing has changed since they were last walked and nothing is still owed, and rescans everything every two\n" +
-                "seconds. DEDICATED SERVER ONLY.");
+                "Each world update normally rechecks every object around a player, tens of thousands in a big base. With this on,\n" +
+                "the server skips areas where nothing changed and nothing is owed to that player. Dedicated server only.");
 
             ConfigJournalEnabled = config.Bind("04 - Networking", "Walk Only Changed Objects", true,
-                "A sector stops being skippable the moment anything in it changes, and a base sector always has something changing,\n" +
-                "so the skip above never reaches the sectors that cost the most. With this on, each changed sector also records\n" +
-                "which objects changed, and a player's update walks those instead of everything standing around them. Needs 'Skip\n" +
-                "Unchanged Areas'. DEDICATED SERVER ONLY.");
+                "Goes further than Skip Unchanged Areas, which cannot skip a busy base where something is always changing: in an\n" +
+                "area that did change, the server checks only the objects that changed instead of everything there. Needs Skip\n" +
+                "Unchanged Areas on. Dedicated server only.");
 
             ConfigFullRescanSeconds = config.Bind("04 - Networking", "Recheck Everything Every", 15f,
                 new ConfigDescription(
-                    "How often each player's whole surroundings are rechecked object by object, ignoring what changed.\n" +
-                    "Every write is already tracked, so this only exists to catch anything that changed without being\n" +
-                    "noticed. Rechecking every two seconds was most of what the skipping above was saving. The report\n" +
-                    "line says whether a recheck ever finds something the tracking missed - if that stays at zero, this\n" +
-                    "can go higher. DEDICATED SERVER ONLY.",
+                    "Seconds between full rechecks around each player, a safety net for changes the settings above missed. Lower is\n" +
+                    "safer, higher saves more; raise it while the server report shows rechecks finding nothing. Dedicated server only.",
                     new AcceptableValueRange<float>(2f, 300f)));
         }
 

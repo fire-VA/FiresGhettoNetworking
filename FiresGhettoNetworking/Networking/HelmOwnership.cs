@@ -79,11 +79,8 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("11 - Ship Fixes", "Give The Ship To Its Helmsman", true,
-                "Vanilla leaves a ship with whichever game owns it (a player's, or the server's with Server-Side Ship Simulation),\n" +
-                "so anyone else at the helm steers it through the server and sees it move only once that game's updates come back.\n" +
-                "With this on, the owning game hands the ship to the player it lets take the helm and passes on steering already on\n" +
-                "its way. With Server-Side Ship Simulation, a ship left empty and at rest goes back to the server after 5 seconds.\n" +
-                "Only the ship's current owner needs FGN.");
+                "Hands a ship to the player who takes the helm, so it no longer reacts late, with no wave-slam hit on hand-over.\n" +
+                "With Server-Side Ship Simulation an empty ship at rest returns to the server after 5 s. Only the owner needs FGN.");
         }
 
         internal static void OnShutdown()

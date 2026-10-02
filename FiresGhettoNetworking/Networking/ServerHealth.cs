@@ -81,7 +81,7 @@ namespace FiresGhettoNetworkMod
                 $"[ServerHealth] last {seconds / 60.0:F0} min: up to {s_peakPlayers} player(s), {framesPerSecond:F1} frames a second "
                 + $"({(s_frames > 0 ? Percent * s_framesAtTimestepCap / s_frames : 0.0):F0}% at Unity's {Time.maximumDeltaTime * MsPerSecond:F0} ms "
                 + $"step limit), worst frame {s_longestMs:F0} ms ({s_longestSplit}); {clock}. Server-Side Simulation "
-                + (simulation ? $"on, Extended Zone Radius {FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value}." : "off."));
+                + (simulation ? $"on, Extended Zone Radius {ServerAuthorityPatches.ExtendedZoneRadius()}." : "off."));
 
             if (simulation && s_peakPlayers > 0 && (framesPerSecond < OverloadedFramesPerSecond || clockSpeed < OverloadedClockSpeed))
                 LoggerOptions.LogWarning(
