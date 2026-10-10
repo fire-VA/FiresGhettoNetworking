@@ -105,6 +105,7 @@ namespace FiresGhettoNetworkMod
 
         private static void ApplySssOwnershipRule(ZDOMan zdoMan, ZDO zdo, long callerUid, long serverUid)
         {
+            if (ValcastPossession.Handle(zdo)) return;   // 1.5.37: a possessed creature stays with its possessor's peer
             Vector2s sector = zdo.GetSector();
             bool coveredByAnyPeer = SectorCoveredByAnyConnectedPeer(sector);
             long owner = zdo.GetOwner();

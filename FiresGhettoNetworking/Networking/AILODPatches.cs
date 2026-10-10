@@ -13,6 +13,14 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool CustomFixedUpdate_Prefix(Character __instance, float dt)
         {
+            long perf = FgnPerf.Begin();
+            bool runOriginal = DecideTick(__instance, dt);
+            FgnPerf.End(FgnPerf.Point.CharacterFixed, perf);
+            return runOriginal;
+        }
+
+        private static bool DecideTick(Character __instance, float dt)
+        {
             if (!IsAILODActiveOnDedicatedServer()) return true;
 
             // ADAPTIVE: throttling distant AI only helps a server that is actually under

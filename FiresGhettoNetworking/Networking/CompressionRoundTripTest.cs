@@ -73,7 +73,7 @@ namespace FiresGhettoNetworkMod
             if (s_commandRegistered) return;
             s_commandRegistered = true;
             new Terminal.ConsoleCommand("fgn_comptest",
-                "[count] [sizeKB] - FGN diagnostic: test network compression. Runs the send policy and frame checks locally "
+                "[count] [sizeKB] - (admin) FGN diagnostic: test network compression. Runs the send policy and frame checks locally "
                 + "(compressible, incompressible, mixed with gzip data, frame-marker escape, damaged frame), then the server "
                 + "bursts N packets cycling compressible / incompressible / mixed (default 100 x 64KB, up to 10000 x 128KB) and "
                 + "verifies every one arrived intact.",

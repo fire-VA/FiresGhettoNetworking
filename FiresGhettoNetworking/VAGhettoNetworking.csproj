@@ -201,6 +201,9 @@
     <Compile Include="Networking\TargetSync.cs" />
     <Compile Include="Networking\OwnershipHandoffPatches.cs" />
     <Compile Include="Networking\TeleportGhostFix.cs" />
+    <Compile Include="Networking\OwnedPositionEcho.cs" />
+    <Compile Include="Networking\OwnerSafeRevisions.cs" />
+    <Compile Include="Networking\PendingServerKeys.cs" />
     <Compile Include="Networking\TerrainCompInitRace.cs" />
     <Compile Include="Networking\SleepTimeSkipFix.cs" />
     <Compile Include="Networking\WorldClock.cs" />
@@ -230,9 +233,12 @@
     <Compile Include="Networking\DownloadBreakdown.cs" />
     <Compile Include="Networking\UploadBreakdown.cs" />
     <Compile Include="Networking\ConnectionEcho.cs" />
+    <Compile Include="Networking\FgnVersionGate.cs" />
+    <Compile Include="Networking\PlayFabJoinCodeGuard.cs" />
     <Compile Include="Networking\RoundTripTrace.cs" />
     <Compile Include="Networking\RecvPace.cs" />
     <Compile Include="Networking\LinkPace.cs" />
+    <Compile Include="Networking\SteamSide.cs" />
     <Compile Include="Networking\CloseWithoutSleep.cs" />
     <Compile Include="Networking\PlayFabZlibWorker.cs" />
     <Compile Include="Networking\NetSim.cs" />
@@ -243,6 +249,7 @@
     <Compile Include="Networking\CreatureOwnership.cs" />
     <Compile Include="Networking\VanillaAccess.cs" />
     <Compile Include="Networking\FgnHooks.cs" />
+    <Compile Include="Networking\FgnPerf.cs" />
     <Compile Include="Networking\KeepaliveFirst.cs" />
     <Compile Include="Networking\AdminConsoleEcho.cs" />
     <Compile Include="Networking\ZdoFloodTest.cs" />
@@ -259,6 +266,7 @@
     <Compile Include="Networking\RpcRouterPatches.cs" />
     <Compile Include="Networking\ServerAuthorityPatches.cs" />
     <Compile Include="Networking\ServerFrameSplit.cs" />
+    <Compile Include="Networking\SssQuietPass.cs" />
     <Compile Include="Networking\RefPosAudit.cs" />
     <Compile Include="Networking\VoxelSurfaceProbe.cs" />
     <Compile Include="Networking\ServerClientUtils.cs" />
@@ -274,6 +282,7 @@
     <Compile Include="Networking\ServerShipSimulationPatches.cs" />
     <Compile Include="Networking\SimDistance.cs" />
     <Compile Include="Networking\ShipFixesGroup.cs" />
+    <Compile Include="Networking\ValcastPossession.cs" />
     <Compile Include="Networking\WearNTearClassifier.cs" />
     <Compile Include="Networking\WearNTearClientSupportPatches.cs" />
     <Compile Include="Networking\WearNTearServerPatches.cs" />

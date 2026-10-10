@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using FiresGhettoNetworkMod.AutoTune;
@@ -104,6 +105,7 @@ namespace FiresGhettoNetworkMod
 
             int totalTypesFound = 0;
             int totalSitesPatched = 0;
+            int typesSkipped = 0;   // obfuscated copies left as shipped
 
             foreach (var t in Targets)
             {
@@ -134,12 +136,37 @@ namespace FiresGhettoNetworkMod
                             // Shared.<sendCompressedDataToPeer>waitForQueue and ServerSync.ConfigSync.
                             // <distributeConfigToPeers>waitForQueue) and skips the BufferingSocket
                             // GetSendQueueSize forwarder, which sits on the hot per-iteration path.
-                            if (!IsGateLoop(m, t.GateMethodName)) continue;
+                            if (!IsGateLoop(m, t.GateMethodName, out string unreadable)) continue;
+                            if (unreadable != null)
+                            {
+                                // A user's server (2026-10-01): AzuAnticheat 4.3.11 is obfuscated, and its ServerSync copy's
+                                // waitForQueue reads back with a call Harmony cannot resolve, so HarmonyX failed it with
+                                // "Invalid argument for call NULL". No IL patch can land there; leave that copy as it ships.
+                                typesSkipped++;
+                                LoggerOptions.LogInfo(
+                                    $"Bulk-transfer gate left as shipped in {asm.GetName().Name} → {inspectedType.FullName}.{m.Name}: "
+                                    + $"its code is obfuscated ({unreadable}), so it cannot be patched. That mod keeps ServerSync's own "
+                                    + "20 KB gate and 30s self-disconnect; nothing else changes.");
+                                continue;
+                            }
+
+                            // 1.5.40 (Fire 10-05: "[Error : HarmonyX] Failed to patch … Invalid argument for call NULL [Label26]" on
+                            // AzuAnticheat's copy): run the rewrite on a copy of the body first and check what HarmonyX would write.
+                            // A body it would refuse is left as shipped with one Info line, so HarmonyX never gets to log an Error.
+                            s_currentVanillaConstant = t.VanillaConstant;
+                            string bad = ValidateRewrite(m);
+                            s_lastTimeoutSitesDisarmed = 0;
+                            if (bad != null)
+                            {
+                                typesSkipped++;
+                                LoggerOptions.LogInfo(
+                                    $"Bulk-transfer gate left as shipped in {asm.GetName().Name} → {inspectedType.FullName}.{m.Name}: "
+                                    + $"its rewritten code would not be valid ({bad}). That mod keeps ServerSync's own 20 KB gate and 30s self-disconnect.");
+                                continue;
+                            }
 
                             try
                             {
-                                s_currentVanillaConstant = t.VanillaConstant;
-                                s_lastTimeoutSitesDisarmed = 0;
                                 harmony.Patch(
                                     original: m,
                                     transpiler: new HarmonyMethod(
@@ -168,7 +195,8 @@ namespace FiresGhettoNetworkMod
 
             LoggerOptions.LogMessage(
                 $"Bulk-transfer scan complete: {totalTypesFound} third-party copies found across loaded assemblies, "
-                + $"{totalSitesPatched} gate sites patched (per-mod gate {s_budgetedGate} bytes, 30s self-disconnect disarmed).");
+                + $"{totalSitesPatched} gate sites patched (per-mod gate {s_budgetedGate} bytes, 30s self-disconnect disarmed)"
+                + (typesSkipped > 0 ? $", {typesSkipped} obfuscated copy/ies left as shipped." : "."));
 
             ApplyJotunnTimeout();
             LoggerOptions.LogInfo(s_jotunnTimeoutField != null
@@ -227,8 +255,12 @@ namespace FiresGhettoNetworkMod
         // (GetSendQueueSize) and ZNet.Disconnect — the signature of a waitForQueue
         // wait-or-drop loop. This pinpoints the gate loop and excludes plain
         // GetSendQueueSize forwarders (e.g. BufferingSocket) that sit on the hot path.
-        private static bool IsGateLoop(MethodBase m, string gateMethodName)
+        // `unreadable` is set (and the method is still reported as a gate loop) when an instruction that needs an operand
+        // reads back with none: obfuscated code (a call whose target reflection cannot resolve). Harmony refuses to write
+        // such a body back, whatever the transpiler does, so the caller skips it with an Info line instead.
+        private static bool IsGateLoop(MethodBase m, string gateMethodName, out string unreadable)
         {
+            unreadable = null;
             List<CodeInstruction> instructions;
             try { instructions = PatchProcessor.GetCurrentInstructions(m); }
             catch { return false; }
@@ -236,13 +268,14 @@ namespace FiresGhettoNetworkMod
             bool hasGate = false, hasDisconnect = false;
             foreach (var ins in instructions)
             {
+                if (unreadable == null && ins.operand == null && ins.opcode.OperandType != OperandType.InlineNone)
+                    unreadable = $"a {ins.opcode.Name} with no resolvable operand";
                 if (!(ins.opcode == OpCodes.Call || ins.opcode == OpCodes.Callvirt)) continue;
                 if (!(ins.operand is MethodInfo mi)) continue;
                 if (mi.Name == gateMethodName) hasGate = true;
                 else if (mi.Name == "Disconnect") hasDisconnect = true;
-                if (hasGate && hasDisconnect) return true;
             }
-            return false;
+            return hasGate && hasDisconnect;
         }
 
         // Transpiler — two rewrites on a confirmed waitForQueue method:
@@ -281,27 +314,56 @@ namespace FiresGhettoNetworkMod
                     && code[i].operand is int v && v == vanilla
                     && NearAnyCall(callIdx, i))
                 {
-                    code[i] = new CodeInstruction(OpCodes.Ldc_I4, target);
+                    // Rewritten in place: a new CodeInstruction would drop the labels and exception blocks on this one,
+                    // and a branch to it would then point nowhere.
+                    code[i].opcode = OpCodes.Ldc_I4;
+                    code[i].operand = target;
                     continue;
                 }
 
-                // 2. Disarm the 30s timeout (float or double form).
+                // 2. Disarm the 30s timeout (float or double form), in place for the same reason.
                 if (code[i].opcode == OpCodes.Ldc_R4 && code[i].operand is float f && f == 30f)
                 {
                     // Load the live timeout field instead of a baked constant, so the
                     // fgn_overload 'arm' control can restore 30s at runtime to prove the path.
-                    code[i] = new CodeInstruction(OpCodes.Ldsfld, TimeoutField);
+                    code[i].opcode = OpCodes.Ldsfld;
+                    code[i].operand = TimeoutField;
                     disarmed++;
                 }
                 else if (code[i].opcode == OpCodes.Ldc_R8 && code[i].operand is double d && d == 30.0)
                 {
-                    code[i] = new CodeInstruction(OpCodes.Ldc_R8, 86400.0);
+                    code[i].operand = 86400.0;
                     disarmed++;
                 }
             }
 
             s_lastTimeoutSitesDisarmed = disarmed;
             return code;
+        }
+
+        /// <summary>
+        /// The transpiler's output for this method, checked the way HarmonyX's writer needs it: every instruction that takes an
+        /// operand has one, and every branch / switch target is a label some instruction carries. Null = fine to patch; otherwise
+        /// the first problem, by instruction index and opcode.
+        /// </summary>
+        private static string ValidateRewrite(MethodBase m)
+        {
+            List<CodeInstruction> code;
+            try { code = RaiseGateAndDisarmTimeout(PatchProcessor.GetCurrentInstructions(m)).ToList(); }
+            catch (Exception ex) { return $"reading it failed: {ex.GetType().Name}"; }
+            var defined = new HashSet<Label>();
+            foreach (var ins in code) foreach (var label in ins.labels) defined.Add(label);
+            for (int i = 0; i < code.Count; i++)
+            {
+                var ins = code[i];
+                if (ins.opcode.OperandType == OperandType.InlineNone) continue;
+                if (ins.operand == null) return $"instruction {i} {ins.opcode.Name} has no operand";
+                if (ins.operand is Label target && !defined.Contains(target)) return $"instruction {i} {ins.opcode.Name} branches to a missing label";
+                if (ins.operand is Label[] targets)
+                    foreach (var each in targets)
+                        if (!defined.Contains(each)) return $"instruction {i} switch branches to a missing label";
+            }
+            return null;
         }
 
         private static bool NearAnyCall(List<int> callIdx, int i)

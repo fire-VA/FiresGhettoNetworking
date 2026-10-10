@@ -99,6 +99,7 @@ namespace FiresGhettoNetworkMod
 
         private static void OnEcho(ZRpc rpc, long stamp)
         {
+            FgnVersionGate.NoteServerEcho();
             RoundTripTrace.AnswerLeg leg = RoundTripTrace.BeginAnswerLeg(rpc);
             rpc.Invoke(ReplyRpc, stamp, Protocol);
             RoundTripTrace.SendAnswerLeg(rpc, RoundTripTrace.RpcEchoStages, stamp, leg);

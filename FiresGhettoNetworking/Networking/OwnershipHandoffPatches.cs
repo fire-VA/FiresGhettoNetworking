@@ -13,6 +13,8 @@ namespace FiresGhettoNetworkMod
     {
         private static readonly AccessTools.FieldRef<ZSyncTransform, bool> _wasOwnerRef
             = AccessTools.FieldRefAccess<ZSyncTransform, bool>("m_wasOwner");
+        private static readonly AccessTools.FieldRef<ZNetView, ZDO> _zdoRef
+            = AccessTools.FieldRefAccess<ZNetView, ZDO>("m_zdo");
 
         // Below this the snap is not worth the transform write; vanilla's LateUpdate pass
         // applies the identical correction moments later regardless.
@@ -31,9 +33,11 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool ZSyncTransform_CustomFixedUpdate_Prefix(ZSyncTransform __instance, ZNetView ___m_nview, Rigidbody ___m_body)
         {
-            if (RemoteMotion.Handles(___m_nview) || RemoteArrows.Handles(___m_nview)) return false;
-            ZSyncTransform_CustomFixedUpdate_PreSnapOnOwnershipGain(__instance, ___m_nview, ___m_body);
-            return true;
+            long perf = FgnPerf.Begin();
+            bool runOriginal = !RemoteMotion.Handles(___m_nview) && !RemoteArrows.Handles(___m_nview);
+            if (runOriginal) ZSyncTransform_CustomFixedUpdate_PreSnapOnOwnershipGain(__instance, ___m_nview, ___m_body);
+            FgnPerf.End(FgnPerf.Point.SyncTransformFixed, perf);
+            return runOriginal;
         }
 
         private static void ZSyncTransform_CustomFixedUpdate_PreSnapOnOwnershipGain(
@@ -41,18 +45,19 @@ namespace FiresGhettoNetworkMod
             ZNetView ___m_nview,
             Rigidbody ___m_body)
         {
-            if (__instance == null || ___m_nview == null || !___m_nview.IsValid())
+            // 1.5.46 (FGN perf 10-07: "synctransform-fixed ~100 ms/min at the river", ~6.5k calls a second, almost all of them
+            // returning here): the same tests in the same order, read straight from the fields (no Unity == null, which goes
+            // native, and no IsValid/GetZDO/IsOwner wrapper calls on ZNetView). ZNetView.IsValid() = m_zdo != null && m_zdo.IsValid().
+            ZDO zdo = (object)___m_nview != null ? _zdoRef(___m_nview) : null;
+            if (zdo == null || !zdo.IsValid())
+                return;
+            bool owner = zdo.IsOwner();
+
+            if (VehicleOwnershipEdge.HoldsAny && VehicleOwnershipEdge.KeepHolding(__instance, owner))
                 return;
 
-            if (VehicleOwnershipEdge.HoldsAny && VehicleOwnershipEdge.KeepHolding(__instance, ___m_nview.IsOwner()))
-                return;
-
-            ZDO zdo = ___m_nview.GetZDO();
-            if (zdo == null || !zdo.IsOwner())
-                return;
-
-            // Already owner last LateUpdate → not a handoff frame, nothing to correct.
-            if (_wasOwnerRef(__instance))
+            // Not the owner, or already owner last LateUpdate → not a handoff frame, nothing to correct.
+            if (!owner || _wasOwnerRef(__instance))
                 return;
 
             var character = __instance.GetComponent<Character>();

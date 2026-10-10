@@ -190,27 +190,34 @@ namespace FiresGhettoNetworkMod
         // A transpiler on ZSteamMatchmaking.RegisterServer broke the CreateLobby callback chain (v1.3.0), so the Steam SDK
         // entry points are prefixed instead. The dedicated build lists itself through SetMaxPlayerCount (10 in RegisterServer,
         // 64 in SteamManager.Awake); CreateLobby is the client build's path.
-
-        [HarmonyPatch(typeof(Steamworks.SteamMatchmaking), nameof(Steamworks.SteamMatchmaking.CreateLobby))]
-        [HarmonyPrefix]
-        static void OverrideSteamLobbyMaxMembers(Steamworks.ELobbyType eLobbyType, ref int cMaxMembers)
+        // 1.5.49 (Xbox build has no ZSteamSocket): these two live in SteamPatches, attached by Ascend only when
+        // SteamSide.Present, so reading DedicatedServerGroup's attributes never resolves a Steamworks type.
+        [HarmonyPatch]
+        internal static class SteamPatches
         {
-            if (!isDedicatedDetected) return;
-            int target = ResolveAdvertisedLimit();
-            if (target <= 0 || cMaxMembers == target) return;
-            LoggerOptions.LogInfo($"Overriding SteamMatchmaking.CreateLobby cMaxMembers: {cMaxMembers} → {target}");
-            cMaxMembers = target;
-        }
+            static bool Prepare() => SteamSide.Present;
 
-        [HarmonyPatch(typeof(Steamworks.SteamGameServer), nameof(Steamworks.SteamGameServer.SetMaxPlayerCount))]
-        [HarmonyPrefix]
-        static void OverrideSteamGameServerMaxPlayers(ref int cPlayersMax)
-        {
-            if (!isDedicatedDetected) return;
-            int target = ResolveAdvertisedLimit();
-            if (target <= 0 || cPlayersMax == target) return;
-            LoggerOptions.LogInfo($"Overriding SteamGameServer.SetMaxPlayerCount cPlayersMax: {cPlayersMax} → {target}");
-            cPlayersMax = target;
+            [HarmonyPatch(typeof(Steamworks.SteamMatchmaking), nameof(Steamworks.SteamMatchmaking.CreateLobby))]
+            [HarmonyPrefix]
+            static void OverrideSteamLobbyMaxMembers(Steamworks.ELobbyType eLobbyType, ref int cMaxMembers)
+            {
+                if (!isDedicatedDetected) return;
+                int target = ResolveAdvertisedLimit();
+                if (target <= 0 || cMaxMembers == target) return;
+                LoggerOptions.LogInfo($"Overriding SteamMatchmaking.CreateLobby cMaxMembers: {cMaxMembers} → {target}");
+                cMaxMembers = target;
+            }
+
+            [HarmonyPatch(typeof(Steamworks.SteamGameServer), nameof(Steamworks.SteamGameServer.SetMaxPlayerCount))]
+            [HarmonyPrefix]
+            static void OverrideSteamGameServerMaxPlayers(ref int cPlayersMax)
+            {
+                if (!isDedicatedDetected) return;
+                int target = ResolveAdvertisedLimit();
+                if (target <= 0 || cPlayersMax == target) return;
+                LoggerOptions.LogInfo($"Overriding SteamGameServer.SetMaxPlayerCount cPlayersMax: {cPlayersMax} → {target}");
+                cPlayersMax = target;
+            }
         }
 
         private const int VanillaDedicatedLobbySeats = 11;

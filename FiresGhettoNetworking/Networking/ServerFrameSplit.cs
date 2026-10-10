@@ -42,7 +42,7 @@ namespace FiresGhettoNetworkMod
                 $"[SSS] server pass, last {ReportSeconds:F0} s over {s_frames} passes (average / worst ms per pass): collect {Avg(s_collect)} / {Ms(s_maxCollect)}, "
                 + $"filter {Avg(s_filter)} / {Ms(s_maxFilter)}, create {Avg(s_create)} / {Ms(s_maxCreate)} ({s_created} objects, slowest one "
                 + $"{Ms(s_maxCreateOne)}), remove {Avg(s_remove)} / {Ms(s_maxRemove)}; up to {s_nearMax} near and {s_distantMax} distant objects a pass; "
-                + $"most created: {TopCreated()}.");
+                + $"most created: {TopCreated()}; {SssQuietPass.TakeSummary()}.");
             s_createdByPrefab.Clear();
             s_collect = s_filter = s_create = s_remove = 0;
             s_maxCollect = s_maxFilter = s_maxCreate = s_maxRemove = 0;

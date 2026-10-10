@@ -18,6 +18,9 @@ namespace FiresGhettoNetworkMod
     {
         private const string CloseConnectionName = "CloseConnection";
 
+        // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only; Ascend also attaches it only when SteamSide.Present.
+        static bool Prepare() => SteamSide.Present;
+
         [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Close)), HarmonyTranspiler]
         static IEnumerable<CodeInstruction> SkipSleepWhileServing(IEnumerable<CodeInstruction> instructions)
         {

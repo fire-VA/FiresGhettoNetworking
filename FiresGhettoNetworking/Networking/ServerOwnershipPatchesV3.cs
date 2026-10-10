@@ -76,6 +76,8 @@ namespace FiresGhettoNetworkMod
         {
             s_simulatedPrefabs.Clear();
             s_built = false;
+            s_handOffs.Clear();
+            s_flipBacks = 0;
         }
 
         // ====================================================================
@@ -118,6 +120,7 @@ namespace FiresGhettoNetworkMod
             s_passCount++;
             int zdosThisPass = 0;
             int simulatedThisPass = 0;
+            float now = UnityEngine.Time.realtimeSinceStartup;
 
             foreach (var zdo in s_tempNearObjects)
             {
@@ -128,6 +131,9 @@ namespace FiresGhettoNetworkMod
                 long owner = zdo.GetOwner();
                 bool simulated = s_simulatedPrefabs.Contains(zdo.m_prefab);
                 if (simulated) simulatedThisPass++;
+                // 1.5.37: a creature a player possesses (FiresValcast 'valcast_possessed') stays with that player's peer
+                if (simulated && ValcastPossession.Handle(zdo)) continue;
+                owner = zdo.GetOwner();   // Handle may have cleared a stale claim; the owner itself is unchanged then
 
                 // R82 S3: the server only ever got the monsters it spawned itself ("2 of 4 Greydwarfs owned by the server";
                 // boars stayed the player's with 0 owner changes). The branches below are vanilla's stale-owner rule, which never
@@ -205,8 +211,14 @@ namespace FiresGhettoNetworkMod
                         // the server's own pass shouldn't claim non-simulated
                         // ZDOs for itself (that would re-introduce the V2
                         // problems we're avoiding).
-                        if (uid != serverUid)
+                        //
+                        // 1.5.43: and only when the object is inside the CALLER's active area, vanilla's own test. "Any
+                        // peer covers the sector" (the 2-zone near radius) also holds for the ring between 1.5 and 2 zones,
+                        // where no owner ever covers it on vanilla's test, so two players took that ring from each other
+                        // on every pass (perf leg B1: 22010 hand-overs every 10 s, each one resent to both clients).
+                        if (uid != serverUid && ZNetScene.InActiveArea(zdo.GetPosition(), zone))
                         {
+                            NoteHandOff(zdo.m_uid, owner, uid, now);
                             zdo.SetOwner(uid);
                             s_nonSimulatedTransfersToPeer++;
                         }
@@ -232,7 +244,6 @@ namespace FiresGhettoNetworkMod
             // fraction of nearby ZDOs are even candidates for server-side
             // simulation. nonSimulatedTransfersToPeer shows interactables
             // flowing to peers via vanilla path.
-            float now = UnityEngine.Time.realtimeSinceStartup;
             if (now >= s_nextStatLogTime)
             {
                 if (LoggerOptions.DebugEnabled) LoggerOptions.LogDebug(
@@ -240,7 +251,10 @@ namespace FiresGhettoNetworkMod
                     + $"({s_simulatedSeen} simulated-class), "
                     + $"{s_transfersToServer} transfers-to-server, {s_takenOver} taken over from a present owner, "
                     + $"{s_nonSimulatedTransfersToPeer} transfers-to-peer (non-simulated), "
-                    + $"{s_releases} releases-to-unowned.");
+                    + $"{s_releases} releases-to-unowned, "
+                    + $"{s_flipBacks} handed back to their previous peer within {FlipBackSeconds:F0} s.");
+                s_flipBacks = 0;
+                PruneHandOffs(now);
                 s_passCount = 0;
                 s_zdosProcessed = 0;
                 s_simulatedSeen = 0;
@@ -252,6 +266,30 @@ namespace FiresGhettoNetworkMod
             }
 
             return false; // we handled it; skip vanilla
+        }
+
+        // 1.5.43: a peer hand-over that undoes one made moments ago is ownership ping-pong; counted so a regression of the
+        // ring fix shows in the 10 s rollup (healthy = 0, or a handful when players cross each other's areas).
+        private const float FlipBackSeconds = 10f;
+        private struct HandOff { public long From, To; public float At; }
+        private static readonly Dictionary<ZDOID, HandOff> s_handOffs = new Dictionary<ZDOID, HandOff>();
+        private static readonly List<ZDOID> s_expiredHandOffs = new List<ZDOID>();
+        private static int s_flipBacks;
+
+        private static void NoteHandOff(ZDOID id, long from, long to, float now)
+        {
+            if (s_handOffs.TryGetValue(id, out HandOff last) && last.From == to && last.To == from
+                && now - last.At <= FlipBackSeconds)
+                s_flipBacks++;
+            s_handOffs[id] = new HandOff { From = from, To = to, At = now };
+        }
+
+        private static void PruneHandOffs(float now)
+        {
+            s_expiredHandOffs.Clear();
+            foreach (var entry in s_handOffs)
+                if (now - entry.Value.At > FlipBackSeconds) s_expiredHandOffs.Add(entry.Key);
+            foreach (ZDOID id in s_expiredHandOffs) s_handOffs.Remove(id);
         }
     }
 }

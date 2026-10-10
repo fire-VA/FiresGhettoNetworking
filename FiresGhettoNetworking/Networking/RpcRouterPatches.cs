@@ -24,6 +24,13 @@ namespace FiresGhettoNetworkMod
 
         public static bool RouteRPC_Prefix(ZRoutedRpc __instance, ZRoutedRpc.RoutedRPCData rpcData, bool __runOriginal)
         {
+            // A player's broadcast RoutedRpcManager already filtered, passed through here only so other mods' RouteRPC hooks
+            // run first; a veto from one of them (EWP's Say cancel) means it is not sent at all, as in vanilla.
+            if (RoutedRpcManager.TakeFilteredRecipients(rpcData, out var recipients))
+            {
+                if (__runOriginal) RoutedRpcManager.SendTo(rpcData, recipients);
+                return false;
+            }
             if (!__runOriginal) return false;
             if (rpcData == null || rpcData.m_targetPeerID != 0L) return true;
             if (!VanillaAccess.RoutedRpcIsServer(__instance) || rpcData.m_senderPeerID != VanillaAccess.RoutedRpcId(__instance)) return true;

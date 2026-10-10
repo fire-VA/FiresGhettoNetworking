@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using HarmonyLib;
@@ -121,8 +122,6 @@ namespace FiresGhettoNetworkMod
 
         private static readonly Dictionary<int, Trace> s_probes = new Dictionary<int, Trace>();
         private static readonly Dictionary<ZNetPeer, EchoWindow> s_echoes = new Dictionary<ZNetPeer, EchoWindow>();
-        private static AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>> s_valheimSendQueue;
-        private static bool s_valheimSendQueueResolved;
         private static bool s_arrivalHooked;
         private static bool s_failureLogged;
 
@@ -140,11 +139,11 @@ namespace FiresGhettoNetworkMod
         internal static IEnumerable<CodeInstruction> NoteEachSteamArrival(IEnumerable<CodeInstruction> instructions)
         {
             var code = new List<CodeInstruction>(instructions);
-            MethodInfo noteArrival = AccessTools.Method(typeof(RoundTripTrace), nameof(NoteArrival));
+            MethodInfo noteArrival = AccessTools.Method(typeof(SteamTrace), nameof(SteamTrace.NoteArrival));
             int hooked = 0;
             for (int i = 0; i < code.Count; i++)
             {
-                if (!ReadsSteamMessage(code[i])) continue;
+                if (!SteamTrace.ReadsSteamMessage(code[i])) continue;
                 code.Insert(i + 1, new CodeInstruction(OpCodes.Dup));
                 code.Insert(i + 2, new CodeInstruction(OpCodes.Call, noteArrival));
                 i += 2;
@@ -158,17 +157,84 @@ namespace FiresGhettoNetworkMod
             return instructions;
         }
 
-        private static bool ReadsSteamMessage(CodeInstruction instruction) =>
-            instruction.operand is MethodInfo method && method.IsGenericMethod && method.Name == nameof(Marshal.PtrToStructure)
-            && method.GetGenericArguments()[0] == typeof(SteamNetworkingMessage_t);
-
-        public static void NoteArrival(SteamNetworkingMessage_t message)
+        /// <summary>
+        /// 1.5.49 (Xbox build has no ZSteamSocket): every Steam-typed member of RoundTripTrace lives here, so the trace (and its
+        /// ZRpc.Update patch) loads on a build without Steam. Reached only when SteamSide.Present (or from the Recv transpiler).
+        /// </summary>
+        private static class SteamTrace
         {
-            s_lastArrivalMicroseconds = message.m_usecTimeReceived.m_SteamNetworkingMicroseconds;
-            s_lastArrivalBytes = message.m_cbSize;
-            s_drainPackets++;
-            s_drainBytes += message.m_cbSize;
-            RecvPace.Note(message.m_cbSize);
+            private static AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>> s_valheimSendQueue;
+            private static bool s_valheimSendQueueResolved;
+
+            internal static bool ReadsSteamMessage(CodeInstruction instruction) =>
+                instruction.operand is MethodInfo method && method.IsGenericMethod && method.Name == nameof(Marshal.PtrToStructure)
+                && method.GetGenericArguments()[0] == typeof(SteamNetworkingMessage_t);
+
+            public static void NoteArrival(SteamNetworkingMessage_t message)
+            {
+                s_lastArrivalMicroseconds = message.m_usecTimeReceived.m_SteamNetworkingMicroseconds;
+                s_lastArrivalBytes = message.m_cbSize;
+                s_drainPackets++;
+                s_drainBytes += message.m_cbSize;
+                RecvPace.Note(message.m_cbSize);
+            }
+
+            internal static bool IsSteam(ISocket socket) => SteamSocketOf(socket) != null;
+
+            internal static bool ValheimQueueHasPackets(ISocket socket)
+            {
+                ZSteamSocket steam = SteamSocketOf(socket);
+                Queue<byte[]> valheimQueue = steam != null ? ValheimSendQueueOf(steam) : null;
+                return valheimQueue != null && valheimQueue.Count > 0;
+            }
+
+            internal static long SteamNowMicroseconds()
+            {
+                SteamNetworkingMicroseconds now = ZNet.instance != null && ZNet.instance.IsDedicated()
+                    ? SteamGameServerNetworkingUtils.GetLocalTimestamp()
+                    : SteamNetworkingUtils.GetLocalTimestamp();
+                return now.m_SteamNetworkingMicroseconds;
+            }
+
+            internal static SendQueue CaptureSendQueue(ISocket socket)
+            {
+                var queue = new SendQueue();
+                ZSteamSocket steam = SteamSocketOf(socket);
+                if (steam == null) return queue;
+
+                Queue<byte[]> valheimQueue = ValheimSendQueueOf(steam);
+                queue.ValheimKnown = valheimQueue != null;
+                if (queue.ValheimKnown)
+                {
+                    foreach (byte[] packet in valheimQueue)
+                    {
+                        queue.ValheimPackets++;
+                        queue.ValheimBytes += packet.Length;
+                    }
+                }
+
+                if (!LinkController.SteamLinks.TryStatus(steam, out SteamNetConnectionRealTimeStatus_t status)) return queue;
+                queue.SteamKnown = true;
+                queue.SteamPendingBytes = status.m_cbPendingReliable + status.m_cbPendingUnreliable;
+                queue.SteamWaitMs = (long)status.m_usecQueueTime / MicrosecondsPerMillisecond;
+                queue.PacingBytesPerSecond = status.m_nSendRateBytesPerSecond;
+                return queue;
+            }
+
+            private static ZSteamSocket SteamSocketOf(ISocket socket) =>
+                socket == null ? null : NetworkingRatesGroup.UnwrapSocket(socket) as ZSteamSocket;
+
+            private static Queue<byte[]> ValheimSendQueueOf(ZSteamSocket socket)
+            {
+                if (!s_valheimSendQueueResolved)
+                {
+                    s_valheimSendQueueResolved = true;
+                    FieldInfo field = AccessTools.Field(typeof(ZSteamSocket), "m_sendQueue");
+                    if (field != null && field.FieldType == typeof(Queue<byte[]>))
+                        s_valheimSendQueue = AccessTools.FieldRefAccess<ZSteamSocket, Queue<byte[]>>(field);
+                }
+                return s_valheimSendQueue?.Invoke(socket);
+            }
         }
 
         [HarmonyPatch(typeof(ZRpc), nameof(ZRpc.Update)), HarmonyPrefix]
@@ -215,8 +281,7 @@ namespace FiresGhettoNetworkMod
         {
             try
             {
-                ZSteamSocket steam = SteamSocketOf(rpc.GetSocket());
-                Queue<byte[]> valheimQueue = steam != null ? ValheimSendQueueOf(steam) : null;
+                bool heldForNextFrame = SteamSide.Present && ValheimQueueHasPackets(rpc.GetSocket());
                 var pkg = new ZPackage();
                 pkg.Write(StagesFormat);
                 pkg.Write(key);
@@ -226,7 +291,7 @@ namespace FiresGhettoNetworkMod
                 WriteSubsystems(pkg, leg.Frame);
                 WriteSendQueue(pkg, leg.AnswerQueue);
                 pkg.Write(leg.AnswerTicks);
-                pkg.Write(valheimQueue != null && valheimQueue.Count > 0);
+                pkg.Write(heldForNextFrame);
                 rpc.Invoke(stagesRpc, pkg);
             }
             catch (Exception ex)
@@ -437,7 +502,7 @@ namespace FiresGhettoNetworkMod
                 PacketsAhead = Math.Max(0, s_drainPackets - 1),
                 BytesAhead = Math.Max(0, s_drainBytes - s_lastArrivalBytes),
             };
-            if (!s_arrivalHooked || SteamSocketOf(rpc.GetSocket()) == null) return receipt;
+            if (!s_arrivalHooked || !SteamSide.Present || !IsSteam(rpc.GetSocket())) return receipt;
 
             long ageMicroseconds = SteamNowMicroseconds() - s_lastArrivalMicroseconds;
             receipt.ArrivalTicks = now - (long)(ageMicroseconds * TicksPerMicrosecond);
@@ -445,53 +510,22 @@ namespace FiresGhettoNetworkMod
             return receipt;
         }
 
-        private static long SteamNowMicroseconds()
-        {
-            SteamNetworkingMicroseconds now = ZNet.instance != null && ZNet.instance.IsDedicated()
-                ? SteamGameServerNetworkingUtils.GetLocalTimestamp()
-                : SteamNetworkingUtils.GetLocalTimestamp();
-            return now.m_SteamNetworkingMicroseconds;
-        }
+        // 1.5.49 (Xbox build has no ZSteamSocket): the Steam reads live in SteamTrace, reached through these NoInlining steps
+        // only when SteamSide.Present, so no always-on method's JIT ever sets up SteamTrace (its fields name Steam types).
+        private static SendQueue CaptureSendQueue(ISocket socket) =>
+            SteamSide.Present ? CaptureSteamSendQueue(socket) : new SendQueue();
 
-        private static SendQueue CaptureSendQueue(ISocket socket)
-        {
-            var queue = new SendQueue();
-            ZSteamSocket steam = SteamSocketOf(socket);
-            if (steam == null) return queue;
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static SendQueue CaptureSteamSendQueue(ISocket socket) => SteamTrace.CaptureSendQueue(socket);
 
-            Queue<byte[]> valheimQueue = ValheimSendQueueOf(steam);
-            queue.ValheimKnown = valheimQueue != null;
-            if (queue.ValheimKnown)
-            {
-                foreach (byte[] packet in valheimQueue)
-                {
-                    queue.ValheimPackets++;
-                    queue.ValheimBytes += packet.Length;
-                }
-            }
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool IsSteam(ISocket socket) => SteamTrace.IsSteam(socket);
 
-            if (!LinkController.TryStatus(steam, out SteamNetConnectionRealTimeStatus_t status)) return queue;
-            queue.SteamKnown = true;
-            queue.SteamPendingBytes = status.m_cbPendingReliable + status.m_cbPendingUnreliable;
-            queue.SteamWaitMs = (long)status.m_usecQueueTime / MicrosecondsPerMillisecond;
-            queue.PacingBytesPerSecond = status.m_nSendRateBytesPerSecond;
-            return queue;
-        }
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool ValheimQueueHasPackets(ISocket socket) => SteamTrace.ValheimQueueHasPackets(socket);
 
-        private static ZSteamSocket SteamSocketOf(ISocket socket) =>
-            socket == null ? null : NetworkingRatesGroup.UnwrapSocket(socket) as ZSteamSocket;
-
-        private static Queue<byte[]> ValheimSendQueueOf(ZSteamSocket socket)
-        {
-            if (!s_valheimSendQueueResolved)
-            {
-                s_valheimSendQueueResolved = true;
-                FieldInfo field = AccessTools.Field(typeof(ZSteamSocket), "m_sendQueue");
-                if (field != null && field.FieldType == typeof(Queue<byte[]>))
-                    s_valheimSendQueue = AccessTools.FieldRefAccess<ZSteamSocket, Queue<byte[]>>(field);
-            }
-            return s_valheimSendQueue?.Invoke(socket);
-        }
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static long SteamNowMicroseconds() => SteamTrace.SteamNowMicroseconds();
 
         private static Stages MeasureStages(Trace trace)
         {

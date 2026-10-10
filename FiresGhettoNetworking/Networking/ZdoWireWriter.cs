@@ -11,8 +11,9 @@ namespace FiresGhettoNetworkMod
     /// FGN's one hook on ZDO.Serialize, plus the nested-package write the send path runs under it. Vanilla builds seven
     /// lists, eight closures and a boxed enumerator per data type for every object it sends, then copies each nested
     /// package into a new array; a busy client sends about 2,000 objects a second. This writes the same bytes straight
-    /// from ZDOExtraData's buckets into the outgoing package. The first objects of each session are checked against
-    /// vanilla's own bytes, and any difference hands the work back to vanilla. The server's delta frames and the
+    /// from ZDOExtraData's buckets into the outgoing package. The first objects of each session, every object shape seen
+    /// for the first time and a sample of the rest are checked against vanilla's own bytes, and any difference hands the
+    /// work back to vanilla. The server's delta frames and the
     /// large-ZDO diagnostic run from this hook too.
     /// </summary>
     [HarmonyPatch]
@@ -221,6 +222,16 @@ namespace FiresGhettoNetworkMod
         public static bool ZDO_Serialize_Prefix(ZDO __instance, ZPackage pkg)
         {
             if (t_writingVanillaReference) return true;
+            // The world save thread can write ZDOExtraData while it runs: Expand World Prefabs' ServerSideData prefixes ZDO.Save
+            // and Sets a byte array on the live object (2026-10-02 EWP review), which can regrow the very bucket arrays read in
+            // place here, keys/values/length read separately. Vanilla's Serialize takes its own copies through CopyTo, so for the
+            // few seconds of a save it does the whole write and FGN adds no failure of its own (or a bad shape cached as verified);
+            // a delta peer then gets a keyframe next time, since no snapshot was taken of this send.
+            if (WorldSaveRunning())
+            {
+                if (ZDODeltaPatches.ContextActive) ZDODeltaPatches.ForgetSent(__instance);
+                return true;
+            }
             BigZdoDiagnostic.ReportLiveBuckets(__instance);
             if (s_yieldToForeignSerializer) return true;
 
@@ -233,6 +244,14 @@ namespace FiresGhettoNetworkMod
             bool written = TryWriteObject(__instance, pkg);
             if (deltaContext) ZDODeltaPatches.RecordSent(__instance);
             return !written;
+        }
+
+        // Vanilla's own IsSaving() is m_saveThread != null: true from the thread's start until ZNet.UpdateSaving clears it the
+        // frame after it ends, one frame longer than IsAlive and with no reflection or native call on every object written.
+        private static bool WorldSaveRunning()
+        {
+            ZNet net = ZNet.instance;
+            return net != null && net.IsSaving();
         }
 
         [HarmonyPatch(typeof(ZPackage), nameof(ZPackage.Write), typeof(ZPackage))]
@@ -267,68 +286,130 @@ namespace FiresGhettoNetworkMod
             target.Position = 0L;
         }
 
+        // The first-2000 check alone left the rest of a session unchecked, and an object kind that first shows up later (a
+        // modded prefab, a rarely used data bucket) was never compared at all. So every shape not yet seen is compared once,
+        // and about one in SampleOneIn of the rest, for the whole session. Each check writes into two reused scratch packages.
+        private const uint SampleOneIn = 100;
+        private static readonly HashSet<long> s_verifiedShapes = new HashSet<long>();
+        private static uint s_sampleState = 2463534242u;
+        private static long s_checks;
+        [ThreadStatic] private static ZPackage t_ourScratch;
+        [ThreadStatic] private static ZPackage t_vanillaScratch;
+
+        /// <summary>What one object's write needs, read once so the check and the write share the bucket lookups.</summary>
+        private struct ObjectLayout
+        {
+            public int Floats, Vec3s, Quats, Ints, Longs, Strings, ByteArrays;
+            public BinarySearchDictionary<int, float> FloatBucket;
+            public BinarySearchDictionary<int, Vector3> Vec3Bucket;
+            public BinarySearchDictionary<int, Quaternion> QuatBucket;
+            public BinarySearchDictionary<int, int> IntBucket;
+            public BinarySearchDictionary<int, long> LongBucket;
+            public BinarySearchDictionary<int, string> StringBucket;
+            public BinarySearchDictionary<int, byte[]> ByteArrayBucket;
+            public ZDOConnection Connection;
+            public Vector3 Rotation;
+            public int Flags;
+        }
+
         private static bool TryWriteObject(ZDO zdo, ZPackage pkg)
         {
             if (!s_objectsReady || !s_foreignScanDone || !Enabled) return false;
-            if (s_matchedVanilla < ChecksAgainstVanilla && !MatchesVanilla(zdo)) return false;
-            WriteObject(zdo, pkg);
+            Measure(zdo, out ObjectLayout layout);
+            long shape = ShapeOf(zdo, layout.Flags);
+            if (s_matchedVanilla >= ChecksAgainstVanilla && s_verifiedShapes.Contains(shape) && !Sampled())
+            {
+                WriteObject(zdo, ref layout, pkg);
+                return true;
+            }
+
+            // Checked objects are written to scratch first, so a mismatch leaves pkg untouched and vanilla's Serialize,
+            // which runs when this returns false, writes the only copy of the object.
+            ZPackage ours = t_ourScratch ?? (t_ourScratch = new ZPackage());
+            ours.Clear();
+            WriteObject(zdo, ref layout, ours);
+            if (!MatchesVanilla(zdo, ours, shape, layout.Flags)) return false;
+            AppendBytes(pkg, ours);
             return true;
         }
 
-        // Vanilla ZDO.Serialize field for field: the same flags, in the same order, through the same ZPackage writes.
-        private static void WriteObject(ZDO zdo, ZPackage pkg)
+        // Vanilla ZDO.Serialize's flag word, built from the same buckets it reads.
+        private static void Measure(ZDO zdo, out ObjectLayout layout)
         {
+            layout = default;
             ZDOID uid = zdo.m_uid;
-            int floats = Bucket<float>.Count(uid, out var floatBucket);
-            int vec3s = Bucket<Vector3>.Count(uid, out var vec3Bucket);
-            int quats = Bucket<Quaternion>.Count(uid, out var quatBucket);
-            int ints = Bucket<int>.Count(uid, out var intBucket);
-            int longs = Bucket<long>.Count(uid, out var longBucket);
-            int strings = Bucket<string>.Count(uid, out var stringBucket);
-            int byteArrays = Bucket<byte[]>.Count(uid, out var byteArrayBucket);
+            layout.Floats = Bucket<float>.Count(uid, out layout.FloatBucket);
+            layout.Vec3s = Bucket<Vector3>.Count(uid, out layout.Vec3Bucket);
+            layout.Quats = Bucket<Quaternion>.Count(uid, out layout.QuatBucket);
+            layout.Ints = Bucket<int>.Count(uid, out layout.IntBucket);
+            layout.Longs = Bucket<long>.Count(uid, out layout.LongBucket);
+            layout.Strings = Bucket<string>.Count(uid, out layout.StringBucket);
+            layout.ByteArrays = Bucket<byte[]>.Count(uid, out layout.ByteArrayBucket);
             ZDOConnection connection = ZDOExtraData.GetConnection(uid);
             bool hasConnection = connection != null && connection.m_type != ZDOExtraData.ConnectionType.None;
-            Vector3 rotation = s_rotation(zdo);
-            bool hasRotation = rotation != Quaternion.identity.eulerAngles;
+            layout.Connection = connection;
+            layout.Rotation = s_rotation(zdo);
+            bool hasRotation = layout.Rotation != Quaternion.identity.eulerAngles;
 
             int flags = 0;
-            if (hasConnection)  flags |= FlagConnections;
-            if (floats > 0)     flags |= FlagFloats;
-            if (vec3s > 0)      flags |= FlagVec3s;
-            if (quats > 0)      flags |= FlagQuaternions;
-            if (ints > 0)       flags |= FlagInts;
-            if (longs > 0)      flags |= FlagLongs;
-            if (strings > 0)    flags |= FlagStrings;
-            if (byteArrays > 0) flags |= FlagByteArrays;
-            if (zdo.Persistent) flags |= FlagPersistent;
-            if (zdo.Distant)    flags |= FlagDistant;
+            if (hasConnection)            flags |= FlagConnections;
+            if (layout.Floats > 0)        flags |= FlagFloats;
+            if (layout.Vec3s > 0)         flags |= FlagVec3s;
+            if (layout.Quats > 0)         flags |= FlagQuaternions;
+            if (layout.Ints > 0)          flags |= FlagInts;
+            if (layout.Longs > 0)         flags |= FlagLongs;
+            if (layout.Strings > 0)       flags |= FlagStrings;
+            if (layout.ByteArrays > 0)    flags |= FlagByteArrays;
+            if (zdo.Persistent)           flags |= FlagPersistent;
+            if (zdo.Distant)              flags |= FlagDistant;
             flags |= (int)zdo.Type << TypeShift;
-            if (hasRotation)    flags |= FlagRotation;
-
-            pkg.Write((ushort)flags);
-            pkg.Write(zdo.GetPrefab());
-            if (hasRotation) pkg.Write(rotation);
-            if ((flags & FlagAnyData) == 0) return;
-
-            if (hasConnection)
-            {
-                pkg.Write((byte)connection.m_type);
-                pkg.Write(connection.m_target);
-            }
-            Bucket<float>.Write(pkg, floatBucket, floats);
-            Bucket<Vector3>.Write(pkg, vec3Bucket, vec3s);
-            Bucket<Quaternion>.Write(pkg, quatBucket, quats);
-            Bucket<int>.Write(pkg, intBucket, ints);
-            Bucket<long>.Write(pkg, longBucket, longs);
-            Bucket<string>.Write(pkg, stringBucket, strings);
-            Bucket<byte[]>.Write(pkg, byteArrayBucket, byteArrays);
+            if (hasRotation)              flags |= FlagRotation;
+            layout.Flags = flags;
         }
 
-        private static bool MatchesVanilla(ZDO zdo)
+        // Vanilla ZDO.Serialize field for field: the same flags, in the same order, through the same ZPackage writes.
+        private static void WriteObject(ZDO zdo, ref ObjectLayout layout, ZPackage pkg)
         {
-            var ours = new ZPackage();
-            WriteObject(zdo, ours);
-            var vanilla = new ZPackage();
+            int flags = layout.Flags;
+            pkg.Write((ushort)flags);
+            pkg.Write(zdo.GetPrefab());
+            if ((flags & FlagRotation) != 0) pkg.Write(layout.Rotation);
+            if ((flags & FlagAnyData) == 0) return;
+
+            if ((flags & FlagConnections) != 0)
+            {
+                pkg.Write((byte)layout.Connection.m_type);
+                pkg.Write(layout.Connection.m_target);
+            }
+            Bucket<float>.Write(pkg, layout.FloatBucket, layout.Floats);
+            Bucket<Vector3>.Write(pkg, layout.Vec3Bucket, layout.Vec3s);
+            Bucket<Quaternion>.Write(pkg, layout.QuatBucket, layout.Quats);
+            Bucket<int>.Write(pkg, layout.IntBucket, layout.Ints);
+            Bucket<long>.Write(pkg, layout.LongBucket, layout.Longs);
+            Bucket<string>.Write(pkg, layout.StringBucket, layout.Strings);
+            Bucket<byte[]>.Write(pkg, layout.ByteArrayBucket, layout.ByteArrays);
+        }
+
+        // What decides which writer branches run: the prefab, which data buckets are non-empty (the connection is bit 0
+        // of the same mask) and whether the rotation is written. Persistent, distant and type only change the flag word.
+        private static long ShapeOf(ZDO zdo, int flags)
+            => ((long)(uint)zdo.GetPrefab() << 32) | (uint)(flags & (FlagAnyData | FlagRotation));
+
+        // xorshift32: a cheap sample that is not tied to send order, so it cannot keep landing on the same objects.
+        private static bool Sampled()
+        {
+            uint x = s_sampleState;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            s_sampleState = x;
+            return x % SampleOneIn == 0;
+        }
+
+        private static bool MatchesVanilla(ZDO zdo, ZPackage ours, long shape, int flags)
+        {
+            ZPackage vanilla = t_vanillaScratch ?? (t_vanillaScratch = new ZPackage());
+            vanilla.Clear();
             t_writingVanillaReference = true;
             try
             {
@@ -339,22 +420,42 @@ namespace FiresGhettoNetworkMod
                 t_writingVanillaReference = false;
             }
 
-            byte[] ourBytes = ours.GetArray();
-            byte[] vanillaBytes = vanilla.GetArray();
-            int difference = FirstDifference(ourBytes, vanillaBytes);
+            s_checks++;
+            s_writer(ours).Flush();
+            s_writer(vanilla).Flush();
+            MemoryStream ourStream = s_stream(ours);
+            MemoryStream vanillaStream = s_stream(vanilla);
+            int ourLength = (int)ourStream.Length;
+            int vanillaLength = (int)vanillaStream.Length;
+            int difference = FirstDifference(ourStream.GetBuffer(), ourLength, vanillaStream.GetBuffer(), vanillaLength);
             if (difference < 0)
             {
-                if (++s_matchedVanilla == ChecksAgainstVanilla)
+                s_verifiedShapes.Add(shape);
+                if (s_matchedVanilla < ChecksAgainstVanilla && ++s_matchedVanilla == ChecksAgainstVanilla)
                     LoggerOptions.LogMessage($"[ZdoWrite] the first {ChecksAgainstVanilla} objects sent matched vanilla byte for byte; "
-                                             + "FGN writes ZDOs without vanilla's per-object lists and closures from here on.");
+                                             + "FGN writes ZDOs without vanilla's per-object lists and closures from here on, and still "
+                                             + $"checks each new object shape and about 1 in {SampleOneIn} of the rest.");
                 return true;
             }
 
+            // One line, then vanilla for good: s_objectsReady also stands the delta frames down from the next package on.
             s_objectsReady = false;
             LoggerOptions.LogWarning($"[ZdoWrite] {PrefabName(zdo)} ({zdo.m_uid}) came out different from vanilla at byte {difference} "
-                                     + $"(FGN {ourBytes.Length} bytes, vanilla {vanillaBytes.Length}); vanilla writes ZDOs for the rest of "
+                                     + $"(FGN {ourLength} bytes, vanilla {vanillaLength}; {ShapeText(zdo, flags)}; check {s_checks}, "
+                                     + $"{s_verifiedShapes.Count} shapes verified before it); vanilla writes ZDOs for the rest of "
                                      + "this session. Please report this line.");
             return false;
+        }
+
+        private static string ShapeText(ZDO zdo, int flags)
+            => $"shape prefab {zdo.GetPrefab()} data 0x{flags & FlagAnyData & ~FlagConnections:X2} "
+               + $"connection {((flags & FlagConnections) != 0 ? "yes" : "no")} rotation {((flags & FlagRotation) != 0 ? "yes" : "no")}";
+
+        // A checked object's bytes, already proven equal to vanilla's, go out as they are instead of being written twice.
+        private static void AppendBytes(ZPackage target, ZPackage source)
+        {
+            MemoryStream stream = s_stream(source);
+            s_writer(target).Write(stream.GetBuffer(), 0, (int)stream.Length);
         }
 
         // Vanilla copies the nested package into a new array and writes that; this writes the same length and bytes
@@ -393,11 +494,15 @@ namespace FiresGhettoNetworkMod
         }
 
         private static int FirstDifference(byte[] left, byte[] right)
+            => FirstDifference(left, left.Length, right, right.Length);
+
+        // Lengths are passed so a MemoryStream's buffer, which runs past its length, can be compared without a copy.
+        private static int FirstDifference(byte[] left, int leftLength, byte[] right, int rightLength)
         {
-            int shared = Math.Min(left.Length, right.Length);
+            int shared = Math.Min(leftLength, rightLength);
             for (int i = 0; i < shared; i++)
                 if (left[i] != right[i]) return i;
-            return left.Length == right.Length ? -1 : shared;
+            return leftLength == rightLength ? -1 : shared;
         }
 
         private static string PrefabName(ZDO zdo)

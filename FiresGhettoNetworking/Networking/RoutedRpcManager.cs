@@ -1,5 +1,9 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using FiresGhettoNetworkMod.AutoTune;
+using HarmonyLib;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -30,6 +34,18 @@ namespace FiresGhettoNetworkMod
         private static bool s_hasPositionHint;
         private static Vector3 s_positionHint;
         private static float s_radiusHint;
+
+        // Other mods' hooks on ZRoutedRpc.RouteRPC. Expand World Prefabs cancels Say there and tracks teleports there
+        // (2026-10-02 EWP review); a filtered player broadcast sent straight with SendTo never passes through it, so those
+        // hooks went blind under FGN. While any foreign hook is attached, the filtered broadcast goes through RouteRPC and
+        // FGN's own prefix (attached last) sends it to the filtered list, after the others have seen it and could veto it.
+        // Rechecked every few seconds because some mods patch RouteRPC late (EWP does it when its config loads).
+        private const float ForeignRouteRecheckSeconds = 10f;
+        private static readonly MethodInfo s_routeRpcMethod = AccessTools.Method(typeof(ZRoutedRpc), "RouteRPC");
+        private static bool s_foreignRouteHooks;
+        private static float s_foreignRouteCheckedAt = float.NegativeInfinity;
+        private static ZRoutedRpc.RoutedRPCData s_viaRouteData;
+        private static List<ZNetPeer> s_viaRouteRecipients;
 
         public static int HandlerCount => s_handlers.Count;
 
@@ -81,7 +97,7 @@ namespace FiresGhettoNetworkMod
             if (target == 0L && filtering && data.m_methodHash == s_destroyZdoHash && CollectDestroyHolders(data, s_recipients))
             {
                 VanillaAccess.HandleRoutedRpc(routedRpc, data);
-                SendTo(data, s_recipients);
+                Deliver(routedRpc, data, s_recipients);
                 return;
             }
 
@@ -96,7 +112,7 @@ namespace FiresGhettoNetworkMod
                     VanillaAccess.RouteRpc(routedRpc, data);
                     return;
                 }
-                SendTo(data, s_recipients);
+                Deliver(routedRpc, data, s_recipients);
             }
             finally
             {
@@ -212,7 +228,76 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        private static void SendTo(ZRoutedRpc.RoutedRPCData data, List<ZNetPeer> recipients)
+        private static void Deliver(ZRoutedRpc routedRpc, ZRoutedRpc.RoutedRPCData data, List<ZNetPeer> recipients)
+        {
+            if (!ForeignRouteHooks())
+            {
+                SendTo(data, recipients);
+                return;
+            }
+            s_viaRouteData = data;
+            s_viaRouteRecipients = recipients;
+            try
+            {
+                VanillaAccess.RouteRpc(routedRpc, data);
+            }
+            finally
+            {
+                s_viaRouteData = null;
+                s_viaRouteRecipients = null;
+            }
+        }
+
+        /// <summary>
+        /// For FGN's RouteRPC prefix: whether this call is a filtered player broadcast Deliver passed through RouteRPC, and
+        /// who it goes to. Taken once, so a nested RouteRPC from another mod's hook is treated as its own call.
+        /// </summary>
+        internal static bool TakeFilteredRecipients(ZRoutedRpc.RoutedRPCData data, out List<ZNetPeer> recipients)
+        {
+            recipients = s_viaRouteRecipients;
+            if (recipients == null || !ReferenceEquals(data, s_viaRouteData)) return false;
+            s_viaRouteData = null;
+            s_viaRouteRecipients = null;
+            return true;
+        }
+
+        private static bool ForeignRouteHooks()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (now - s_foreignRouteCheckedAt < ForeignRouteRecheckSeconds) return s_foreignRouteHooks;
+            s_foreignRouteCheckedAt = now;
+
+            string owners = null;
+            try
+            {
+                HarmonyLib.Patches info = s_routeRpcMethod == null ? null : HarmonyLib.Harmony.GetPatchInfo(s_routeRpcMethod);
+                if (info != null)
+                {
+                    IEnumerable<HarmonyLib.Patch> none = Enumerable.Empty<HarmonyLib.Patch>();
+                    var foreign = (info.Prefixes ?? none).Concat(info.Postfixes ?? none).Concat(info.Transpilers ?? none)
+                        .Concat(info.Finalizers ?? none)
+                        .Where(p => p != null && p.owner != FiresGhettoNetworkMod.PluginGUID)
+                        .Select(p => p.owner).Distinct().ToArray();
+                    if (foreign.Length > 0) owners = string.Join(", ", foreign);
+                }
+            }
+            catch (Exception ex)
+            {
+                LoggerOptions.LogDebug($"[RpcRouter] could not read the patches on ZRoutedRpc.RouteRPC ({ex.GetType().Name}: {ex.Message}).");
+            }
+
+            bool present = owners != null;
+            if (present != s_foreignRouteHooks)
+            {
+                LoggerOptions.LogInfo(present
+                    ? $"[RpcRouter] '{owners}' hooks ZRoutedRpc.RouteRPC; players' filtered broadcasts now pass through RouteRPC so those hooks see them and can cancel them."
+                    : "[RpcRouter] no other mod hooks ZRoutedRpc.RouteRPC any more; players' filtered broadcasts are sent directly again.");
+                s_foreignRouteHooks = present;
+            }
+            return present;
+        }
+
+        internal static void SendTo(ZRoutedRpc.RoutedRPCData data, List<ZNetPeer> recipients)
         {
             if (recipients.Count == 0) return;
             var package = new ZPackage();

@@ -1,3 +1,15 @@
+* v1.5.49 - updates and optimizations for Valheim 1.0
+* v1.5.41 - updates and optimizations for Valheim 1.0
+  - server tuning suggestions are no longer logged by default
+* v1.5.40 - updates and optimizations for Valheim 1.0
+  - fixes crossplay join-code stalls, a false version warning on rejoin, and an AzuAntiCheat patch error
+
+* v1.5.36 - updates and optimizations for Valheim 1.0
+  - fixes the shield generator error spam on Server-Side Simulation servers
+
+* v1.5.35 - updates and optimizations for Valheim 1.0
+  - fixes world data wipes with Expand World Prefabs server-side data and teleport snap-backs
+
 * v1.5.28 - updates and optimizations for Valheim 1.0
   - saddles and taming work on Server-Side Simulation servers; clearer config descriptions; timed reports moved to a new Debug log level
 

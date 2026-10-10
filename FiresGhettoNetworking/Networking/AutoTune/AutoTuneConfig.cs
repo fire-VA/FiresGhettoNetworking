@@ -64,7 +64,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             LogServerSuggestions = config.Bind(
                 "06 - Auto-Tune",
                 "Log Server Suggestions",
-                true,
+                false,   // 1.5.41 (Fire 10-05: every mod defaults to message-level logging, no periodic chatter)
                 "Write tuning hints to the server log: at startup, the tier and values this server would use (only\n" +
                 "while Enable Server Auto-Tune is off), and at most every 15 minutes a summary of the tiers and ping\n" +
                 "reported by connected players. Logging only, nothing is changed. Server only.");

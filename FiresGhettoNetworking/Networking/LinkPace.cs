@@ -11,6 +11,7 @@ namespace FiresGhettoNetworkMod
     /// logs Steam's send rate, the bytes going out, what is pending and unacked, the queue wait, ping and quality. On the rig
     /// (2026-09-28 R5) the bot's connection moved 1 MB/s with the same config that moved 8 MB/s to Fire's; these lines say
     /// whether Steam's own rate, loss, or the route holds such a connection back.
+    /// 1.5.49 (Xbox build has no ZSteamSocket): Steam-only; LinkController calls it only when SteamSide.Present.
     /// </summary>
     internal static class LinkPace
     {
@@ -33,12 +34,12 @@ namespace FiresGhettoNetworkMod
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
             {
                 if (peer?.m_socket == null || !(NetworkingRatesGroup.UnwrapSocket(peer.m_socket) is ZSteamSocket steam)) continue;
-                HSteamNetConnection connection = LinkController.ConnectionOf(steam);
+                HSteamNetConnection connection = LinkController.SteamLinks.ConnectionOf(steam);
                 if (connection == HSteamNetConnection.Invalid) continue;
                 string who = Name(peer);
                 if (s_routeLogged.Add(connection.m_HSteamNetConnection)) LogRoute(who, connection);
                 if (!LoggerOptions.DebugEnabled) continue;
-                if (!LinkController.TryStatus(steam, out SteamNetConnectionRealTimeStatus_t status)) continue;
+                if (!LinkController.SteamLinks.TryStatus(steam, out SteamNetConnectionRealTimeStatus_t status)) continue;
                 if (status.m_cbPendingReliable + status.m_cbSentUnackedReliable < BulkBytes) continue;
                 LoggerOptions.LogDebug($"[LinkPace] to {who}: Steam's send rate {status.m_nSendRateBytesPerSecond / BytesPerMegabyte:F1} MB/s, "
                     + $"out {status.m_flOutBytesPerSec / BytesPerMegabyte:F2} MB/s in {status.m_flOutPacketsPerSec:F0} packets/s, "

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using Steamworks;
 using UnityEngine;
@@ -194,7 +195,18 @@ namespace FiresGhettoNetworkMod
             ping = 0;
             outBytesSec = 0f;
             inBytesSec = 0f;
-            if (!TryGameServerStatus(socket, out SteamNetConnectionRealTimeStatus_t status))
+            // 1.5.49 (Xbox build has no ZSteamSocket): no Steam, no game-server path; the caller falls back to vanilla.
+            return SteamSide.Present && TryGameServerPeerStatusSteam(socket, out ping, out outBytesSec, out inBytesSec);
+        }
+
+        // 1.5.49 (Xbox build has no ZSteamSocket): NoInlining, so only a Steam build ever JITs a Steam type here.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryGameServerPeerStatusSteam(ISocket socket, out int ping, out float outBytesSec, out float inBytesSec)
+        {
+            ping = 0;
+            outBytesSec = 0f;
+            inBytesSec = 0f;
+            if (!SteamStats.TryGameServerStatus(socket, out SteamNetConnectionRealTimeStatus_t status))
             {
                 return false;
             }
@@ -205,38 +217,42 @@ namespace FiresGhettoNetworkMod
             return true;
         }
 
-        // Steam's whole real-time view of a hosted server's peer connection: its pacing rate, how long new data waits,
-        // what is sent but unacknowledged, and how much of what we send arrives.
-        internal static bool TryGameServerStatus(ISocket socket, out SteamNetConnectionRealTimeStatus_t status)
+        /// <summary>1.5.49 (Xbox build has no ZSteamSocket): the Steam-typed reads, reached only when SteamSide.Present.</summary>
+        internal static class SteamStats
         {
-            status = default;
-
-            // Unwrap ServerSync's BufferingSocket wrapper(s) first — on a modded server peer.m_socket stays
-            // wrapped for the whole session, and a raw `is ZSteamSocket` test fails on the wrapper, which
-            // skips this game-server path and zeroes the throughput read (vanilla GetConnectionQuality then
-            // reads 0 on a dedi). Matches what GetConnectionHandle/IsSteamSocket already do.
-            if (!(NetworkingRatesGroup.UnwrapSocket(socket) is ZSteamSocket steamSocket))
+            // Steam's whole real-time view of a hosted server's peer connection: its pacing rate, how long new data waits,
+            // what is sent but unacknowledged, and how much of what we send arrives.
+            internal static bool TryGameServerStatus(ISocket socket, out SteamNetConnectionRealTimeStatus_t status)
             {
-                return false;
-            }
+                status = default;
 
-            if (s_steamConField == null)
-            {
-                s_steamConField = AccessTools.Field(typeof(ZSteamSocket), "m_con");
-            }
-            if (s_steamConField == null)
-            {
-                return false;
-            }
+                // Unwrap ServerSync's BufferingSocket wrapper(s) first — on a modded server peer.m_socket stays
+                // wrapped for the whole session, and a raw `is ZSteamSocket` test fails on the wrapper, which
+                // skips this game-server path and zeroes the throughput read (vanilla GetConnectionQuality then
+                // reads 0 on a dedi). Matches what GetConnectionHandle/IsSteamSocket already do.
+                if (!(NetworkingRatesGroup.UnwrapSocket(socket) is ZSteamSocket steamSocket))
+                {
+                    return false;
+                }
 
-            var connection = (HSteamNetConnection)s_steamConField.GetValue(steamSocket);
-            if (connection == HSteamNetConnection.Invalid)
-            {
-                return false;
-            }
+                if (s_steamConField == null)
+                {
+                    s_steamConField = AccessTools.Field(typeof(ZSteamSocket), "m_con");
+                }
+                if (s_steamConField == null)
+                {
+                    return false;
+                }
 
-            SteamNetConnectionRealTimeLaneStatus_t lanes = default;
-            return SteamGameServerNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes) == EResult.k_EResultOK;
+                var connection = (HSteamNetConnection)s_steamConField.GetValue(steamSocket);
+                if (connection == HSteamNetConnection.Invalid)
+                {
+                    return false;
+                }
+
+                SteamNetConnectionRealTimeLaneStatus_t lanes = default;
+                return SteamGameServerNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes) == EResult.k_EResultOK;
+            }
         }
 
         // One-shot at the first peer (re-armed when the server empties) so a test run confirms which

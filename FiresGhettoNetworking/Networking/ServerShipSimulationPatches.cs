@@ -40,16 +40,62 @@ namespace FiresGhettoNetworkMod
 
             // Not ours to simulate: vanilla already early-outs for non-owners and ZSyncTransform
             // drives the hull from whoever does own it.
-            if (!___m_nview.IsOwner()) return true;
-
-            if (IsEnvironmentReady(__instance))
+            if (!___m_nview.IsOwner())
             {
-                Unpark(__instance, ___m_body);
+                if (_ready.Count > 0) _ready.Remove(__instance);   // re-checked in full when it comes back
                 return true;
             }
 
+            // 1.5.44 (perf leg C: ~40 µs a physics step per server-owned hull): a hull found ready stays ready while it
+            // stays in that zone, so the full check (zone loaded + water + ground) runs again only on a zone change
+            // or every ReadyRecheckSteps steps.
+            Vector2s zone = ZoneSystem.GetZone(__instance.transform.position);
+            ReportChecks();
+            if (_ready.TryGetValue(__instance, out ReadyCache cache) && cache.Zone.x == zone.x && cache.Zone.y == zone.y
+                && cache.StepsLeft > 0)
+            {
+                cache.StepsLeft--;
+                _ready[__instance] = cache;
+                _skippedChecks++;
+                return true;
+            }
+
+            _fullChecks++;
+            if (IsEnvironmentReady(__instance))
+            {
+                Unpark(__instance, ___m_body);
+                _ready[__instance] = new ReadyCache { Zone = zone, StepsLeft = ReadyRecheckSteps };
+                return true;
+            }
+
+            _ready.Remove(__instance);
             Park(__instance, ___m_body);
             return false;
+        }
+
+        private const int ReadyRecheckSteps = 50;   // ~1 s of physics steps
+        private const float CheckReportSeconds = 60f;
+        private struct ReadyCache { public Vector2s Zone; public int StepsLeft; }
+        private static readonly Dictionary<Ship, ReadyCache> _ready = new Dictionary<Ship, ReadyCache>();
+        private static readonly List<Ship> _deadShips = new List<Ship>();
+        private static int _fullChecks, _skippedChecks;
+        private static float _nextCheckReport = -1f;
+
+        private static void ReportChecks()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (_nextCheckReport < 0f) { _nextCheckReport = now + CheckReportSeconds; return; }
+            if (now < _nextCheckReport) return;
+            _nextCheckReport = now + CheckReportSeconds;
+
+            _deadShips.Clear();
+            foreach (var ship in _ready.Keys) if (ship == null) _deadShips.Add(ship);
+            foreach (var ship in _deadShips) _ready.Remove(ship);
+
+            if (LoggerOptions.DebugEnabled && (_fullChecks > 0 || _skippedChecks > 0)) LoggerOptions.LogDebug(
+                $"[ShipSim] environment checks, last {CheckReportSeconds:F0} s: {_fullChecks} full, {_skippedChecks} skipped "
+                + $"(hull already ready in the same zone, full re-check every {ReadyRecheckSteps} steps); {_ready.Count} hull(s) ready.");
+            _fullChecks = _skippedChecks = 0;
         }
 
         // Clearing on world teardown: the set is static and would otherwise hold dead Ship references
@@ -57,6 +103,9 @@ namespace FiresGhettoNetworkMod
         public static void ZNetScene_Shutdown_ClearParked()
         {
             _parkedByUs.Clear();
+            _ready.Clear();
+            _fullChecks = _skippedChecks = 0;
+            _nextCheckReport = -1f;
             SssTestAreas.Clear();
         }
 

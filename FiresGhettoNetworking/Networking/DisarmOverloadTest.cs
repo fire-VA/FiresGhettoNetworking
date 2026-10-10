@@ -30,14 +30,22 @@ namespace FiresGhettoNetworkMod
         private static long s_forceCount;
         private static bool s_commandRegistered;
 
-        [HarmonyPatch(typeof(ZSteamSocket), "GetSendQueueSize")]
-        [HarmonyPostfix]
-        public static void ForceQueueHigh(ref int __result)
+        // 1.5.49 (Xbox build has no ZSteamSocket): the ZSteamSocket patch on its own, attached by Ascend only when
+        // SteamSide.Present, so reading DisarmOverloadTest's attributes never resolves ZSteamSocket.
+        [HarmonyPatch]
+        internal static class SteamPatch
         {
-            if (s_active && __result < ForcedQueueBytes)
+            static bool Prepare() => SteamSide.Present;
+
+            [HarmonyPatch(typeof(ZSteamSocket), "GetSendQueueSize")]
+            [HarmonyPostfix]
+            public static void ForceQueueHigh(ref int __result)
             {
-                __result = ForcedQueueBytes;
-                s_forceCount++;
+                if (s_active && __result < ForcedQueueBytes)
+                {
+                    __result = ForcedQueueBytes;
+                    s_forceCount++;
+                }
             }
         }
 

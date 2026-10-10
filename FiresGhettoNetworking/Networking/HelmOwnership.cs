@@ -166,7 +166,7 @@ namespace FiresGhettoNetworkMod
             long owner = zdo.GetOwner();
             ZNetPeer ownerPeer = owner != 0L && owner != serverUid ? ZNet.instance.GetPeer(owner) : null;
             Vector3 position = zdo.GetPosition();
-            if (ownerPeer == null || !ownerPeer.IsReady() || !ConnectionEcho.HasFgn(ownerPeer)
+            if (ownerPeer == null || !ownerPeer.IsReady() || !FgnVersionGate.IsMatched(ownerPeer)
                 || zdo.GetLong(ZDOVars.s_user) != 0L || AnyPlayerNear(peers, position))
             {
                 s_emptyShips.Remove(zdo.m_uid);

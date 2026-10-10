@@ -174,7 +174,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             Tier tier = ScoreServerTier(cores, ramMb);
 
             bool autoApply = AutoTuneConfig.EnableServerAutoTune?.Value ?? false;
-            bool logHint   = AutoTuneConfig.LogServerSuggestions?.Value  ?? true;
+            bool logHint   = AutoTuneConfig.LogServerSuggestions?.Value  ?? false;
 
             if (autoApply)
             {
@@ -311,7 +311,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
         private static void LogClientSummary()
         {
-            if (!(AutoTuneConfig.LogServerSuggestions?.Value ?? true)) return;
+            if (!(AutoTuneConfig.LogServerSuggestions?.Value ?? false)) return;
             if (_clientReports.Count == 0) return;
 
             int low = 0, med = 0, high = 0;

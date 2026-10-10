@@ -133,7 +133,7 @@ When the mod runs on a dedicated server with `Enable Server Auto-Tune = true` (t
 
 Every tier stays at or above vanilla's values; the startup log confirms it with `AutoTune VanillaFloor self-check passed`. 
 
-The server also collects tier reports from connected clients and periodically logs the median client tier with suggestions, 
+The server also collects tier reports from connected clients and periodically logs the median client tier with suggestions (when Log Server Suggestions is on; off by default), 
 so an admin can see at a glance whether the server's settings actually match the audience joining.
 
 ## Steam vs crossplay (PlayFab) — what each player actually gets

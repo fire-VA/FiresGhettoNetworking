@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -53,7 +54,7 @@ namespace FiresGhettoNetworkMod
         {
             public ZNetPeer Peer;
             public ISocket OuterSocket;
-            public ZSteamSocket Steam;
+            public object Steam;   // 1.5.49 (Xbox build has no ZSteamSocket): the ZSteamSocket, typed object so Link loads without Steam
             public bool Crossplay;
             public bool CrossplayNoticed;
             public int Window;
@@ -92,8 +93,6 @@ namespace FiresGhettoNetworkMod
         }
 
         private static readonly Dictionary<ZNetPeer, Link> s_links = new Dictionary<ZNetPeer, Link>();
-        private static AccessTools.FieldRef<ZSteamSocket, HSteamNetConnection> s_connection;
-        private static AccessTools.FieldRef<ZSteamSocket, int> s_totalSent;
         private static bool s_commandRegistered;
         private static double s_nextReport;
         private const double ReportSeconds = 300.0;
@@ -116,8 +115,7 @@ namespace FiresGhettoNetworkMod
             ConfigMaxWindowKB.SettingChanged += (_, __) => ClampWindows();
             ConfigCrossplayInFlightKB.SettingChanged += (_, __) => ResetWindows();
 
-            s_connection = AccessTools.FieldRefAccess<ZSteamSocket, HSteamNetConnection>("m_con");
-            s_totalSent = AccessTools.FieldRefAccess<ZSteamSocket, int>("m_totalSent");
+            if (SteamSide.Present) InitSteamLinks();
         }
 
         internal static void OnZNetStart()
@@ -312,7 +310,7 @@ namespace FiresGhettoNetworkMod
             if (ReferenceEquals(socket, link.OuterSocket)) return;
             link.OuterSocket = socket;
             var inner = socket != null ? NetworkingRatesGroup.UnwrapSocket(socket) : null;
-            link.Steam = inner as ZSteamSocket;
+            link.Steam = SteamSide.Present ? AsSteam(inner) : null;
             link.Crossplay = inner != null && inner.GetType() == typeof(ZPlayFabSocket);
             link.Connection = 0u;
             link.RatePinned = false;
@@ -338,78 +336,110 @@ namespace FiresGhettoNetworkMod
             TrackSocket(link);
             NoticeCrossplay(link);
 
-            if (link.Steam == null || !TryStatus(link.Steam, out var status))
-            {
-                link.HasStatus = false;
-                return;
-            }
-            link.HasStatus = true;
-
-            double elapsed = link.LastSample > 0.0 ? now - link.LastSample : 0.0;
-            link.LastSample = now;
-
-            link.PingMs = status.m_nPing;
-            if (link.PingMs > 0)
-            {
-                link.SmoothedRttMs = link.SmoothedRttMs > 0f ? Mathf.Lerp(link.SmoothedRttMs, link.PingMs, 0.25f) : link.PingMs;
-                if (now - link.MinRttEpochStart >= MinRttEpochSeconds)
-                {
-                    link.MinRttPrevious = link.MinRttCurrent;
-                    link.MinRttCurrent = link.PingMs;
-                    link.MinRttEpochStart = now;
-                }
-                else if (link.MinRttCurrent <= 0 || link.PingMs < link.MinRttCurrent)
-                {
-                    link.MinRttCurrent = link.PingMs;
-                }
-            }
-
-            link.QueueMs = (long)status.m_usecQueueTime / 1000f;
-            link.PendingBytes = status.m_cbPendingReliable + status.m_cbPendingUnreliable;
-            link.InFlightBytes = link.PendingBytes + status.m_cbSentUnackedReliable;
-            link.Delivery = status.m_flConnectionQualityRemote;
-            link.PacingBytes = status.m_nSendRateBytesPerSecond;
-
-            int totalSent = s_totalSent(link.Steam);
-            if (link.GoodputPrimed && elapsed > 0.0)
-            {
-                link.SentTotal += unchecked((uint)(totalSent - link.LastTotalSent));
-                long deliveredTotal = link.SentTotal - link.InFlightBytes;
-                float sample = Mathf.Max(0f, (float)((deliveredTotal - link.DeliveredTotal) / elapsed));
-                link.DeliveredTotal = deliveredTotal;
-                link.Goodput = Mathf.Lerp(link.Goodput, sample, 0.5f);
-                link.GoodputPeak = Mathf.Max(sample, link.GoodputPeak * 0.9f);
-            }
-            else
-            {
-                link.GoodputPrimed = true;
-                link.SentTotal = 0L;
-                link.DeliveredTotal = -link.InFlightBytes;
-                link.Goodput = 0f;
-                link.GoodputPeak = 0f;
-            }
-            link.LastTotalSent = totalSent;
+            // 1.5.49 (Xbox build has no ZSteamSocket): the Steam figures are read in SteamLinks; link.Steam is null without Steam.
+            link.HasStatus = link.Steam != null && SampleSteam(link, now);
         }
 
-        internal static HSteamNetConnection ConnectionOf(ZSteamSocket socket) =>
-            s_connection != null && socket != null ? s_connection(socket) : HSteamNetConnection.Invalid;
+        // 1.5.49 (Xbox build has no ZSteamSocket): NoInlining steps into SteamLinks, called only when SteamSide.Present, so no
+        // always-on method's JIT ever sets up SteamLinks (its fields name Steam types).
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void InitSteamLinks() => SteamLinks.Init();
 
-        internal static bool TryStatus(ZSteamSocket socket, out SteamNetConnectionRealTimeStatus_t status)
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static object AsSteam(ISocket inner) => SteamLinks.AsSteam(inner);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool SampleSteam(Link link, double now) => SteamLinks.Sample(link, now);
+
+        /// <summary>
+        /// 1.5.49 (Xbox build has no ZSteamSocket): every Steam-typed member of LinkController lives here, so LinkController
+        /// itself loads on a build without Steam. Reached only when SteamSide.Present.
+        /// </summary>
+        internal static class SteamLinks
         {
-            status = default;
-            var connection = s_connection(socket);
-            if (connection == HSteamNetConnection.Invalid) return false;
-            SteamNetConnectionRealTimeLaneStatus_t lanes = default;
-            try
+            private static AccessTools.FieldRef<ZSteamSocket, HSteamNetConnection> s_connection;
+            private static AccessTools.FieldRef<ZSteamSocket, int> s_totalSent;
+
+            internal static void Init()
             {
-                EResult result = ZNet.instance != null && ZNet.instance.IsDedicated()
-                    ? SteamGameServerNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes)
-                    : SteamNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes);
-                return result == EResult.k_EResultOK;
+                s_connection = AccessTools.FieldRefAccess<ZSteamSocket, HSteamNetConnection>("m_con");
+                s_totalSent = AccessTools.FieldRefAccess<ZSteamSocket, int>("m_totalSent");
             }
-            catch
+
+            internal static object AsSteam(ISocket inner) => inner as ZSteamSocket;
+
+            internal static bool Sample(Link link, double now)
             {
-                return false;
+                var steam = (ZSteamSocket)link.Steam;
+                if (!TryStatus(steam, out var status)) return false;
+
+                double elapsed = link.LastSample > 0.0 ? now - link.LastSample : 0.0;
+                link.LastSample = now;
+
+                link.PingMs = status.m_nPing;
+                if (link.PingMs > 0)
+                {
+                    link.SmoothedRttMs = link.SmoothedRttMs > 0f ? Mathf.Lerp(link.SmoothedRttMs, link.PingMs, 0.25f) : link.PingMs;
+                    if (now - link.MinRttEpochStart >= MinRttEpochSeconds)
+                    {
+                        link.MinRttPrevious = link.MinRttCurrent;
+                        link.MinRttCurrent = link.PingMs;
+                        link.MinRttEpochStart = now;
+                    }
+                    else if (link.MinRttCurrent <= 0 || link.PingMs < link.MinRttCurrent)
+                    {
+                        link.MinRttCurrent = link.PingMs;
+                    }
+                }
+
+                link.QueueMs = (long)status.m_usecQueueTime / 1000f;
+                link.PendingBytes = status.m_cbPendingReliable + status.m_cbPendingUnreliable;
+                link.InFlightBytes = link.PendingBytes + status.m_cbSentUnackedReliable;
+                link.Delivery = status.m_flConnectionQualityRemote;
+                link.PacingBytes = status.m_nSendRateBytesPerSecond;
+
+                int totalSent = s_totalSent(steam);
+                if (link.GoodputPrimed && elapsed > 0.0)
+                {
+                    link.SentTotal += unchecked((uint)(totalSent - link.LastTotalSent));
+                    long deliveredTotal = link.SentTotal - link.InFlightBytes;
+                    float sample = Mathf.Max(0f, (float)((deliveredTotal - link.DeliveredTotal) / elapsed));
+                    link.DeliveredTotal = deliveredTotal;
+                    link.Goodput = Mathf.Lerp(link.Goodput, sample, 0.5f);
+                    link.GoodputPeak = Mathf.Max(sample, link.GoodputPeak * 0.9f);
+                }
+                else
+                {
+                    link.GoodputPrimed = true;
+                    link.SentTotal = 0L;
+                    link.DeliveredTotal = -link.InFlightBytes;
+                    link.Goodput = 0f;
+                    link.GoodputPeak = 0f;
+                }
+                link.LastTotalSent = totalSent;
+                return true;
+            }
+
+            internal static HSteamNetConnection ConnectionOf(ZSteamSocket socket) =>
+                s_connection != null && socket != null ? s_connection(socket) : HSteamNetConnection.Invalid;
+
+            internal static bool TryStatus(ZSteamSocket socket, out SteamNetConnectionRealTimeStatus_t status)
+            {
+                status = default;
+                var connection = s_connection(socket);
+                if (connection == HSteamNetConnection.Invalid) return false;
+                SteamNetConnectionRealTimeLaneStatus_t lanes = default;
+                try
+                {
+                    EResult result = ZNet.instance != null && ZNet.instance.IsDedicated()
+                        ? SteamGameServerNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes)
+                        : SteamNetworkingSockets.GetConnectionRealTimeStatus(connection, ref status, 0, ref lanes);
+                    return result == EResult.k_EResultOK;
+                }
+                catch
+                {
+                    return false;
+                }
             }
         }
 
@@ -614,7 +644,7 @@ namespace FiresGhettoNetworkMod
                 TeleportGhostFix.DecideBeforeJoins(__instance);
                 StepEveryConnection(__instance);
             }
-            LinkPace.ReportPeriodically();
+            if (SteamSide.Present) LinkPace.ReportPeriodically();   // 1.5.49 (Xbox build has no ZSteamSocket): LinkPace is Steam-only
             if (s_links.Count == 0 || !__instance.IsDedicated()) return;
             double now = Time.realtimeSinceStartupAsDouble;
             if (s_nextReport <= 0.0) s_nextReport = now + ReportSeconds;

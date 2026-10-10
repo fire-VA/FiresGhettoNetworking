@@ -190,10 +190,22 @@ namespace FiresGhettoNetworkMod
             if (s_tracking) Mark(sectorIndex.Sector, null);
         }
 
+        // Vanilla's bumps go through IncreaseDataRevision; that hook stays the guaranteed one. Expand World Prefabs also bumps
+        // revisions itself with "zdo.DataRevision += 100" after editing connections, terrain or attachments directly
+        // (2026-10-02 EWP review), and those objects sat in sectors marked clean until the next full recheck, so the setter is
+        // hooked too. The setter is a tiny auto-property the JIT may inline into a caller, where no patch runs, so it can only
+        // ADD marks, never replace the IncreaseDataRevision one (a double Mark is harmless). Zero is Reset/Load clearing a
+        // pooled object, never something to send.
         [HarmonyPatch(typeof(ZDO), "IncreaseDataRevision"), HarmonyPostfix]
         static void OnDataRevision(ZDO __instance)
         {
             if (s_tracking) Mark(__instance);
+        }
+
+        [HarmonyPatch(typeof(ZDO), nameof(ZDO.DataRevision), MethodType.Setter), HarmonyPostfix]
+        static void OnDataRevisionSet(ZDO __instance, uint value)
+        {
+            if (s_tracking && value != 0) Mark(__instance);
         }
 
         [HarmonyPatch(typeof(ZDO), "IncreaseOwnerRevision"), HarmonyPostfix]
@@ -381,6 +393,9 @@ namespace FiresGhettoNetworkMod
                     walked++;
                     var zdo = journal.Zdos[at];
                     if (zdo == null || zdo.m_uid != journal.Uids[at]) continue;
+                    // only the LIVE object for that id: a journaled save clone (or a pooled object) must never reach a send list, where
+                    // vanilla's send sort writes its m_tempSortValue and so clears the SaveClone flag (see Mark)
+                    if (!ReferenceEquals(ZDOMan.instance.GetZDO(zdo.m_uid), zdo)) continue;
                     if (distant && !zdo.Distant) continue;
                     if (!s_seen.Add(journal.Uids[at])) continue;
                     if (!Unsent(peer, zdo)) continue;
@@ -419,6 +434,13 @@ namespace FiresGhettoNetworkMod
         // skips the position read below, which is why the check comes first.
         private static void Mark(ZDO zdo)
         {
+            // 1.5.35: only the live object, on the main thread. Expand World Prefabs' ServerSideData.BeforeSave Sets a value on each
+            // world-save CLONE on the save thread; that IncreaseDataRevision used to journal the clone, the walk put it in a peer's send
+            // list, vanilla's send sort wrote its m_tempSortValue (>= 0), which is ZDO's SaveClone flag, and SaveCleanup's Reset then
+            // ran ZDOExtraData.Release(uid) on the LIVE object: every field of a LocationProxy, Skull1 or chest gone (Enigma 2026-10-02,
+            // caught by ITTO's DataWipeWatch in launch 13: "RELEASE of LIVE LocationProxy ... via ZDOMan.SaveCleanup").
+            if (System.Threading.Thread.CurrentThread.ManagedThreadId != OwnerSafeRevisions.MainThreadId) return;
+            if (ZDOMan.instance == null || !ReferenceEquals(ZDOMan.instance.GetZDO(zdo.m_uid), zdo)) return;
             if (ReferenceEquals(zdo, s_lastMarked) && s_lastMarkedFrame == s_frame) return;
             s_lastMarked = zdo;
             s_lastMarkedFrame = s_frame;

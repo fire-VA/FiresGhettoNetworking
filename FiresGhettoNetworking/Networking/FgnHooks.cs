@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using FiresGhettoNetworkMod.AutoTune;
 using HarmonyLib;
 using UnityEngine;
@@ -25,6 +26,11 @@ namespace FiresGhettoNetworkMod
 
         private static bool On(Type feature) => s_attached.Contains(feature);
 
+        // 1.5.49 (Xbox build has no ZSteamSocket): KeepaliveFirst's fields name ZSteamSocket; this NoInlining step keeps
+        // ReadAttachedFeatures' JIT from setting it up. Called only when SteamSide.Present.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool KeepaliveReady() => KeepaliveFirst.Ready;
+
         internal static Type[] ReadAttachedFeatures()
         {
             s_compression = On(typeof(CompressionGroup));
@@ -47,7 +53,7 @@ namespace FiresGhettoNetworkMod
             s_echo = On(typeof(ConnectionEcho));
             s_creatures = On(typeof(CreatureOwnership));
             s_helm = On(typeof(HelmOwnership));
-            s_keepalive = On(typeof(KeepaliveFirst)) && KeepaliveFirst.Ready;
+            s_keepalive = SteamSide.Present && On(typeof(KeepaliveFirst)) && KeepaliveReady();   // 1.5.49: KeepaliveFirst is Steam-only
             s_roundTrip = On(typeof(RoundTripTrace));
             s_floodTest = On(typeof(ZdoFloodTest));
             s_playerSync = On(typeof(PlayerPositionSyncPatches));
@@ -65,19 +71,25 @@ namespace FiresGhettoNetworkMod
             s_stability = On(typeof(ServerStabilityPatches));
             s_ownershipV3 = On(typeof(ServerOwnershipPatchesV3));
             s_ownershipV2 = On(typeof(ServerOwnershipPatches));
-            return typeof(FgnHooks).GetNestedTypes(BindingFlags.NonPublic);
+            Type[] hooks = typeof(FgnHooks).GetNestedTypes(BindingFlags.NonPublic);
+            if (SteamSide.Present) return hooks;
+            // 1.5.49 (Xbox build has no ZSteamSocket): reading the ZSteamSocket hooks' attributes throws there, so they are
+            // not handed to Harmony at all.
+            return Array.FindAll(hooks, hook => hook != typeof(ZSteamSocketSend) && hook != typeof(ZSteamSocketRecv));
         }
 
         [HarmonyPatch]
         private static class ZNetStart
         {
             static bool Prepare() => s_compression || s_rates || s_dedicated || s_bulk || s_wireWriter || s_disarmTest
-                || s_compressionTest || s_stressTests || s_headroom || s_links || s_scheduler || s_floodTest || s_autoTune || s_sectors;
+                || s_compressionTest || s_stressTests || s_headroom || s_links || s_scheduler || s_floodTest || s_autoTune || s_sectors
+                || s_echo;
 
             [HarmonyPatch(typeof(ZNet), "Start"), HarmonyPostfix]
             static void Postfix(ZNet __instance)
             {
                 if (s_compression) CompressionGroup.OnZNetStart();
+                if (s_echo) FgnVersionGate.OnZNetStart();
                 if (s_rates) NetworkingRatesGroup.EnsureRatesOnStart();
                 if (s_dedicated) DedicatedServerGroup.LogBackendAtZNetStart();
                 if (s_bulk) BulkTransferGatePatches.ApplyOnZNetStart();
@@ -126,6 +138,7 @@ namespace FiresGhettoNetworkMod
             {
                 if (s_compression) CompressionGroup.OnDisconnect(peer);
                 if (s_echo) ConnectionEcho.OnDisconnect(peer);
+                if (s_echo) FgnVersionGate.OnDisconnect(peer);
                 if (s_autoTune) AutoTuneProbeHooks.ZNet_Disconnect_Postfix(peer);
             }
         }
@@ -143,6 +156,7 @@ namespace FiresGhettoNetworkMod
                 if (s_links) LinkController.OnZNetShutdown();
                 if (s_scheduler) SendScheduler.OnZNetShutdown();
                 if (s_echo) ConnectionEcho.OnShutdown();
+                if (s_echo) FgnVersionGate.OnShutdown();
                 if (s_creatures) CreatureOwnership.OnShutdown();
                 if (s_helm) HelmOwnership.OnShutdown();
                 if (s_autoTune) AutoTuneProbeHooks.ZNet_Shutdown_Postfix();
@@ -205,7 +219,9 @@ namespace FiresGhettoNetworkMod
                 if (s_dedicated) RefPosAudit.Tick(__instance);
                 if (s_links) LinkController.ReportPeriodically(__instance);
                 if (s_echo) ConnectionEcho.SendEchoes(__instance);
+                if (s_echo) FgnVersionGate.Tick(__instance);
                 if (s_profile) ServerFrameProfile.NetEnd();
+                FgnPerf.Tick();
             }
         }
 
@@ -224,7 +240,12 @@ namespace FiresGhettoNetworkMod
             static void Postfix(ZDOMan __instance)
             {
                 if (s_zdoDelta) ZDODeltaPatches.ZDOMan_Update_ForgetExpiredSnapshots(__instance);
-                if (s_creatures) CreatureOwnership.Balance(__instance);
+                if (s_creatures)
+                {
+                    long perf = FgnPerf.Begin();
+                    CreatureOwnership.Balance(__instance);
+                    FgnPerf.End(FgnPerf.Point.CreatureBalance, perf);
+                }
                 if (s_stations) StationRouter.ReleaseHeld();
                 if (s_profile) ServerFrameProfile.SendEnd();
             }
@@ -238,6 +259,7 @@ namespace FiresGhettoNetworkMod
             [HarmonyPatch(typeof(ZDOMan), "CreateSyncList"), HarmonyPrefix, HarmonyPriority(Priority.First)]
             static void Prefix(ZDOMan.ZDOPeer peer)
             {
+                s_syncListPerf = FgnPerf.Begin();
                 if (s_profile) ServerFrameProfile.ScanBegin();
                 if (s_sectors) SectorChangeTracker.ScanBegin(peer);
             }
@@ -252,7 +274,11 @@ namespace FiresGhettoNetworkMod
             static void Finalizer()
             {
                 if (s_sectors) SectorChangeTracker.ScanEnd();
+                FgnPerf.End(FgnPerf.Point.SyncList, s_syncListPerf);
+                s_syncListPerf = 0L;
             }
+
+            private static long s_syncListPerf;
 
             [HarmonyPatch(typeof(ZDOMan), "CreateSyncList"), HarmonyTranspiler]
             static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
@@ -303,9 +329,11 @@ namespace FiresGhettoNetworkMod
             [HarmonyPatch(typeof(ZDOMan), "ReleaseNearbyZDOS"), HarmonyPrefix]
             static bool Prefix(ZDOMan __instance, Vector3 refPosition, long uid)
             {
+                long perf = FgnPerf.Begin();
                 bool runOriginal = true;
                 if (s_ownershipV3) runOriginal &= ServerOwnershipPatchesV3.ReleaseNearbyZDOS_Prefix(__instance, refPosition, uid);
                 if (s_ownershipV2) runOriginal &= ServerOwnershipPatches.ReleaseNearbyZDOS_Prefix(__instance, refPosition, uid);
+                FgnPerf.End(FgnPerf.Point.ReleaseNearby, perf);
                 return runOriginal;
             }
         }
@@ -335,9 +363,11 @@ namespace FiresGhettoNetworkMod
             [HarmonyPatch(typeof(ZDO), nameof(ZDO.Deserialize)), HarmonyPostfix]
             static void Postfix(ZDO __instance)
             {
+                long perf = FgnPerf.Begin();
                 if (s_playerSync) PlayerPositionSyncPatches.ZDO_Deserialize_Postfix(__instance);
                 if (s_capeDiag) CapeCrashDiagnostics.ZDO_Deserialize_Postfix(__instance);
                 if (s_sectors) SectorChangeTracker.OnDeserialize(__instance);
+                FgnPerf.End(FgnPerf.Point.ZdoDeserialize, perf);
             }
         }
 
@@ -387,7 +417,9 @@ namespace FiresGhettoNetworkMod
         {
             static bool Prepare() => s_router || s_stability;
 
-            [HarmonyPatch(typeof(ZRoutedRpc), "RouteRPC"), HarmonyPrefix]
+            // Last, so other mods' RouteRPC prefixes (EWP: Say cancel, teleport tracking) see a broadcast and can veto it
+            // before the router sends it to its filtered list instead of vanilla's everyone.
+            [HarmonyPatch(typeof(ZRoutedRpc), "RouteRPC"), HarmonyPrefix, HarmonyPriority(Priority.Last)]
             static bool Prefix(ZRoutedRpc __instance, ZRoutedRpc.RoutedRPCData rpcData, bool __runOriginal)
             {
                 bool runOriginal = !s_router || RpcRouterPatches.RouteRPC_Prefix(__instance, rpcData, __runOriginal);
@@ -432,7 +464,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch]
         private static class ZSteamSocketSend
         {
-            static bool Prepare() => s_keepalive || s_compression;
+            static bool Prepare() => SteamSide.Present && (s_keepalive || s_compression);
 
             [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Send), new[] { typeof(ZPackage) }), HarmonyPrefix, HarmonyPriority(Priority.First)]
             static bool Prefix(ZSteamSocket __instance, ZPackage pkg) => !s_keepalive || KeepaliveFirst.JumpQueue(__instance, pkg);
@@ -445,7 +477,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch]
         private static class ZSteamSocketRecv
         {
-            static bool Prepare() => s_compression || s_roundTrip;
+            static bool Prepare() => SteamSide.Present && (s_compression || s_roundTrip);
 
             [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Recv)), HarmonyPostfix]
             static void Postfix(ref ZPackage __result, ZSteamSocket __instance)
@@ -466,14 +498,23 @@ namespace FiresGhettoNetworkMod
             [HarmonyPatch(typeof(Ship), nameof(Ship.CustomFixedUpdate)), HarmonyPrefix]
             static bool Prefix(Ship __instance, ZNetView ___m_nview, Rigidbody ___m_body)
             {
+                long perf = FgnPerf.Begin();
                 if (s_helm) HelmOwnership.HoldSlamOnTakeover(__instance, ___m_nview);
-                return !s_shipSim || ServerShipSimulationPatches.Ship_CustomFixedUpdate_ParkUntilEnvironmentReady(__instance, ___m_nview, ___m_body);
+                bool runOriginal = !s_shipSim
+                    || ServerShipSimulationPatches.Ship_CustomFixedUpdate_ParkUntilEnvironmentReady(__instance, ___m_nview, ___m_body);
+                FgnPerf.End(FgnPerf.Point.ShipFixed, perf);
+                return runOriginal;
             }
 
             [HarmonyPatch(typeof(Ship), nameof(Ship.CustomFixedUpdate)), HarmonyPostfix]
             static void Postfix(Ship __instance)
             {
-                if (s_shipFixes) ShipFixesGroup.CustomFixedUpdate_Postfix(__instance);
+                if (s_shipFixes)
+                {
+                    long perf = FgnPerf.Begin();
+                    ShipFixesGroup.CustomFixedUpdate_Postfix(__instance);
+                    FgnPerf.End(FgnPerf.Point.ShipFixed, perf);
+                }
             }
         }
     }

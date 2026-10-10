@@ -203,7 +203,8 @@ namespace FiresGhettoNetworkMod
             }
 
             var ownerPeer = ZNet.instance.GetPeer(owner);
-            if (ownerPeer == null || !ownerPeer.IsReady() || !ConnectionEcho.HasFgn(ownerPeer)) return false;
+            // FGN_HandOff's payload is FGN's own, so only a peer on our FGN build (FgnVersionGate) is asked or handed to.
+            if (ownerPeer == null || !ownerPeer.IsReady() || !FgnVersionGate.IsMatched(ownerPeer)) return false;
             if (s_pending.TryGetValue(id, out var pending) && now - pending.At < PendingSeconds) return false;
             if (s_cooldowns.TryGetValue(id, out var cooldownEnds) && now < cooldownEnds) return false;
             if (zdo.GetBool(ZDOVars.s_tamed) || zdo.GetLong(ZDOVars.s_user) != 0L || IsHeld(zdo)) return false;
@@ -229,7 +230,7 @@ namespace FiresGhettoNetworkMod
                 present++;
                 if (candidate == ownerPeer) continue;
                 if (candidate == fighter) fighterPresent = true;
-                if (!ConnectionEcho.HasFgn(candidate)) continue;
+                if (!FgnVersionGate.IsMatched(candidate)) continue;
                 float rtt = Rtt(candidate);
                 if (rtt >= fastestRtt) continue;
                 fastest = candidate;
@@ -321,6 +322,7 @@ namespace FiresGhettoNetworkMod
             if (s_localHits.TryGetValue(zdo.m_uid, out double hitAt) && Time.realtimeSinceStartupAsDouble - hitAt <= FightMemorySeconds)
                 return "owner fighting";
             if (IsHeld(zdo)) return "held";
+            if (ValcastPossession.IsPossessed(zdo)) return "possessed";   // 1.5.37: FiresValcast creature possession
             var view = ZNetScene.instance != null ? ZNetScene.instance.FindInstance(zdo) : null;
             if (view == null) return null;
             var character = view.GetComponent<Character>();
@@ -339,6 +341,14 @@ namespace FiresGhettoNetworkMod
 
         [HarmonyPatch(typeof(Character), "RPC_Damage"), HarmonyPrefix]
         static bool OnDamage(Character __instance, HitData hit)
+        {
+            long perf = FgnPerf.Begin();
+            bool runOriginal = HandleDamage(__instance, hit);
+            FgnPerf.End(FgnPerf.Point.CreatureDamage, perf);
+            return runOriginal;
+        }
+
+        private static bool HandleDamage(Character __instance, HitData hit)
         {
             if (hit == null || Player.m_localPlayer == null) return true;
             // This is FGN's one Character.RPC_Damage hook; the PvP lag-fair dodge rides on it.

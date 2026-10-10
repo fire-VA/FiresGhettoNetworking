@@ -18,7 +18,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.5.28";
+        public const string PluginVersion = "1.5.49";
 
         // ValheimPerformanceOptimizations (ontrigger) replaces ZNetScene.CreateDestroyObjects (always skipping vanilla, around
         // ZNet's reference position) and ZDOMan.ReleaseNearbyZDOS, the two methods Server-Side Simulation and ZDO ownership
@@ -185,10 +185,18 @@ namespace FiresGhettoNetworkMod
             LogoutHold.InitConfig(Config);
             RemoteMotion.InitConfig(Config);
             RemoteArrows.InitConfig(Config);
+            FgnVersionGate.InitConfig(Config);
+            OwnerSafeRevisions.InitConfig(Config);
+
+            if (!SteamSide.Present)
+                LoggerOptions.LogMessage("Steam networking not present: FGN's Steam features off, the rest on");
 
             TryPatchAll(typeof(CompressionGroup));
             TryPatchAll(typeof(NetworkingRatesGroup));
+            if (SteamSide.Present) TryPatchAll(typeof(NetworkingRatesGroup.SteamConnectPatch));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
             TryPatchAll(typeof(DedicatedServerGroup));
+            if (SteamSide.Present) TryPatchAll(typeof(DedicatedServerGroup.SteamPatches));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
+            TryPatchAll(typeof(PlayFabJoinCodeGuard));   // 1.5.39: crossplay join-code check (null lobby entry), servers and hosts
             TryPatchAll(typeof(SyncListRefPosPatches));
             TryPatchAll(typeof(UploadBreakdown));
             TryPatchAll(typeof(DownloadBreakdown));
@@ -202,7 +210,7 @@ namespace FiresGhettoNetworkMod
             }
 
             TryPatchAll(typeof(ServerDisconnectDiagnostics));
-            TryPatchAll(typeof(CloseWithoutSleep));
+            if (SteamSide.Present) TryPatchAll(typeof(CloseWithoutSleep));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
             PlayFabZlibWorker.Apply();
 
             TryPatchAll(typeof(BulkTransferGatePatches));
@@ -222,6 +230,7 @@ namespace FiresGhettoNetworkMod
             }
 
             TryPatchAll(typeof(DisarmOverloadTest));
+            if (SteamSide.Present) TryPatchAll(typeof(DisarmOverloadTest.SteamPatch));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
 
             TryPatchAll(typeof(CompressionRoundTripTest));
 
@@ -246,7 +255,7 @@ namespace FiresGhettoNetworkMod
 
             TryPatchAll(typeof(TargetSync));
 
-            TryPatchAll(typeof(KeepaliveFirst));
+            if (SteamSide.Present) TryPatchAll(typeof(KeepaliveFirst));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
 
             TryPatchAll(typeof(JoinGrace));
 
@@ -274,6 +283,11 @@ namespace FiresGhettoNetworkMod
             TryPatchAll(typeof(GroundSnapPatches));
 
             TryPatchAll(typeof(OwnershipHandoffPatches));
+
+            TryPatchAll(typeof(OwnedPositionEcho));
+            TryPatchAll(typeof(OwnerSafeRevisions));
+            TryPatchAll(typeof(PendingServerKeys));
+            OwnerSafeRevisions.MainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
 
             try
             {
@@ -398,6 +412,7 @@ namespace FiresGhettoNetworkMod
             TryPatchAll(typeof(ServerShipSimulationPatches));
 
             TryPatchAll(typeof(ServerAuthorityPatches));
+            TryPatchAll(typeof(SssQuietPass));   // 1.5.47 dry run: quiet-pass counter for the [SSS] line
             TryPatchAll(typeof(ServerStabilityPatches));
             TryPatchAll(typeof(MonsterAIPatches));
 
@@ -515,6 +530,13 @@ namespace FiresGhettoNetworkMod
             address = null;
             int port = ServerPort();
             if (port <= 0) return false;
+            // 1.5.49 (Xbox build has no ZSteamSocket): the Steam game-server read is JIT'd only when Steam is there.
+            return SteamSide.Present && TryGetSteamJoinAddress(port, out address);
+        }
+
+        private static bool TryGetSteamJoinAddress(int port, out string address)
+        {
+            address = null;
             try
             {
                 if (!Steamworks.SteamGameServer.BLoggedOn()) return false;

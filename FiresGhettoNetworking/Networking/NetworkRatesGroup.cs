@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Steamworks;
 using UnityEngine;
@@ -181,13 +182,28 @@ namespace FiresGhettoNetworkMod
         // exist when FiresSteamworksPatcher is installed; without it the setting is skipped and caps at Steam's
         // default.
         public static bool SetConnectionConfig(string enumMemberName, int value, uint connHandle)
-        {
-            if (!TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
-            CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (id {(int)setting}) = {value} on connection {connHandle}: calling SetConfigValue");
-            bool accepted = SetConfigInt32(setting, ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection, new IntPtr((long)connHandle), value);
-            CapeCrashDiagnostics.Log($"Steam config {enumMemberName} on connection {connHandle}: returned {accepted}");
-            return accepted;
-        }
+            => SteamSide.Present && SetConnectionConfigSteam(enumMemberName, value, connHandle);
+
+        // 1.5.49 (Xbox build has no ZSteamSocket): the Steamworks-typed config code lives in SteamConfig, whose fields name
+        // Steam types. These NoInlining steps are called only when SteamSide.Present, so no always-on method's JIT sets it up.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool SetConnectionConfigSteam(string enumMemberName, int value, uint connHandle)
+            => SteamConfig.SetConnectionConfig(enumMemberName, value, connHandle);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool PinConnectionRateSteam(uint conn, int rateBytes, bool raising)
+            => SteamConfig.PinConnectionRate(conn, rateBytes, raising);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool SetSteamConfigSteam(string enumMemberName, int value)
+            => SteamConfig.SetSteamConfig(enumMemberName, value);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool HasSteamConfigMemberSteam(string memberName) => SteamConfig.HasMember(memberName);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static string DescribeConnectionConfigSteam(string enumMemberName, uint conn)
+            => SteamConfig.DescribeConnectionConfig(enumMemberName, conn);
 
         public static void OverrideConnectionForStressTest(ZNetPeer peer, int rateMinBytes, int rateMaxBytes, int bufferBytes)
         {
@@ -239,33 +255,118 @@ namespace FiresGhettoNetworkMod
         // Order the two writes so Min never momentarily exceeds Max: raising -> Max first; lowering -> Min first.
         public static bool PinConnectionRate(uint conn, int rateBytes, bool raising)
         {
-            if (conn == 0u) return false;
-            var first = raising ? ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax : ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin;
-            var second = raising ? ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin : ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax;
-            var scope = ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection;
-            var handle = new IntPtr((long)conn);
-            bool a = SetConfigInt32(first, scope, handle, rateBytes);
-            bool b = SetConfigInt32(second, scope, handle, rateBytes);
-            return a && b;
+            if (conn == 0u || !SteamSide.Present) return false;
+            return PinConnectionRateSteam(conn, rateBytes, raising);
         }
 
-        private static IntPtr s_int32Value;
-
-        private static bool SetConfigInt32(ESteamNetworkingConfigValue setting, ESteamNetworkingConfigScope scope, IntPtr scopeObject, int value)
+        /// <summary>
+        /// 1.5.49 (Xbox build has no ZSteamSocket): every Steamworks-typed member of NetworkingRatesGroup, so the group (and
+        /// its non-Steam patches) loads on a build without Steam. Reached only through the NoInlining steps above, which
+        /// run only when SteamSide.Present.
+        /// </summary>
+        private static class SteamConfig
         {
-            try
+            private static IntPtr s_int32Value;
+            private static IntPtr s_int32Result;
+
+            // The enum's members are read by name once. FiresSteamworksPatcher adds members at preload, before this
+            // assembly loads, so the runtime enum already carries them.
+            private static Dictionary<string, ESteamNetworkingConfigValue> s_steamConfigMembers;
+
+            internal static bool SetConnectionConfig(string enumMemberName, int value, uint connHandle)
             {
-                if (s_int32Value == IntPtr.Zero) s_int32Value = Marshal.AllocHGlobal(4);
-                Marshal.WriteInt32(s_int32Value, value);
-                var dataType = ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32;
-                return ZNet.instance != null && ZNet.instance.IsDedicated()
-                    ? SteamGameServerNetworkingUtils.SetConfigValue(setting, scope, scopeObject, dataType, s_int32Value)
-                    : SteamNetworkingUtils.SetConfigValue(setting, scope, scopeObject, dataType, s_int32Value);
+                if (!TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (id {(int)setting}) = {value} on connection {connHandle}: calling SetConfigValue");
+                bool accepted = SetConfigInt32(setting, ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection, new IntPtr((long)connHandle), value);
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} on connection {connHandle}: returned {accepted}");
+                return accepted;
             }
-            catch (Exception e)
+
+            internal static bool PinConnectionRate(uint conn, int rateBytes, bool raising)
             {
-                LoggerOptions.LogWarning($"Steam {scope} {setting} = {value} failed: {e.Message}");
-                return false;
+                var first = raising ? ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax : ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin;
+                var second = raising ? ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin : ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax;
+                var scope = ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection;
+                var handle = new IntPtr((long)conn);
+                bool a = SetConfigInt32(first, scope, handle, rateBytes);
+                bool b = SetConfigInt32(second, scope, handle, rateBytes);
+                return a && b;
+            }
+
+            private static bool SetConfigInt32(ESteamNetworkingConfigValue setting, ESteamNetworkingConfigScope scope, IntPtr scopeObject, int value)
+            {
+                try
+                {
+                    if (s_int32Value == IntPtr.Zero) s_int32Value = Marshal.AllocHGlobal(4);
+                    Marshal.WriteInt32(s_int32Value, value);
+                    var dataType = ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32;
+                    return ZNet.instance != null && ZNet.instance.IsDedicated()
+                        ? SteamGameServerNetworkingUtils.SetConfigValue(setting, scope, scopeObject, dataType, s_int32Value)
+                        : SteamNetworkingUtils.SetConfigValue(setting, scope, scopeObject, dataType, s_int32Value);
+                }
+                catch (Exception e)
+                {
+                    LoggerOptions.LogWarning($"Steam {scope} {setting} = {value} failed: {e.Message}");
+                    return false;
+                }
+            }
+
+            internal static bool HasMember(string memberName) => TryGetSteamConfigMember(memberName, out _);
+
+            private static bool TryGetSteamConfigMember(string memberName, out ESteamNetworkingConfigValue setting)
+            {
+                if (s_steamConfigMembers == null)
+                {
+                    var members = new Dictionary<string, ESteamNetworkingConfigValue>(StringComparer.Ordinal);
+                    foreach (var name in Enum.GetNames(typeof(ESteamNetworkingConfigValue)))
+                        members[name] = (ESteamNetworkingConfigValue)Enum.Parse(typeof(ESteamNetworkingConfigValue), name);
+                    s_steamConfigMembers = members;
+                }
+                return s_steamConfigMembers.TryGetValue(memberName, out setting);
+            }
+
+            // Members only present with FiresSteamworksPatcher (recv-buffer family) are skipped, so the value caps at
+            // Steam's default.
+            internal static bool SetSteamConfig(string enumMemberName, int value)
+            {
+                if (!TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (id {(int)setting}) = {value} (global): calling SetConfigValue");
+                bool accepted = SetConfigInt32(setting, ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Global, IntPtr.Zero, value);
+                CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (global): returned {accepted}");
+                return accepted;
+            }
+
+            internal static string DescribeConnectionConfig(string enumMemberName, uint conn)
+            {
+                if (!TryReadConnectionConfig(enumMemberName, conn, out int value, out ESteamNetworkingGetConfigValueResult result))
+                    return result == default ? "unreadable" : result.ToString().Replace("k_ESteamNetworkingGetConfigValue_", "error ");
+                string inherited = result == ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OKInherited ? " (inherited)" : string.Empty;
+                return enumMemberName.EndsWith("Messages", StringComparison.Ordinal) ? $"{value}{inherited}" : $"{value / 1024} KB{inherited}";
+            }
+
+            internal static bool TryReadConnectionConfig(string enumMemberName, uint conn, out int value, out ESteamNetworkingGetConfigValueResult result)
+            {
+                value = 0;
+                result = default;
+                if (conn == 0u || !TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
+                try
+                {
+                    if (s_int32Result == IntPtr.Zero) s_int32Result = Marshal.AllocHGlobal(sizeof(int));
+                    ulong size = sizeof(int);
+                    var scope = ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection;
+                    var handle = new IntPtr((long)conn);
+                    result = ZNet.instance != null && ZNet.instance.IsDedicated()
+                        ? SteamGameServerNetworkingUtils.GetConfigValue(setting, scope, handle, out _, s_int32Result, ref size)
+                        : SteamNetworkingUtils.GetConfigValue(setting, scope, handle, out _, s_int32Result, ref size);
+                    if (result != ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OK
+                        && result != ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OKInherited) return false;
+                    value = Marshal.ReadInt32(s_int32Result);
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
             }
         }
 
@@ -406,23 +507,8 @@ namespace FiresGhettoNetworkMod
         public static bool IsSendBufferRaiseApplied()
             => HasSteamConfigMember("k_ESteamNetworkingConfig_SendBufferSize");
 
-        private static bool HasSteamConfigMember(string memberName) => TryGetSteamConfigMember(memberName, out _);
-
-        // The enum's members are read by name once. FiresSteamworksPatcher adds members at preload, before this
-        // assembly loads, so the runtime enum already carries them.
-        private static Dictionary<string, ESteamNetworkingConfigValue> s_steamConfigMembers;
-
-        private static bool TryGetSteamConfigMember(string memberName, out ESteamNetworkingConfigValue setting)
-        {
-            if (s_steamConfigMembers == null)
-            {
-                var members = new Dictionary<string, ESteamNetworkingConfigValue>(StringComparer.Ordinal);
-                foreach (var name in Enum.GetNames(typeof(ESteamNetworkingConfigValue)))
-                    members[name] = (ESteamNetworkingConfigValue)Enum.Parse(typeof(ESteamNetworkingConfigValue), name);
-                s_steamConfigMembers = members;
-            }
-            return s_steamConfigMembers.TryGetValue(memberName, out setting);
-        }
+        // 1.5.49 (Xbox build has no ZSteamSocket): no Steamworks, no config member.
+        private static bool HasSteamConfigMember(string memberName) => SteamSide.Present && HasSteamConfigMemberSteam(memberName);
 
         // ====================== UPDATE RATE PATCH ======================
         internal static void AdjustUpdateInterval(ref float dt)
@@ -461,15 +547,9 @@ namespace FiresGhettoNetworkMod
 
         // ====================== SEND RATE PATCHES (Steamworks) ======================
         // Members only present with FiresSteamworksPatcher (recv-buffer family) are skipped, so the value caps at
-        // Steam's default.
+        // Steam's default. 1.5.49 (Xbox build has no ZSteamSocket): without Steam nothing is set.
         private static bool SetSteamConfig(string enumMemberName, int value)
-        {
-            if (!TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
-            CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (id {(int)setting}) = {value} (global): calling SetConfigValue");
-            bool accepted = SetConfigInt32(setting, ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Global, IntPtr.Zero, value);
-            CapeCrashDiagnostics.Log($"Steam config {enumMemberName} (global): returned {accepted}");
-            return accepted;
-        }
+            => SteamSide.Present && SetSteamConfigSteam(enumMemberName, value);
 
         private static string Outcome(bool accepted) => accepted ? "applied" : "REFUSED by Steam (SetConfigValue returned false)";
 
@@ -489,7 +569,6 @@ namespace FiresGhettoNetworkMod
         private const string ConfigPrefix = "k_ESteamNetworkingConfig_";
         private static readonly Dictionary<uint, string> s_lastConnectionConfig = new Dictionary<uint, string>();
         private static double s_nextConnectionConfigCheck;
-        private static IntPtr s_int32Result;
 
         internal static void ReportConnectionConfigPeriodically()
         {
@@ -512,47 +591,28 @@ namespace FiresGhettoNetworkMod
             }
         }
 
+        // conn is non-zero only for a ZSteamSocket, so this runs only when SteamSide.Present.
         private static string DescribeConnectionConfig(string enumMemberName, uint conn)
-        {
-            if (!TryReadConnectionConfig(enumMemberName, conn, out int value, out ESteamNetworkingGetConfigValueResult result))
-                return result == default ? "unreadable" : result.ToString().Replace("k_ESteamNetworkingGetConfigValue_", "error ");
-            string inherited = result == ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OKInherited ? " (inherited)" : string.Empty;
-            return enumMemberName.EndsWith("Messages", StringComparison.Ordinal) ? $"{value}{inherited}" : $"{value / 1024} KB{inherited}";
-        }
+            => SteamSide.Present ? DescribeConnectionConfigSteam(enumMemberName, conn) : "unreadable";
 
-        internal static bool TryReadConnectionConfig(string enumMemberName, uint conn, out int value, out ESteamNetworkingGetConfigValueResult result)
+        /// <summary>
+        /// 1.5.49 (Xbox build has no ZSteamSocket): the ZSteamSocket patch on its own, attached by Ascend only when
+        /// SteamSide.Present, so reading NetworkingRatesGroup's attributes never resolves ZSteamSocket.
+        /// </summary>
+        [HarmonyPatch]
+        internal static class SteamConnectPatch
         {
-            value = 0;
-            result = default;
-            if (conn == 0u || !TryGetSteamConfigMember(enumMemberName, out var setting)) return false;
-            try
-            {
-                if (s_int32Result == IntPtr.Zero) s_int32Result = Marshal.AllocHGlobal(sizeof(int));
-                ulong size = sizeof(int);
-                var scope = ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection;
-                var handle = new IntPtr((long)conn);
-                result = ZNet.instance != null && ZNet.instance.IsDedicated()
-                    ? SteamGameServerNetworkingUtils.GetConfigValue(setting, scope, handle, out _, s_int32Result, ref size)
-                    : SteamNetworkingUtils.GetConfigValue(setting, scope, handle, out _, s_int32Result, ref size);
-                if (result != ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OK
-                    && result != ESteamNetworkingGetConfigValueResult.k_ESteamNetworkingGetConfigValue_OKInherited) return false;
-                value = Marshal.ReadInt32(s_int32Result);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
+            static bool Prepare() => SteamSide.Present;
 
-        [HarmonyPatch(typeof(ZSteamSocket), "RegisterGlobalCallbacks")]
-        [HarmonyPostfix]
-        static void ApplySendRatesOnConnect()
-        {
-            ApplySendRates();
-            ApplySendBufferSize();
-            ApplyRecvBufferSize();
-            ApplyRecvMaxMessageSize();
+            [HarmonyPatch(typeof(ZSteamSocket), "RegisterGlobalCallbacks")]
+            [HarmonyPostfix]
+            static void ApplySendRatesOnConnect()
+            {
+                ApplySendRates();
+                ApplySendBufferSize();
+                ApplyRecvBufferSize();
+                ApplyRecvMaxMessageSize();
+            }
         }
 
         // Vanilla SendZDOs: skip the peer while queue > 10240, budget = 10240 - queue, skip under 2048. The queue check

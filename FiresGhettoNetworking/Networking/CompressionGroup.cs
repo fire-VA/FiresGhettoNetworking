@@ -291,14 +291,12 @@ namespace FiresGhettoNetworkMod
             if (status == null) return;
             status.version = version;
             status.compressionEnabled = enabled;
-            bool agree = version == CompressionStatus.ourStatus.version
-                         && enabled
-                         && CompressionStatus.ourStatus.compressionEnabled;
+            bool agree = Agrees(peer, status);
             status.sendingCompressed = agree;
             if (!NetworkingRatesGroup.IsCrossplay(peer))
                 LoggerOptions.LogMessage($"Compression {(agree ? "ACTIVE" : "off")} with {GetPeerName(peer)} "
                     + $"(us v{CompressionStatus.ourStatus.version} enabled={CompressionStatus.ourStatus.compressionEnabled}, "
-                    + $"peer v{version} enabled={enabled}).");
+                    + $"peer v{version} enabled={enabled}, FGN version {(FgnVersionGate.IsMatched(peer) ? "matched" : "not matched yet")}).");
 
             // Reply exactly once so the initiator learns our (version, enabled) too.
             if (!status.helloSent)
@@ -306,6 +304,28 @@ namespace FiresGhettoNetworkMod
                 status.helloSent = true;
                 SendHelloToPeer(peer);
             }
+        }
+
+        // Compression framing is only sent to a peer whose FGN build matches ours (FgnVersionGate): the compression version
+        // alone stayed 9 across builds whose wire paths differ (Enigma, 2026-10-02).
+        private static bool Agrees(ZNetPeer peer, CompressionStatus.SocketStatus status) =>
+            status.version == CompressionStatus.ourStatus.version
+            && status.compressionEnabled
+            && CompressionStatus.ourStatus.compressionEnabled
+            && FgnVersionGate.IsMatched(peer);
+
+        /// <summary>
+        /// The version hello usually lands after the compression hello, which then said no. Re-decide on what the peer already
+        /// told us and greet it again, so the peer re-decides now that it can match us too.
+        /// </summary>
+        internal static void OnPeerVersionMatched(ZNetPeer peer)
+        {
+            if (peer?.m_socket == null || ZRoutedRpc.instance == null) return;
+            var status = CompressionStatus.GetOrAddStatus(peer.m_socket);
+            if (status == null) return;
+            status.sendingCompressed = Agrees(peer, status);
+            status.helloSent = true;
+            SendHelloToPeer(peer);
         }
 
         // ====================== SEND ======================
@@ -340,7 +360,7 @@ namespace FiresGhettoNetworkMod
             return instructions;
         }
 
-        public static byte[] PacketForSendQueue(ZPackage pkg, ZSteamSocket socket)
+        public static byte[] PacketForSendQueue(ZPackage pkg, ISocket socket)   // 1.5.49 (Xbox build has no ZSteamSocket): ISocket, so CompressionGroup loads without Steam
         {
             byte[] packet = pkg.GetArray();
             CompressionStatus.SocketStatus status = CompressionStatus.GetStatusOfRealSocket(socket);
@@ -375,7 +395,7 @@ namespace FiresGhettoNetworkMod
         // Decode on the frame itself, never on a per-socket flag, so no handshake timing can leave a frame unread. A packet
         // that begins with the magic but fails PacketFrame's checks is left as it arrived; its method hash is the magic, which
         // no RPC is registered under, so Valheim ignores it.
-        internal static void Steam_RecvCompressed(ref ZPackage __result, ZSteamSocket __instance)
+        internal static void Steam_RecvCompressed(ref ZPackage __result, ISocket __instance)   // 1.5.49: ISocket, see PacketForSendQueue
         {
             if (__result == null || __result.Size() < PacketFrame.HeaderBytes) return;
             int method = __result.ReadInt();
@@ -402,7 +422,7 @@ namespace FiresGhettoNetworkMod
             MaybeReport();
         }
 
-        private static void WarnRejected(ZSteamSocket socket, PacketFrame.DecodeResult result, int bytes)
+        private static void WarnRejected(ISocket socket, PacketFrame.DecodeResult result, int bytes)
         {
             s_rejectsSinceWarning++;
             long now = Stopwatch.GetTimestamp();

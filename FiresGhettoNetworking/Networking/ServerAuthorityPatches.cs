@@ -104,7 +104,6 @@ namespace FiresGhettoNetworkMod
 
         private static readonly List<ZDO> _cdoNearScratch = new List<ZDO>(8192);
         private static readonly List<ZDO> _cdoDistantScratch = new List<ZDO>(8192);
-        private static readonly HashSet<ZDO> _cdoSeenSet = new HashSet<ZDO>();
         private static int _cdoSources;   // areas collected this frame (ready peers + SSS test areas)
         private static float _cdoNextPass;   // realtime of the next server object pass ('Server Object Pass Hz')
         private static readonly List<ZDO> _cdoNearFiltered = new List<ZDO>(8192);
@@ -138,12 +137,15 @@ namespace FiresGhettoNetworkMod
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(ExtendedZoneRadius()));
                 long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+                bool quiet = SssQuietPass.WasQuiet(_cdoZones);   // 1.5.47 dry run: read before this pass changes anything
                 FilterAndDedupeZdos(_cdoNearScratch, _cdoNearFiltered, requireLoadedZone: true);
                 FilterAndDedupeZdos(_cdoDistantScratch, _cdoDistantFiltered, requireLoadedZone: false);
                 RecordCreateDestroyObjectsDiagnostics();
                 long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
 
+                int instancesBefore = __instance.m_instances.Count;
                 __instance.CreateObjects(_cdoNearFiltered, _cdoDistantFiltered);
+                int instancesCreated = __instance.m_instances.Count;
                 long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
 
                 // REACTIVE orphan prune. The previous code walked the ENTIRE
@@ -164,6 +166,7 @@ namespace FiresGhettoNetworkMod
                     PruneOrphanInstances(__instance);
                     __instance.RemoveObjects(_cdoNearFiltered, _cdoDistantFiltered);
                 }
+                SssQuietPass.PassDone(quiet, instancesCreated - instancesBefore, instancesCreated - __instance.m_instances.Count);
                 ServerFrameSplit.Frame(t1 - t0, t2 - t1, t3 - t2, System.Diagnostics.Stopwatch.GetTimestamp() - t3,
                     _cdoNearFiltered.Count, _cdoDistantFiltered.Count);
                 return false;
@@ -176,22 +179,81 @@ namespace FiresGhettoNetworkMod
             }
         }
 
+        // 1.5.45 (FGN perf 10-07: "SSS filter 2.13 ms a pass", the largest FGN cost with two players): vanilla FindSectorObjects
+        // clears its visited-sector set on every call, so two players' overlapping areas returned every shared sector twice and
+        // the filter deduped object by object in a HashSet. Now every source's NEAR rings are walked first and then every
+        // source's DISTANT rings, all through one shared visited set (vanilla's own FindObjects / FindDistantObjects, which add
+        // each sector they read). Each sector is read once: near wins over distant, exactly the union of the per-player calls.
+        // One source still uses vanilla's FindSectorObjects unchanged.
+        private static readonly List<Vector2s> _cdoZones = new List<Vector2s>(8);
+        private static readonly HashSet<ZoneSystem.SectorIndex> _cdoVisited = new HashSet<ZoneSystem.SectorIndex>();
+
         private static void CollectZdosFromAllPeerActiveAreas(SimulationDistance simulationDistance)
         {
             _cdoNearScratch.Clear();
             _cdoDistantScratch.Clear();
-            _cdoSources = 0;
+            _cdoZones.Clear();
             foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers())
             {
                 if (!peer.IsReady()) continue;
-                Vector2s zone = ZoneSystem.GetZone(GetPredictedRefPos(peer));
-                ZDOMan.instance.FindSectorObjects(zone, simulationDistance, _cdoNearScratch, _cdoDistantScratch);
-                _cdoSources++;
+                _cdoZones.Add(ZoneSystem.GetZone(GetPredictedRefPos(peer)));
             }
-            foreach (Vector3 point in SssTestAreas.Points)
+            foreach (Vector3 point in SssTestAreas.Points) _cdoZones.Add(ZoneSystem.GetZone(point));
+            _cdoSources = _cdoZones.Count;
+            ZDOMan zdoMan = ZDOMan.instance;
+            if (_cdoSources == 1) { zdoMan.FindSectorObjects(_cdoZones[0], simulationDistance, _cdoNearScratch, _cdoDistantScratch); return; }
+            _cdoVisited.Clear();
+            ZoneSystem zones = ZoneSystem.instance;
+            for (int i = 0; i < _cdoZones.Count; i++) NearRings(zdoMan, zones, _cdoZones[i], simulationDistance);
+            for (int i = 0; i < _cdoZones.Count; i++) DistantRings(zdoMan, zones, _cdoZones[i], simulationDistance);
+        }
+
+        // vanilla ZDOMan.FindSectorObjects' near half (ZDOMan.cs:952-973), into _cdoNearScratch, through the shared visited set
+        private static void NearRings(ZDOMan z, ZoneSystem zones, Vector2s sector, SimulationDistance d)
+        {
+            z.FindObjects(sector, _cdoNearScratch, _cdoVisited);
+            int near = d.NearSimulationDistance;
+            for (int index = 1; index <= near; ++index)
             {
-                ZDOMan.instance.FindSectorObjects(ZoneSystem.GetZone(point), simulationDistance, _cdoNearScratch, _cdoDistantScratch);
-                _cdoSources++;
+                for (int x = sector.x - index; x <= sector.x + index; ++x)
+                {
+                    var a = new Vector2s(x, sector.y - index);
+                    var b = new Vector2s(x, sector.y + index);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, a, near)) z.FindObjects(a, _cdoNearScratch, _cdoVisited);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, b, near)) z.FindObjects(b, _cdoNearScratch, _cdoVisited);
+                }
+                for (int y = sector.y - index + 1; y <= sector.y + index - 1; ++y)
+                {
+                    var a = new Vector2s(sector.x - index, y);
+                    var b = new Vector2s(sector.x + index, y);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, a, near)) z.FindObjects(a, _cdoNearScratch, _cdoVisited);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, b, near)) z.FindObjects(b, _cdoNearScratch, _cdoVisited);
+                }
+            }
+        }
+
+        // vanilla ZDOMan.FindSectorObjects' distant half (ZDOMan.cs:974-997), into _cdoDistantScratch, through the shared visited
+        // set; vanilla's own quirk kept: the second test of the side columns checks the first column's sector
+        private static void DistantRings(ZDOMan z, ZoneSystem zones, Vector2s sector, SimulationDistance d)
+        {
+            int total = d.TotalSimulationDistance;
+            int first = 1 + (d.IsClassic ? d.NearSimulationDistance : 0);
+            for (int index = first; index <= total; ++index)
+            {
+                for (int x = sector.x - index; x <= sector.x + index; ++x)
+                {
+                    var a = new Vector2s(x, sector.y - index);
+                    var b = new Vector2s(x, sector.y + index);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, a, total, true)) z.FindDistantObjects(a, _cdoDistantScratch, _cdoVisited);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, a, total, true)) z.FindDistantObjects(b, _cdoDistantScratch, _cdoVisited);
+                }
+                for (int y = sector.y - index + 1; y <= sector.y + index - 1; ++y)
+                {
+                    var a = new Vector2s(sector.x - index, y);
+                    var b = new Vector2s(sector.x + index, y);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, a, total, true)) z.FindDistantObjects(a, _cdoDistantScratch, _cdoVisited);
+                    if (d.IsClassic || zones.ZonesWithinRadius(sector, a, total, true)) z.FindDistantObjects(b, _cdoDistantScratch, _cdoVisited);
+                }
             }
         }
 
@@ -203,7 +265,8 @@ namespace FiresGhettoNetworkMod
         private static void FilterAndDedupeZdos(List<ZDO> source, List<ZDO> dest, bool requireLoadedZone)
         {
             dest.Clear();
-            _cdoSeenSet.Clear();
+            Vector2s lastSector = default;
+            bool haveLast = false, lastLoaded = false;
             ZNetScene scene = ZNetScene.instance;
             var loadedZones = requireLoadedZone ? ZoneSystem.instance.m_zones : null;
             for (int i = 0; i < source.Count; i++)
@@ -214,12 +277,20 @@ namespace FiresGhettoNetworkMod
                 // registered client-side only). If it reaches CreateObjects, vanilla can't build it and the
                 // SERVER branch destroys the ZDO ("Destroyed invalid prefab ZDO"), wiping the client's object.
                 // Leaving it out of the server's create sweep keeps it client-owned and intact.
+                // Prefab 0 is skipped the same way: nothing can be built from it, so letting it through only reached
+                // vanilla's destroy, and prefab-less ZDOs are how mods keep pure data objects (2026-10-02 EWP review).
                 int prefab = zdo.m_prefab;
-                if (prefab != 0 && scene != null && !scene.HasPrefab(prefab)) continue;
-                if (loadedZones != null && !loadedZones.ContainsKey(zdo.GetSector())) continue;
-                // 1.5.22: one source area (one player, no test areas) has no duplicates, so the per-ZDO HashSet is skipped
-                // ("filter 15.83 ms a frame" at ~134k near objects with one player on BlueHills).
-                if (_cdoSources <= 1 || _cdoSeenSet.Add(zdo)) dest.Add(zdo);
+                if (prefab == 0 || (scene != null && !scene.HasPrefab(prefab))) continue;
+                if (loadedZones != null)
+                {
+                    // 1.5.45: objects arrive grouped by sector, so the zone lookup is made once per sector run, not per object
+                    Vector2s sector = zdo.GetSector();
+                    if (!haveLast || sector.x != lastSector.x || sector.y != lastSector.y) { lastSector = sector; lastLoaded = loadedZones.ContainsKey(sector); haveLast = true; }
+                    if (!lastLoaded) continue;
+                }
+                // 1.5.45: no duplicates to drop. CollectZdosFromAllPeerActiveAreas reads each sector once across all sources (the
+                // per-object HashSet that 1.5.22 kept for two or more sources is gone)
+                dest.Add(zdo);
             }
         }
 
@@ -446,9 +517,30 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool Heightmap_RebuildRenderMesh_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
+        // 1.5.36 (user report via Fire, SSS + Selective: "NullReferenceException at ShieldDomeImageEffect.GetDomeColor" from
+        // ShieldGenerator.UpdateShield every 0.22 s): skipping this Awake on a dedi also skipped the one line that sets the static
+        // gradient GetDomeColor reads, and a server-simulated shield generator calls it on every update. The dedi still skips the
+        // material and texture, but takes the prefab's own gradient and smoothing as vanilla Awake does.
         [HarmonyPatch(typeof(ShieldDomeImageEffect), "Awake")]
         [HarmonyPrefix]
-        public static bool ShieldDomeImageEffect_Awake_Prefix() => !ServerClientUtils.ZNetIsDedicated();
+        public static bool ShieldDomeImageEffect_Awake_Prefix(ShieldDomeImageEffect __instance)
+        {
+            if (!ServerClientUtils.ZNetIsDedicated()) return true;
+            if (__instance.m_shieldColorGradient != null) ShieldDomeImageEffect.s_staticGradient = __instance.m_shieldColorGradient;
+            ShieldDomeImageEffect.Smoothing = __instance.m_smoothing;
+            return false;
+        }
+
+        /// <summary>1.5.36: no ShieldDomeImageEffect has woken on this dedi (the camera's is inactive or absent): the gradient from any
+        /// loaded one, else a plain white one, so GetDomeColor never reads null.</summary>
+        [HarmonyPatch(typeof(ShieldGenerator), "UpdateShield")]
+        [HarmonyPrefix]
+        public static void ShieldGenerator_UpdateShield_GradientPrefix()
+        {
+            if (ShieldDomeImageEffect.s_staticGradient != null || !ServerClientUtils.ZNetIsDedicated()) return;
+            var effect = UnityEngine.Object.FindFirstObjectByType<ShieldDomeImageEffect>(FindObjectsInactive.Include);
+            ShieldDomeImageEffect.s_staticGradient = effect != null && effect.m_shieldColorGradient != null ? effect.m_shieldColorGradient : new Gradient();
+        }
 
         /// <summary>A plant the dedi does not own only refreshes visuals and hover status a headless server never shows; plants it owns run vanilla so they still grow.</summary>
         [HarmonyPatch(typeof(Plant), "SUpdate")]

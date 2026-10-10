@@ -76,6 +76,15 @@ namespace FiresGhettoNetworkMod
                 _contextActive = false;
                 return;
             }
+            // Only a peer running our FGN build gets deltas; everyone else, vanilla clients included, gets whole vanilla ZDOs.
+            // A delta is a partial ZDO with no ack, so a receiver that never applied the keyframe (vanilla, or an FGN that reads
+            // frames differently) creates the object from the delta alone: Enigma 2026-10-02, a LocationProxy without
+            // its location. Snapshots are only taken under this context, so the first send after a match is a keyframe.
+            if (!FgnVersionGate.IsMatched(peer.m_peer))
+            {
+                _contextActive = false;
+                return;
+            }
             _currentPeerUID = peer.m_peer.m_uid;
             _contextActive  = true;
         }
@@ -148,6 +157,16 @@ namespace FiresGhettoNetworkMod
             }
         }
 
+        /// <summary>
+        /// Vanilla just sent this object whole without a snapshot being taken (ZdoWireWriter keeps off the buckets during a
+        /// world save), so the snapshot on record no longer describes what the peer holds. Dropping it makes the next send a
+        /// keyframe. Called only while ContextActive.
+        /// </summary>
+        internal static void ForgetSent(ZDO zdo)
+        {
+            if (_peerSnapshots.TryGetValue(_currentPeerUID, out var peerMap)) peerMap.Remove(zdo.m_uid);
+        }
+
         public static void RemovePeer_Postfix(ZNetPeer netPeer)
         {
             if (netPeer == null) return;
@@ -159,6 +178,37 @@ namespace FiresGhettoNetworkMod
         public static void HandleDestroyedZDO_ForgetSnapshots(ZDOID uid)
         {
             foreach (var peerMap in _peerSnapshots.Values) peerMap.Remove(uid);
+        }
+
+        /// <summary>
+        /// A forced send (RPC_RequestZDO, ZDOMan.ForceSendZDO for one or all peers, which all land here) is asked for when
+        /// the peer's copy is missing or wrong, so a delta built on what it was last sent would repair nothing. Dropping
+        /// the snapshot makes the next send a full keyframe.
+        /// </summary>
+        [HarmonyPatch(typeof(ZDOMan.ZDOPeer), nameof(ZDOMan.ZDOPeer.ForceSendZDO))]
+        [HarmonyPostfix]
+        public static void ZDOPeer_ForceSendZDO_ForgetSnapshot(ZDOMan.ZDOPeer __instance, ZDOID id)
+        {
+            ForgetSnapshot(__instance, id);
+        }
+
+        /// <summary>
+        /// When vanilla invalidates a sector for a peer it drops the object from that peer's sent list and the peer
+        /// destroys its copy, so the next send arrives as a new object and has to carry every field. Vanilla returns
+        /// early for objects the peer owns or still has in range; only an object no longer in the sent list is dropped.
+        /// </summary>
+        [HarmonyPatch(typeof(ZDOMan.ZDOPeer), nameof(ZDOMan.ZDOPeer.ZDOSectorInvalidated))]
+        [HarmonyPostfix]
+        public static void ZDOPeer_ZDOSectorInvalidated_ForgetSnapshot(ZDOMan.ZDOPeer __instance, ZDO zdo)
+        {
+            if (zdo == null || __instance.m_zdos.ContainsKey(zdo.m_uid)) return;
+            ForgetSnapshot(__instance, zdo.m_uid);
+        }
+
+        private static void ForgetSnapshot(ZDOMan.ZDOPeer peer, ZDOID id)
+        {
+            if (_peerSnapshots.Count == 0 || peer?.m_peer == null) return;
+            if (_peerSnapshots.TryGetValue(peer.m_peer.m_uid, out var peerMap)) peerMap.Remove(id);
         }
 
         /// <summary>
