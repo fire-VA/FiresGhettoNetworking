@@ -38,3 +38,7 @@ packages/
 # OS noise
 Thumbs.db
 desktop.ini
+
+# Local test packages and pre-cleanup changelog copies
+test/
+*.pre_cleanup_*.md

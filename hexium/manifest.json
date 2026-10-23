@@ -1,8 +1,8 @@
 {
     "name": "FiresGhettoNetworking",
-    "version_number": "1.5.49",
+    "version_number": "1.5.72",
     "website_url": "https://github.com/fire-VA/FiresGhettoNetworking",
-    "description": "Comprehensive networking + server-authority mod with ZDO delta compression, WearNTear server/client CPU skips for invulnerable pieces, AoI-filtered RPC broadcasts, and a built-in per-client config auto-tuner.",
+    "description": "Smoother Valheim multiplayer: compression, auto-tuned send rates, optional server-side simulation, and no lost or duplicated smelter/kiln items on servers. Works server-only or on both.",
     "dependencies": [
         "denikson-BepInExPack_Valheim-5.4.2350"
     ]

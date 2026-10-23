@@ -1,306 +1,81 @@
-# FiresGhettoNetworkMod
+# Fires Ghetto Networking
 
 **Updated for Valheim 1.0.**
 
-A comprehensive networking and server-authority mod for Valheim dedicated servers.
- Combines compression, send-rate tuning, queue management, server-side simulation, RPC filtering,
- and a per-client auto-tuner into a single drop-in plugin.
+Smoother multiplayer for Valheim servers. Vanilla networking is built for a handful of friends and starts to strain around 8 players. This mod fixes the bottlenecks in one drop-in plugin, and tunes itself so you don't have to.
 
-## What this mod actually does
+## What you get
 
-Valheim's vanilla networking is built around small, friend-group sessions. It works fine for 4 people and starts visibly straining around 8+. This mod replaces the bottlenecks:
+- **Less lag in busy fights and big bases**: compressed traffic, higher send rates, and the closest things sent first when a connection backs up.
+- **Auto-Tune**: on first join it checks your PC and connection and picks the right settings. The server tunes itself too.
+- **Less wasted traffic**: damage numbers, health bars and effects only go to players near the action.
+- **Smoother other players**: other players' movement and arrows are drawn where they really are (when they have the mod too).
+- **Boat fixes**: no more random boat damage or sinking on calm water, and whoever takes the helm steers without delay.
+- **Station fix**: smelters, kilns, fires and other stations no longer lose or duplicate items, even for players without the mod.
+- **Join fixes**: slow PCs loading a big world aren't dropped, and big config syncs no longer stall joins.
+- **Optional Server-Side Simulation**: the dedicated server runs the world around every player (spawns, raids, zones).
 
-- **Server pushes harder and smarter, and with more headroom** — bigger Steam send/recv buffers, higher max send rates, larger send queues, etc
-- **Server can run the world** — with Server-Side Simulation on, the server loads the world around every player, drives spawns and raids, and manages zones
-- **Server sends less garbage and does less busywork** — filtering on broadcast RPCs, closest-first ZDO sending when a connection backs up, AI LOD, WearNTear skips for unbreakable pieces.
-- **Client configs are tuned automatically** — built-in auto-tuner sends test on first login, picks a performance tier, and applies the right values per machine. No more having to read and understand config values
+## Install
 
-You don't need to be a networking engineer to run a heavily-modded server with this. That's the point... 
-I'd rather you not touch your configs at all if you dont understand what they do. 
+- **Server only, clients only, or both.** Server-only works, and players without the mod can still join.
+- Installing on both sides adds compression, smoother player movement and the boat fix.
+- Keep the server and every client on the same version.
+- Put `VAGhettoNetworking.dll` in `BepInEx/plugins/`. The mod detects whether it is running on a server or a client.
 
-## What runs in each configuration
+## Requires
 
-The mod is layered. Installing it does not turn everything on — most of the heavy server-authority work sits behind one master switch, and mob simulation sits behind another. Here is exactly what you get.
+- BepInExPack for Valheim. Nothing else.
 
-### Server only (vanilla clients)
+## Settings
 
-Everything here is server-side and needs nothing installed on your players' machines:
+Most people should not touch the config. Auto-Tune handles it. The settings you see by default:
 
-- Player limit + advertised player limit, crossplay backend selection
-- Steam send rate / send buffer, send queue size, ZDO send rate — ⚠️ the Steam rate and buffer items reach **Steam peers only**; see [Steam vs crossplay](#steam-vs-crossplay-playfab--what-each-player-actually-gets)
-- Per-peer adaptive send rate (each client ramps toward its own real link capacity)
-- **Bulk-transfer gate** — raises the 20 KB queue limit inside every loaded ServerSync / ServerCharacters copy, so large config syncs on join stop stalling and dropping peers. This is one of the biggest real-world wins and it is entirely server-side
-- Server-side auto-tune, plus all diagnostics and admin commands (`fgn_headroom`, `fgn_flood`, `fgn_socketramp`, `fgn_comptest`, `fgn_zdoflood`, `fgn_links`)
-- **World clock kept at real time** — a slow server frame no longer lets the day, waves and timers fall behind (`Keep World Clock At Real Time`)
-- **Join grace** — a player on a slow machine is not dropped after 30 seconds while a big world loads; the server waits up to 5 minutes for their first spawn (`Join Grace Seconds`, 0 = vanilla)
-- **Crossplay compression off the main thread** — PlayFab's own compression runs on a worker thread, so one large message no longer freezes the server for up to a second (`Fix PlayFab Compression Stalls`)
-- Everything under **Server-Side Simulation**, if you enable it (see below)
+- `[01 - General] Log Level`
+- `[04 - Networking] Enable Compression`
+- `[06 - Auto-Tune] Enable Client Auto-Tune`, `Enable Server Auto-Tune`
+- `[09 - Dedicated Server] Force Crossplay`, `Player Limit`, `Advertised Player Limit`
+- `[10 - Server Authority] Enable Server-Side Simulation` (off by default)
+- `[13 - Compatibility] Refuse Mismatched FGN Clients` (off by default)
+- `[03 - Player Sync] Remote Motion (experimental)` (on by default)
 
-### Server + client
+Everything else is under **Show Advanced** in the config manager.
 
-Installing on both adds the client-side half:
+**Players:** the only section meant for you is `Player Sync`. Everything else is server-driven or auto-tuned, and server-only settings are ignored on a client.
 
-- **Deflate packet compression** — negotiated per peer, so it only engages when both ends have the mod. A vanilla client simply never negotiates and stays uncompressed. ⚠️ Steam connections only — a crossplay peer never compresses even with the mod on both ends
-- Client-side interpolation and prediction — smooths other players' movement
-- Client auto-tune: zone-load batching, instantiation budget, receive-buffer sizing, destroy throttling
-- HyperBoost receive side (also needs FiresSteamworksPatcher)
-- **Smooth server clock corrections (the boat damage fix)** — every 2 seconds the server corrects each player's clock, and vanilla jumps the waves, the day and timers to match, which a boat with players aboard takes as slamming into the water. The mod eases those corrections in so nothing jumps or runs backwards (`Smooth Server Clock Corrections`, which replaces the old `Fix Boat Damage From Server Time Sync`). A ship is damaged by the game of whoever owns it (normally someone aboard), so every player who sails needs the mod
-- **Crossplay logout save** — on a crossplay (PlayFab) connection, logging out or quitting from a world waits (at most 5 seconds) until the server has received everything, so your character save is not lost (`Finish Sending Before Logout`)
-- **Remote Motion (on by default)** — draws other players from their own time-stamped updates, with far less jitter than vanilla. See [Client-side settings](#client-side-settings-the-only-ones-you-should-touch-you-heathens)
-- **Remote Arrows** — an arrow or other shot fired by another player who has the mod flies on your screen from where that player is right now, so your copy of it lands where theirs did (`Remote Arrows`, on by default)
-- **Shared monster targets** — every game knows who a monster is after, even when another game runs that monster, and a monster keeps its target when it changes owner. Companions and other players react to the right fight (`Sync Monster Targets`, on by default)
-- **The ship follows its helmsman** — whoever takes the helm gets the ship, so steering answers right away instead of going through another player's game (`Give The Ship To Its Helmsman`, on by default). Only the ship's current owner needs the mod
+## Server-Side Simulation
 
-### Default settings
+Off by default. Turn on `Enable Server-Side Simulation` and the server loads the world around every player, decides when and where creatures and raids spawn, and handles zones. Monsters are still run by the nearby players' games.
 
-Out of the box you get compression, all the send-rate / queue / buffer tuning, adaptive send rate, the bulk-transfer gate, auto-tune, and player-position priority. A dedicated server also gets these traffic features, each behind its own toggle:
+**Server ZDO Ownership** goes further and moves creatures onto the server. **We don't recommend it**: it is the least-tested option and can cause trouble with boats and carts. If you try it, use **Selective**. Tamed creatures always stay with the players.
 
-- **RPC router + area-of-interest filtering** — damage numbers, health bars and similar stop being broadcast to everyone and only go to players near the action. This is the big one for large fights
-- ZDO delta compression and distance-based ZDO throttling
-- AI LOD throttling and WearNTear server CPU skips. These only act on objects the server itself has loaded, so they have little to do unless Server-Side Simulation is on
+## Steam vs crossplay
 
-**`Enable Server-Side Simulation` is OFF by default.** It only controls the server simulating the world. The traffic features above follow their own toggles whether it is on or off.
+Players on crossplay (Xbox, Game Pass, PlayStation, or anyone who joined with a crossplay code) don't get compression or the Steam send-rate tuning; those only exist on Steam connections. Everything that cuts how much is sent still works for them. A server started with `-crossplay` can put even Steam players on crossplay. `fgn_links` in the console shows who is on what.
 
-### Server-Side Simulation ON
+## Admin commands
 
-Turning on the master switch activates:
-
-- Server-driven spawning and raids / random events
-- Extended zone radius and predictive zone streaming, zone create/destroy authority
-- Ship steering fixes
-
-Note that mobs are still simulated by the nearest **client** at this point. The server decides when and where they spawn, and filters the traffic, but it is not running their brains.
-
-**ValheimCommunityPatch (VCP) is not compatible with FGN.** VCP replaces the server's object create/destroy pass with its own, built around the world origin, and removes everything the server creates for players, so the two would fight endlessly. If VCP is on the server anyway, Server-Side Simulation stays off for that session and the server log says why. If you want VCP, use its authors' networking mod, [NetworkPerformanceSystem](https://thunderstore.io/c/valheim/p/MidnightMods/NetworkPerformanceSystem/) by MidnightMods, instead of FGN.
-
-**Valheim Performance Optimizations is incompatible too:** with it on the server, Server-Side Simulation and ZDO ownership transfer stay off and the log says why (see Compatibility below).
-
-### ZDO ownership transfer — not recommended
-
-This is the switch that moves creature simulation itself onto the server. Ownership is simulation: whoever owns a creature runs its AI, pathing, attacks, movement physics and death checks. There is a broad variant and a Selective one (creatures, plus ships only if you have also enabled server-side ship physics).
-
-**We do not recommend enabling this.** It is the least-tested path in the mod, and handing rigidbody simulation to a headless server has knock-on effects — vehicles are the usual casualty. Every other server-authority feature above works without it. If you do want to experiment, use **Selective** rather than broad, and expect to keep an eye on your boats and carts.
-
-Either way, tamed creatures (pets, companions) are never handed to the server; they stay with the players, as in vanilla. Since 1.5.15, Selective also takes over a monster a nearby player is running (never a tamed one) once the server has it loaded, instead of waiting for that player to leave.
-
-## Auto-Tune (the new feature in 1.2.1)
-
-The mod now ships with an auto-tuner that handles config adjustments. Most users should never need to touch a config setting again.
-(only settings that a client should ever touch will be player sync settings per prefernce)
-
-### How the client probe works
-
-When a client connects to a server for the first time, the mod runs a brief network/hardware probe:
-
-1. **Waits for the connection to settle** — downloads finished, no stalls, zones loaded, the link steady for a few seconds (up to 5 minutes on a heavy join). Then it asks the server for the measuring slot, so only one player is measured at a time.
-2. **Hardware fingerprint** — CPU cores, RAM, GPU. Scored into a CPU tier.
-3. **Latency probe** — 10 ping RPCs, 200ms apart. performance computed over the trimmed samples (worst outlier dropped). Scores into a network tier.
-4. **Frame-time sample** — 5 seconds of testing afer the world settles, ignoring the slowest 2% of frames. Scores into an FPS tier.
-5. **Bandwidth probe** — 3 × 128KB echo samples, peak wins. A link that moves 500 KB/s or more is never rated LOW, even with a high ping.
-
-The result is one of three tiers — **LOW**, **MED**, or **HIGH** — combining hardware capability and link quality. 
-The tier is cached per server address for 7 days; reconnecting picks up where you left off, even after a dedicated server restarts.
-A measurement taken while the connection is still busy can raise your tier but never lower it, and an interrupted one retries instead of leaving you on LOW.
-The timing is tunable under `[07 - Auto-Tune - Probe]`, but the defaults are what you want.
-
-### How the rolling monitor works
-
-After the initial probe, the mod periodically re-probes latency every 5 minutes. Each result goes into a rolling buffer. This catches:
-
-- **Initial probe got unlucky** (server happened to be busy) — re-probes will see the truth and promote the tier within 15-20 minutes.
-- **Mid-session weather changes** (ISP route flap, server load) — tier auto-adjusts down or back up as conditions change.
-
-The cache is updated whenever consensus changes, so the next reconnect starts with the corrected tier.
-
-### How the server self-tune works
-
-When the mod runs on a dedicated server with `Enable Server Auto-Tune = true` (the default), the server scores its own CPU/RAM at startup and applies a server-tier preset to:
-
-- Steam send rate (min and max) and ZDO send rate
-- Send queue size
-- Steam send buffer size (per-connection outbound during initial sync)
-- ZDO update throttle distance
-- AI LOD near/far distances
-- RPC Area-of-Interest radius
-
-| Server tier | Send rate | Send buffer | Send queue | ZDO send rate | Throttle distance | AI LOD near / far | RPC AoI |
-|---|---|---|---|---|---|---|---|
-| LOW | 512 KB/s – 2 MB/s | 2 MB | vanilla (10 KB) | 100% | 350 m | 80 / 200 m | 192 m |
-| MED | 768 KB/s – 16 MB/s | 8 MB | 48 KB | 100% | 500 m | 100 / 300 m | 256 m |
-| HIGH | 1 MB/s – 32 MB/s | 32 MB | 80 KB | 150% | 700 m | 150 / 500 m | 384 m |
-
-`Extended Zone Radius` is not part of a tier: it always comes from your config. The startup line `SERVER auto-tune APPLIED` lists the values in use.
-
-Every tier stays at or above vanilla's values; the startup log confirms it with `AutoTune VanillaFloor self-check passed`. 
-
-The server also collects tier reports from connected clients and periodically logs the median client tier with suggestions (when Log Server Suggestions is on; off by default), 
-so an admin can see at a glance whether the server's settings actually match the audience joining.
-
-## Steam vs crossplay (PlayFab) — what each player actually gets
-
-Worth reading before you judge the mod on your own server, because **some of the headline features do nothing at all on a crossplay connection** and there is no version of this mod that fixes that. The knobs do not exist on the other transport.
-
-Valheim has two network backends. Steam-to-Steam players ride `ZSteamSocket`. Anyone on crossplay — Xbox, Game Pass, PlayStation, or a Steam player who joined through a crossplay code — rides `ZPlayFabSocket`. Every socket-level patch in this mod targets `ZSteamSocket`.
-
-### The split
-
-| Feature | Steam | Crossplay (PlayFab) |
-|---|---|---|
-| Deflate packet compression | ✅ | ❌ |
-| Steam send rate Min/Max | ✅ | ❌ rate is PlayFab-governed |
-| Send / receive buffer tuning | ✅ | ❌ no connection handle to set |
-| HyperBoost + `FiresSteamworksPatcher` unlocks | ✅ | ❌ |
-| Keepalive-first send ordering | ✅ | ❌ |
-| Ping / connection-quality readouts | ✅ real Steam figures | ⚠️ byte counters only |
-| Adaptive send window | ✅ grows with the line | ⚠️ replaced by a fixed safe cap — see below |
-| Bulk-transfer gate (ServerSync unstick) | ✅ | ✅ |
-| ZDO delta compression | ✅ | ✅ |
-| Distance-based ZDO throttling | ✅ | ✅ |
-| AI LOD throttling | ✅ | ✅ |
-| RPC Area-of-Interest | ✅ | ✅ |
-| WearNTear server optimisation | ✅ | ✅ |
-| Server-authority patches (ownership, ships, zones, spawning) | ✅ | ✅ |
-| Boat damage fix / helmsman ownership | ✅ | ✅ |
-| Client auto-tune (zone batching, instantiation budget) | ✅ | ✅ |
-| Remote Motion (optional) | ✅ | ✅ |
-| Compression stall fix | — not needed | ✅ PlayFab only |
-| Logout save (finish sending before logout) | — not needed | ✅ PlayFab only |
-
-**Rule of thumb:** anything that changes *how the bytes move* is Steam-only. Anything that changes *how many bytes there are* works for everyone. The second group is the larger half of the mod, so a crossplay server still gains plenty — it just does not get the transport tuning.
-
-### Crossplay is handled, not ignored
-
-A crossplay link does not simply fall back to vanilla. It gets a deliberately conservative fixed window instead of the adaptive one, because PlayFab misreports what it is holding:
-
-> `ZPlayFabSocket.GetSendQueueSize` returns a quarter of real in-flight bytes, so a 10 KB gate permits roughly 40 KB outstanding on the transport least able to carry it: PlayFab resends only the oldest unacknowledged packet, three seconds after it goes missing, and its ACKs are cumulative, so everything queued behind a loss waits out that timer.
-
-That is what `Crossplay In-Flight KB` (default 20 KB) controls. It is a real limit in real bytes, and it is deliberately low — a crossplay line recovers from loss far worse than a Steam one, so the mod holds less in flight rather than more.
-
-### The case most likely to mislead you
-
-⚠️ **A server running with `-crossplay` can put even Steam players on a PlayFab socket.** If your players joined through a crossplay code, the Steam column above may not apply to anyone on your server, and comparing two players' experience on the same server can be misleading.
-
-Transport and install location are also two separate filters. A crossplay player loses the Steam column **even with the mod installed**, and a vanilla Steam client loses compression **even though its transport supports it**.
-
-### How to tell which you are on
-
-The mod says so, once per connection, the first time it sees a crossplay peer:
-
-```
-[Crossplay] <peer> over crossplay (PlayFab). FGN compression, Steam send rates and the
-adaptive send window do not apply to a crossplay connection. Holding 20 KB of real
-in-flight data ...
-```
-
-`fgn_links` shows the live per-peer picture, and a Steam peer reports real Steam figures where a crossplay peer reports byte counters only.
-
-## Server-side networking improvements
-
-These run on the dedicated server (the mod auto-detects). Effects are visible to all connected clients regardless of whether they have the mod installed.
-
-| Feature | What it does |
-|---------|--------------|
-| **Deflate compression** | Compresses traffic with each player who also has the mod (negotiated per player). Significant bandwidth saving on busy servers, especially with large modded worlds. |
-| **Higher Steam send rates** | Vanilla sends at a fixed ~150 KB/s. Auto-tune opens it up per server tier (table above); with auto-tune off the config default is 512 KB/s – 2 MB/s. Less waiting during big fights or zone bursts. |
-| **Larger send queue** | Vanilla stops queueing ZDO updates at ~10 KB. Auto-tune uses 10 / 48 / 80 KB by tier; the config default is 32 KB. Fewer delayed updates under burst load. |
-| **Steam SendBufferSize tuning** | Per-connection outbound buffer of 2 / 8 / 32 MB by tier. Directly addresses errors during initial-sync floods with heavy modpacks. |
-| **ZDO delta compression** | On resyncs, only the fields that changed are sent — not the whole ZDO. Big savings on creatures/players where 1-2 fields change per tick. Text and byte-array fields (chest contents, for example) are still sent whole. |
-| **Distance-based ZDO throttling** | While a player's connection is backing up, player positions are sent first and loose objects beyond the throttle distance (350 / 500 / 700 m by tier) go last. Buildings and terrain keep their place, and a healthy connection is left exactly as vanilla. |
-| **AI LOD throttling** | While a player's connection is backing up, creatures the server has loaded that are beyond the far distance (200 / 300 / 500 m by tier) from every player update at half speed (`AI LOD Throttle Factor`). Tames are never throttled, and a healthy server runs every creature at full rate. |
-| **WearNTear server optimization** | Skips the wear and support update for pieces that cannot be damaged at all (Infinity Hammer / admin-flagged pieces). Every other piece wears, takes weather damage and collapses exactly like vanilla. |
-| **Every player sent each frame** | Vanilla works through one player per frame, so each player's world updates arrive at the frame rate divided by the number of players online. Every player now gets a turn each frame, inside a per-frame time budget. |
-| **Send window sized to the connection** | Each player's send window grows while their line is clear and shrinks when it backs up, instead of one fixed queue size for everyone. Crossplay (PlayFab) players are held to a real 20 KB in flight (`Crossplay In-Flight KB`), because PlayFab only reports part of what it has queued. |
-| **Live player positions** | The server picks what to send each player from where their character is now, not where it was up to 2 seconds ago (`Live Player Positions`). |
-| **Skipping unchanged areas** | Each world update rescans every object around a player for anything unsent, which in a big base is tens of thousands of objects many times a second. Areas where nothing has entered, left or changed since their last scan are skipped, and everything is rescanned every two seconds regardless. |
-| **Station inserts** | Ore, coal, food and ammo put into a smelter, kiln, fermenter, cooking station, fire, turret or shield generator are delivered to the station's real owner, so nothing is lost when someone else owns it or has just left. |
-
-## Server-authority patches
-
-Vanilla Valheim relies on whichever client is "near" an object to simulate it. With **Server-Side Simulation** on, the server takes over more of that work:
-
-- **Server loads the world around every player** — objects exist on the server wherever players are, including a configurable extended radius (default +1 zone layer).
-- **Spawning and raids run server-side** — the server decides when and where creatures and random events spawn, so raids fire and end properly with players spread out.
-- **Creatures go to the best-placed player** - the server measures each player's round trip and moves a creature to whoever is fighting it, or to a nearby player with clearly lower ping, so its movement, attacks and the hits on it are worked out on the machine best placed to do it. The current owner's game hands the creature over itself, the way vanilla hands over a chest someone opens, so no update already in flight can undo the move. Bosses, tames, ridden creatures and creatures mid-attack are never moved, and only players who also have the mod can hand one over. ZDO ownership transfer (see "What runs in each configuration") is a separate, heavier option.
-
-The **RPC Router with area based filtering** does not need Server-Side Simulation: broadcast RPCs targeting a specific position only forward to peers within range. Massive bandwidth saving on busy servers (DamageText, HealthChanged, SetTarget, etc. don't get broadcast worldwide).
-
-All of this is server-side; players don't need anything extra installed for it.
-
-## Client-side settings (the only ones you should touch you heathens)
-
-If you're a player joining someone else's server, your config has dozens of settings...
- but **the ONLY section relevant to you is `Player Sync`**. 
- Everything else is either server-driven or auto-tuned.
- If you believe you know best, feel free to adjust, but adjusting settings incorrectly 
- can easily make the mod have the opposite effect from intended...
-
-The Player Sync section has these options:
-
-- **Remote Motion (experimental)** *(default: on)*
-  Draws other players from their own time-stamped updates: a short buffer, carried on by their velocity when an update is late, and corrections blended in instead of snapped. While it is on it replaces the interpolation and prediction options below. It needs the other player to run FGN 1.5.0 or later; anyone else is drawn as vanilla. On by default since 1.5.5 (Delay 20 ms, Extrapolation Cap 100 ms, Blend 100 ms), after testing against vanilla; a config file that still had the old untouched defaults is moved to the new ones once. Leave its Delay, Extrapolation Cap and Blend values alone unless you are measuring.
-
-- **Remote Arrows** *(default: on)*
-  Flies other players' shots on your screen from where the shooter is now, so what you see lands where it really did. Players without the mod are shown as vanilla.
-
-- **Send Remote Motion Timestamps** *(default: on)*
-  Stamps your own position updates (8 bytes each) so players who use Remote Motion can draw you with it. Harmless to players without the mod.
-
-- **Enable Client-Side Interpolation** *(default: off)*
-  Smooths other players' movement on your screen by interpolating between received network positions, eliminating the small snapping that comes from discrete network ticks. Most players don't need this — the rest of the mod's improvements deliver positions smoothly enough on their own, and interpolation adds a small render-lag. Turn ON if you still see other players snap/teleport on a healthy connection.
-
-- **Enable Client-Side Prediction** *(default: off)*
-  Extrapolates other players forward using their last known velocity. Helps on high-latency (>100ms) connections where interpolation alone can't cover the gap. Auto-tune may flip this on automatically if your measured ping warrants it. Leave it off otherwise — it can overshoot at low ping.
-
-- **Smoothing Min Interval** *(default: 0.0s)*
-  Below this inter-packet arrival rate, smoothing is disabled and vanilla movement renders directly. 0 means "always smooth"; raise it only on LAN/very low-latency servers if you want fast packets to bypass smoothing.
-
-- **Smoothing Max Interval** *(default: 0.20s)*
-  Above this inter-packet arrival rate, smoothing runs at full strength. Between Min and Max the strength fades in linearly. Raise for a more aggressive fade (less smoothing on borderline connections); lower for a snappier ramp to full smoothing.
-
-**Everything else in the config is either server-only or auto-tuned.** 
-The mod automatically disables server-only features on clients regardless of what you set.
-so that you can't manually toggle `Enable Server-Side Simulation` on your client,
-but im not smart enough to know how to hide the config to only clients while allowing admins and servers to see it. 
-
-## Reading the log
-
-Every 5 minutes the mod writes a short report, so you can see what it is doing without guessing:
-
-- `[Links]` (dedicated server, with `Log Level` set to Info) — each player's connection: send window, queue, and round trip broken into stages. `fgn_links` prints it on demand.
-- With `Log Level` set to Debug, the timed reports too: `[Compression]` (how much traffic compression saved), `[Upload]` / `[Download]` (what your game sent and received, by message and by object type) and the other per-minute counters.
-- `fgn_rtt` in a client console times a round trip to the server stage by stage.
-- A dedicated server also logs a health summary every 5 minutes: frame rate, lost game time, the worst frame split by part, with the slowest RPC handler.
-
-Two admin test commands, for measuring, never saved:
-
-- `fgn_netsim` adds artificial lag and jitter to your own connection for a limited time.
-- `fgn_sss_areas N` makes the server also simulate N busy areas, to see what Server-Side Simulation would cost with more players (`fgn_sss_areas 0` clears it).
-
-## Installation
-
-1. Install BepInEx (a recent BepInExPack_Valheim from Thunderstore is recommended).
-2. Drop `VAGhettoNetworking.dll` into `BepInEx/plugins/` on every machine that should have it. Keep the server and every client on the same version.
-3. Start Valheim or your dedicated server. The mod auto-detects which side it's running on and enables the appropriate features.
+- `fgn_links` - each player's connection.
+- `fgn_rtt` - times a round trip to the server.
+- `fgn_netsim` - adds fake lag to your own connection for testing.
+- `fgn_sss_areas N` - simulates N extra busy areas to see what Server-Side Simulation would cost (`0` clears it).
 
 ## Compatibility
 
-- Designed to coexist with many mods, I use it on my own server with 60 other mods, and have tested it with many others
-- Works alongside any content mods that don't touch ZNetScene/ZDOMan internals. (doesn't work with most other networking mods, besides better z log and timeout limits, both highly recommended to go with this)
-- **Incompatible: ValheimCommunityPatch (MidnightsFX).** It replaces the same object and network code FGN does, so with it installed FGN switches off its ZDO writer, delta compression and copy-free package writes (and Server-Side Simulation on a server). If you want VCP, use its authors' [NetworkPerformanceSystem](https://thunderstore.io/c/valheim/p/MidnightMods/NetworkPerformanceSystem/) by MidnightMods instead of FGN.
-- **Incompatible: Valheim Performance Optimizations (ontrigger).** It replaces the server's object streaming and ownership code, so with it on a server FGN switches off Server-Side Simulation and ZDO ownership transfer.
-- **Don't stack "optimization" or networking mods.** Many of them patch the same parts of the game, so two together can undo or break each other, and this mod already covers what most networking mods do. Test them and pick the ones that work best for your setup.
-
+- Tested on a server with 60+ other mods. Pairs well with Better ZLog and timeout-limit mods.
+- **ValheimCommunityPatch**: compatible. Server-Side Simulation stays off while it is installed.
+- **Valheim Performance Optimizations**: not compatible on a server. Server-Side Simulation and ZDO ownership stay off with it.
+- **TooManyLags - FiresGhettoNetworking Addon**: a third-party add-on we have not tested. It overrides your FGN settings while it runs. If anything breaks, remove it and test with FGN alone before reporting.
+- Don't stack other networking or "optimization" mods; they patch the same parts of the game and can undo each other.
 
 ## Credits
 
-Built on the shoulders of BetterNetworking and Serverside Simulations. 
-The general approach to ZDO throttling, RPC routing/AoI filtering, and wire compression took inspiration from those mods and from the Comfy Valheim 
-BetterZeeRouter pattern. The auto-tuner, rolling monitor, server self-tune, and Steam send-buffer tuning are original to this mod as far as I know...
-but theres only so many different ways to do networking mods in valheim 
-
-License: see `LICENSE` in the repo.
+Built on the shoulders of BetterNetworking and Serverside Simulations, with ideas from Comfy Valheim's BetterZeeRouter. The auto-tuner and server self-tune are original to this mod.
 
 ## Issues / questions
 
-
 https://discord.gg/zQRgHbqms4
+
+## Screenshots
+
+<!-- screenshots: [seasons] to capture on a nice world (not SuperFlat). Thunderstore/Hexium show only HOSTED images; where to host is Fire's call. -->
+<!-- ![Screenshot](HOSTED_URL) -->
