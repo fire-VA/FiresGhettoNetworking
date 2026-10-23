@@ -18,7 +18,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.5.72";
+        public const string PluginVersion = "1.5.73";
 
         // ValheimPerformanceOptimizations (ontrigger) replaces ZNetScene.CreateDestroyObjects (always skipping vanilla, around
         // ZNet's reference position) and ZDOMan.ReleaseNearbyZDOS, the two methods Server-Side Simulation and ZDO ownership
