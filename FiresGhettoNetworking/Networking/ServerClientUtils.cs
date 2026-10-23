@@ -24,8 +24,7 @@ namespace FiresGhettoNetworkMod
             IsDedicatedServerDetected = false;
             string exeName = "";
 
-            // Single summary line ("Detected: DEDICATED (exe via method)") through the
-            // deliberately-early raw logger — replaces the old per-method log trail.
+            // One summary line ("Detected: DEDICATED (exe via method)") through the early raw logger.
             void Summarize(string via)
             {
                 string side = IsDedicatedServerDetected ? "DEDICATED" : "CLIENT/LISTEN";
@@ -40,7 +39,7 @@ namespace FiresGhettoNetworkMod
                 exeName = Path.GetFileNameWithoutExtension(exePath).ToLowerInvariant();
                 string exeDir = Path.GetDirectoryName(exePath)?.ToLowerInvariant() ?? "";
 
-                // The game client can't host a dedicated server. Run headless (-batchmode -nographics, the rig's test bot) it is
+                // The game client can't host a dedicated server. Run headless (-batchmode -nographics) it is
                 // still a client, which the batch-mode, argument and graphics checks below would call a server.
                 if (exeName == ClientExeName)
                 {
@@ -167,13 +166,13 @@ namespace FiresGhettoNetworkMod
                 IsDedicatedServerDetected = false;
             }
         }
-        
+
         // Direct logging that bypasses LoggerOptions filtering (for early startup)
         private static void Log(string message)
         {
             _earlyLogger?.LogInfo(message);
         }
-        
+
         private static void LogWarn(string message)
         {
             _earlyLogger?.LogWarning(message);
@@ -191,7 +190,7 @@ namespace FiresGhettoNetworkMod
             return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
         }
 
-        
+
         /// <summary>
         /// Runtime check that can be called after ZNet is initialized
         /// </summary>
@@ -200,11 +199,11 @@ namespace FiresGhettoNetworkMod
             // Use cached early detection result
             if (IsDedicatedServerDetected)
                 return true;
-                
+
             // Runtime check if ZNet is available
             if (ZNet.instance != null)
                 return ZNet.instance.IsDedicated();
-                
+
             return false;
         }
     }

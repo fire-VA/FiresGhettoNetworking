@@ -21,6 +21,23 @@ namespace FiresGhettoNetworkMod
         private static MethodInfo s_initialize;
         private static MethodInfo s_rpcApplyOperation;
 
+        private const float RetrySeconds = 1f, ReportSeconds = 60f;
+        private static readonly Dictionary<TerrainComp, float> s_nextTry = new Dictionary<TerrainComp, float>();
+        private static float s_nextReport;
+
+        // Debug, once a minute while any compiler waits: how many, so the retry throttle can be seen working. Destroyed
+        // compilers are dropped from the table here too.
+        private static void ReportWaiting(float now)
+        {
+            if (now < s_nextReport) return;
+            s_nextReport = now + ReportSeconds;
+            var gone = new List<TerrainComp>();
+            foreach (var kv in s_nextTry) if (kv.Key == null) gone.Add(kv.Key);
+            foreach (var g in gone) s_nextTry.Remove(g);
+            if (LoggerOptions.DebugEnabled && s_nextTry.Count > 0)
+                LoggerOptions.LogDebug($"[TerrainComp] {s_nextTry.Count} terrain compiler(s) still wait for a vanilla heightmap; each retries once every {RetrySeconds:0} s");
+        }
+
         private static bool Prepare()
         {
             s_hmap = AccessTools.FieldRefAccess<TerrainComp, Heightmap>("m_hmap");
@@ -41,9 +58,17 @@ namespace FiresGhettoNetworkMod
 
             ZNetView nview = s_nview(__instance);
             if (nview == null || !nview.IsValid()) return false;
+            // On voxel terrain many zones
+            // never get a vanilla heightmap, so a waiting compiler scanned every loaded heightmap EVERY frame. Each one now looks
+            // at most once a second.
+            float now = Time.time;
+            if (s_nextTry.TryGetValue(__instance, out float next) && now < next) return false;
+            s_nextTry[__instance] = now + RetrySeconds;
             Vector3 position = __instance.transform.position;
             Heightmap hmap = Heightmap.FindHeightmap(position);
+            ReportWaiting(now);
             if (hmap == null) return false;
+            s_nextTry.Remove(__instance);
 
             s_hmap(__instance) = hmap;
             TerrainComp other = TerrainComp.FindTerrainCompiler(position);

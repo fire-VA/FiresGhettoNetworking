@@ -4,10 +4,10 @@ using PlayFab.MultiplayerModels;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Crossplay join-code check (Fire, 2026-10-05). A report on FGN 1.5.36: a dedicated server registered its PlayFab lobby and
-    /// session, then threw "NullReferenceException at ZPlayFabMatchmaking.OnCheckJoinCodeSuccess [IL 0x00070]". In the 1.0.16 IL,
-    /// 0x70 is "ldfld LobbySummary::Owner" on Lobbies[0]: the search came back with one entry that was itself null, so the
-    /// server never activated its session and crossplay clients found no lobby.
+    /// Crossplay join-code check. A dedicated server can register its PlayFab lobby and session, then throw a
+    /// NullReferenceException in ZPlayFabMatchmaking.OnCheckJoinCodeSuccess when reading LobbySummary.Owner on Lobbies[0]: the
+    /// search came back with an entry that was itself null, so the server never activated its session and crossplay clients
+    /// found no lobby.
     ///
     /// Every check's result goes to the log at FGN's Debug level (the evidence for the cause, whatever it is). A result holding a
     /// null entry takes vanilla's own "no lobby yet" path instead of throwing: retry while retries remain, else unregister, and

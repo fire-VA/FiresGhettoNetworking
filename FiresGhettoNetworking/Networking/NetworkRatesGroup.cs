@@ -47,7 +47,7 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>Pushes the configured rates to the global config AND to every connection already
-        /// open, which Steam does not otherwise re-read. Plan: Docs/PLAN_UploadBudgetAndAutoTune.md</summary>
+        /// open, which Steam does not otherwise re-read.</summary>
         internal static void ApplyRatesLive()
         {
             ApplyEffectiveRatesLiveToAllPeers();   // global + every open connection
@@ -184,7 +184,7 @@ namespace FiresGhettoNetworkMod
         public static bool SetConnectionConfig(string enumMemberName, int value, uint connHandle)
             => SteamSide.Present && SetConnectionConfigSteam(enumMemberName, value, connHandle);
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): the Steamworks-typed config code lives in SteamConfig, whose fields name
+        // Builds without ZSteamSocket (Xbox / Game Pass): the Steamworks-typed config code lives in SteamConfig, whose fields name
         // Steam types. These NoInlining steps are called only when SteamSide.Present, so no always-on method's JIT sets it up.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static bool SetConnectionConfigSteam(string enumMemberName, int value, uint connHandle)
@@ -260,8 +260,8 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>
-        /// 1.5.49 (Xbox build has no ZSteamSocket): every Steamworks-typed member of NetworkingRatesGroup, so the group (and
-        /// its non-Steam patches) loads on a build without Steam. Reached only through the NoInlining steps above, which
+        /// Every Steamworks-typed member of NetworkingRatesGroup, so the group (and
+        /// its non-Steam patches) loads on a build without Steam (Xbox / Game Pass). Reached only through the NoInlining steps above, which
         /// run only when SteamSide.Present.
         /// </summary>
         private static class SteamConfig
@@ -271,7 +271,8 @@ namespace FiresGhettoNetworkMod
 
             // The enum's members are read by name once. FiresSteamworksPatcher adds members at preload, before this
             // assembly loads, so the runtime enum already carries them.
-            private static Dictionary<string, ESteamNetworkingConfigValue> s_steamConfigMembers;
+            // A Steam-typed field fails the class load on the Microsoft Store build; kept as object, cast where used
+            private static object s_steamConfigMembers;   // Dictionary<string, ESteamNetworkingConfigValue>
 
             internal static bool SetConnectionConfig(string enumMemberName, int value, uint connHandle)
             {
@@ -322,7 +323,7 @@ namespace FiresGhettoNetworkMod
                         members[name] = (ESteamNetworkingConfigValue)Enum.Parse(typeof(ESteamNetworkingConfigValue), name);
                     s_steamConfigMembers = members;
                 }
-                return s_steamConfigMembers.TryGetValue(memberName, out setting);
+                return ((Dictionary<string, ESteamNetworkingConfigValue>)s_steamConfigMembers).TryGetValue(memberName, out setting);
             }
 
             // Members only present with FiresSteamworksPatcher (recv-buffer family) are skipped, so the value caps at
@@ -507,23 +508,27 @@ namespace FiresGhettoNetworkMod
         public static bool IsSendBufferRaiseApplied()
             => HasSteamConfigMember("k_ESteamNetworkingConfig_SendBufferSize");
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): no Steamworks, no config member.
+        // Builds without Steamworks have no config member.
         private static bool HasSteamConfigMember(string memberName) => SteamSide.Present && HasSteamConfigMemberSteam(memberName);
 
         // ====================== UPDATE RATE PATCH ======================
+        private const float UpdateScale150 = 1.5f;
+        private const float UpdateScale75 = 0.75f;
+        private const float UpdateScale50 = 0.5f;
+
         internal static void AdjustUpdateInterval(ref float dt)
         {
             if (SendScheduler.Active()) return;
             switch (EffectiveConfig.UpdateRate())
             {
                 case UpdateRateOptions._150:
-                    dt *= 1.5f;  // 30Hz — fires 50% more often
+                    dt *= UpdateScale150;  // 30Hz — fires 50% more often
                     break;
                 case UpdateRateOptions._75:
-                    dt *= 0.75f;
+                    dt *= UpdateScale75;
                     break;
                 case UpdateRateOptions._50:
-                    dt *= 0.5f;
+                    dt *= UpdateScale50;
                     break;
                 // _100 = no scaling (vanilla 20Hz)
             }
@@ -547,7 +552,7 @@ namespace FiresGhettoNetworkMod
 
         // ====================== SEND RATE PATCHES (Steamworks) ======================
         // Members only present with FiresSteamworksPatcher (recv-buffer family) are skipped, so the value caps at
-        // Steam's default. 1.5.49 (Xbox build has no ZSteamSocket): without Steam nothing is set.
+        // Steam's default. Without Steam nothing is set.
         private static bool SetSteamConfig(string enumMemberName, int value)
             => SteamSide.Present && SetSteamConfigSteam(enumMemberName, value);
 
@@ -555,8 +560,7 @@ namespace FiresGhettoNetworkMod
 
         // ====================== WHAT EACH CONNECTION REALLY HAS ======================
         // "Applied" above is only what was asked for globally. Each connection's own values are read back from Steam and logged
-        // when they change, so a refused or overridden setting shows (the 2026-09-28 BC join sync drained ~128 KB per client
-        // frame with a 2 MB buffer asked for).
+        // when they change, so a refused or overridden setting shows.
         private const double ConnectionConfigCheckSeconds = 5.0;
         private static readonly string[] ReadBackSettings =
         {
@@ -596,7 +600,7 @@ namespace FiresGhettoNetworkMod
             => SteamSide.Present ? DescribeConnectionConfigSteam(enumMemberName, conn) : "unreadable";
 
         /// <summary>
-        /// 1.5.49 (Xbox build has no ZSteamSocket): the ZSteamSocket patch on its own, attached by Ascend only when
+        /// The ZSteamSocket patch on its own, attached by Ascend only when
         /// SteamSide.Present, so reading NetworkingRatesGroup's attributes never resolves ZSteamSocket.
         /// </summary>
         [HarmonyPatch]

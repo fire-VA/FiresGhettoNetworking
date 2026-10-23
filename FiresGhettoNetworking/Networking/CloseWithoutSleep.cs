@@ -8,8 +8,7 @@ namespace FiresGhettoNetworkMod
 {
     /// <summary>
     /// Vanilla ZSteamSocket.Close sleeps the main thread 100 ms so the packets it just flushed can leave before it closes the
-    /// connection without lingering. On a running server that is a 100 ms frame for every player at each disconnect (rig R15: a
-    /// 205 ms frame, 158 ms of it blocked). While the server runs, the sleep is skipped and the connection closes with Steam's
+    /// connection without lingering. On a running server that is a 100 ms frame for every player at each disconnect. While the server runs, the sleep is skipped and the connection closes with Steam's
     /// linger, which delivers the pending reliable data in the background instead. Clients, and a server that is shutting down,
     /// keep vanilla's sleep and close.
     /// </summary>
@@ -18,7 +17,7 @@ namespace FiresGhettoNetworkMod
     {
         private const string CloseConnectionName = "CloseConnection";
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only; Ascend also attaches it only when SteamSide.Present.
+        // Steam-only (the Xbox build has no ZSteamSocket); Ascend also attaches it only when SteamSide.Present.
         static bool Prepare() => SteamSide.Present;
 
         [HarmonyPatch(typeof(ZSteamSocket), nameof(ZSteamSocket.Close)), HarmonyTranspiler]

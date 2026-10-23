@@ -9,6 +9,10 @@ namespace FiresGhettoNetworkMod
     /// </summary>
     public static class SendCongestion
     {
+        private const int FallbackThresholdPct = 50;
+        private const int MinThresholdPct = 10;
+        private const int MaxThresholdPct = 100;
+
         /// <summary>The per-peer send-queue cap ZDOMan.SendZDOs is enforcing right now.</summary>
         public static int EffectiveCapBytes() => NetworkingRatesGroup.ZdoSendQueueCapInForceBytes();
 
@@ -16,8 +20,8 @@ namespace FiresGhettoNetworkMod
         {
             int pct = FiresGhettoNetworkMod.ConfigSendCongestionThresholdPct != null
                 ? FiresGhettoNetworkMod.ConfigSendCongestionThresholdPct.Value
-                : 50;
-            return Mathf.Clamp(pct, 10, 100) / 100f;
+                : FallbackThresholdPct;
+            return Mathf.Clamp(pct, MinThresholdPct, MaxThresholdPct) / 100f;
         }
 
         public static int GetQueueSize(ZDOMan.ZDOPeer peer)

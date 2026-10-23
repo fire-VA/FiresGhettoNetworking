@@ -52,8 +52,7 @@ namespace FiresGhettoNetworkMod
             = AccessTools.FieldRefAccess<ShipControlls, ZNetView>("m_nview");
 
         // ---- The slam on a handoff -----------------------------------------------------------------------------------------
-        // R70's MP voyage: both wave slams came 0.3 and 0.6 s after the ship changed owner, with the two peers' seas 1.56 m and 0.14 m
-        // apart at that second. Each client blends its own wind (EnvMan starts a 5 s transition whenever its previous one ends, and
+        // Each client blends its own wind (EnvMan starts a transition whenever its previous one ends, and
         // aims it along the ship it is on), so the new owner's water is not where the old owner's held the hull; the hull settles
         // into it at once and vanilla's slam rule (sinking faster than 2.5 m/s) takes 10 hp. Only a change of owner does this, so
         // vanilla's own 2 s slam interval starts the moment this peer takes a ship over. Single player never changes owner.
@@ -79,8 +78,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("11 - Ship Fixes", "Give The Ship To Its Helmsman", true,
-                "Hands a ship to the player who takes the helm, so it no longer reacts late, with no wave-slam hit on hand-over.\n" +
-                "With Server-Side Ship Simulation an empty ship at rest returns to the server after 5 s. Only the owner needs FGN.");
+                Cfg.Adv("Hands the ship to whoever takes the helm so steering never lags."));
         }
 
         internal static void OnShutdown()

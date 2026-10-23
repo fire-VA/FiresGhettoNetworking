@@ -78,8 +78,7 @@ namespace FiresGhettoNetworkMod
             }
             // Only a peer running our FGN build gets deltas; everyone else, vanilla clients included, gets whole vanilla ZDOs.
             // A delta is a partial ZDO with no ack, so a receiver that never applied the keyframe (vanilla, or an FGN that reads
-            // frames differently) creates the object from the delta alone: Enigma 2026-10-02, a LocationProxy without
-            // its location. Snapshots are only taken under this context, so the first send after a match is a keyframe.
+            // frames differently) would create the object from the delta alone, missing every unchanged field. Snapshots are only taken under this context, so the first send after a match is a keyframe.
             if (!FgnVersionGate.IsMatched(peer.m_peer))
             {
                 _contextActive = false;
@@ -142,7 +141,7 @@ namespace FiresGhettoNetworkMod
             ZDOSnapshot snap;
             if (!peerMap.TryGetValue(zdo.m_uid, out snap))
             {
-                snap = new ZDOSnapshot();
+                snap = s_pool.Count > 0 ? s_pool.Pop() : new ZDOSnapshot();   // reused, see Recycle
                 peerMap[zdo.m_uid] = snap;
             }
 
@@ -280,8 +279,21 @@ namespace FiresGhettoNetworkMod
         {
             foreach (var entry in peerMap)
                 if (IsPastDeltaWindow(entry.Value, now)) _expiredSnapshotIds.Add(entry.Key);
-            foreach (var id in _expiredSnapshotIds) peerMap.Remove(id);
+            foreach (var id in _expiredSnapshotIds) { if (peerMap.TryGetValue(id, out var old)) Recycle(old); peerMap.Remove(id); }
             _expiredSnapshotIds.Clear();
+        }
+
+        // A snapshot expires every ~5 s per object per peer as the delta window runs out; resetting and reusing it (pool
+        // capped) avoids handing its 7 dictionaries to the garbage collector and rebuilding them on the next send.
+        private static readonly Stack<ZDOSnapshot> s_pool = new Stack<ZDOSnapshot>();
+        private const int PoolCap = 8192;
+
+        private static void Recycle(ZDOSnapshot s)
+        {
+            if (s == null || s_pool.Count >= PoolCap) return;
+            s.floats.Clear(); s.vec3s.Clear(); s.quats.Clear(); s.ints.Clear(); s.longs.Clear(); s.strings.Clear(); s.blobs.Clear();
+            s.dataRevision = 0; s.lastKeyframeTime = 0f;
+            s_pool.Push(s);
         }
 
         private static bool IsPastDeltaWindow(ZDOSnapshot snapshot, float now)
@@ -414,7 +426,6 @@ namespace FiresGhettoNetworkMod
         private static bool Same(Quaternion previous, Quaternion current)
             => previous.x.Equals(current.x) && previous.y.Equals(current.y)
                && previous.z.Equals(current.z) && previous.w.Equals(current.w);
-
 
         private static List<KeyValuePair<int, T>> Changed<T>(
             BinarySearchDictionary<int, T> bucket, int count, Dictionary<int, T> snapshot, Func<T, T, bool> differs)

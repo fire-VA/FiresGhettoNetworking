@@ -1,9 +1,9 @@
-using HarmonyLib;
+using System;
 
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// 1.5.49 (Xbox build has no ZSteamSocket): whether this game build has Steam networking at all. The Xbox / Microsoft Store
+    /// Whether this game build has Steam networking at all. The Xbox / Microsoft Store
     /// build ships no ZSteamSocket and may ship no Steamworks assembly, so every class that names a Steam type is reached only
     /// behind this flag. Names no Steam type itself.
     /// </summary>
@@ -13,7 +13,19 @@ namespace FiresGhettoNetworkMod
 
         static SteamSide()
         {
-            Present = AccessTools.TypeByName("ZSteamSocket") != null && AccessTools.TypeByName("Steamworks.SteamAPI") != null;
+            // AccessTools.TypeByName logs a HarmonyX warning when the type is missing; asking the
+            // game's own assembly (and the loaded Steamworks one, if any) directly is silent
+            Present = typeof(ZNet).Assembly.GetType("ZSteamSocket", false) != null && FindLoaded("Steamworks.SteamAPI");
+        }
+
+        private static bool FindLoaded(string fullName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { if (asm.GetType(fullName, false) != null) return true; }
+                catch (Exception) { }
+            }
+            return false;
         }
     }
 }

@@ -8,8 +8,8 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// fgn_netsim: adds latency, jitter and retransmit-sized spikes to everything this game sends, for test rounds
-    /// (Tools\REMOTE_MOTION.md; Fire's rule: nothing outside the game). Every message on a link waits in that link's queue and
+    /// fgn_netsim: adds latency, jitter and retransmit-sized spikes to everything this game sends, for testing
+    /// without any tool outside the game. Every message on a link waits in that link's queue and
     /// leaves in order at max(the previous one's time, now + delay ± jitter), so jitter bunches messages the way a reliable stream
     /// does. Steam and PlayFab links are reliable, so loss is modelled as what it costs there: a chance of an extra spike.
     /// Session only: never written to the config, off at start, off again when the time given runs out (10 min by default) or

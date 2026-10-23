@@ -22,13 +22,15 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<float> ConfigFullRescanSeconds;
         private const int MaxSectorStates = 4096;
         // What a player is still owed in one sector is a subset of that sector's contents, so walking it is never more
-        // work than walking the sector - the only thing this bounds is memory, at about 24 bytes an entry. At 256 it
-        // bound something else entirely: a lived-in base sector owes more than that continuously, so its state was
-        // thrown away on every scan and it walked the long way forever, which is exactly the case this was built for.
+        // work than walking the sector - the only thing this bounds is memory, at about 24 bytes an entry. It must stay
+        // well above what a lived-in base sector owes continuously, or that sector would drop its state every scan and
+        // always walk the long way.
         private const int MaxPending = 4096;
         private const int JournalCapacity = 512;
         private const int MaxJournals = 1024;
         private const int JournalIdleFrames = 1800;
+        // Fallback when the config entry is not bound yet; matches the config default.
+        private const float DefaultFullRescanSeconds = 15f;
 
         private sealed class PeerScans
         {
@@ -40,9 +42,7 @@ namespace FiresGhettoNetworkMod
         /// What one player's last full walk of one sector found. WalkedAt is the frame it happened, Pending is what was
         /// still owed to them then. Anything that becomes owed afterwards has to be journalled, so the two together
         /// answer the sector without touching the objects that were already delivered and have not changed since.
-        ///
-        /// The earlier version only took this shortcut for a sector found completely delivered, which a lived-in base
-        /// never is: something in it always just changed. Those sectors walked every object they held, every scan.
+        /// A lived-in base is never completely delivered, so this matters most there.
         /// </summary>
         private sealed class SectorState
         {
@@ -119,18 +119,13 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Skip Unchanged Areas", true,
-                "Each world update normally rechecks every object around a player, tens of thousands in a big base. With this on,\n" +
-                "the server skips areas where nothing changed and nothing is owed to that player. Dedicated server only.");
+                Cfg.Adv("Server skips rechecking areas where nothing changed. Saves CPU in big bases."));
 
             ConfigJournalEnabled = config.Bind("04 - Networking", "Walk Only Changed Objects", true,
-                "Goes further than Skip Unchanged Areas, which cannot skip a busy base where something is always changing: in an\n" +
-                "area that did change, the server checks only the objects that changed instead of everything there. Needs Skip\n" +
-                "Unchanged Areas on. Dedicated server only.");
+                Cfg.Adv("Server checks only the objects that changed in an area, not everything there."));
 
             ConfigFullRescanSeconds = config.Bind("04 - Networking", "Recheck Everything Every", 15f,
-                new ConfigDescription(
-                    "Seconds between full rechecks around each player, a safety net for changes the settings above missed. Lower is\n" +
-                    "safer, higher saves more; raise it while the server report shows rechecks finding nothing. Dedicated server only.",
+                Cfg.Adv("Seconds between full safety rechecks around each player.",
                     new AcceptableValueRange<float>(2f, 300f)));
         }
 
@@ -191,8 +186,8 @@ namespace FiresGhettoNetworkMod
         }
 
         // Vanilla's bumps go through IncreaseDataRevision; that hook stays the guaranteed one. Expand World Prefabs also bumps
-        // revisions itself with "zdo.DataRevision += 100" after editing connections, terrain or attachments directly
-        // (2026-10-02 EWP review), and those objects sat in sectors marked clean until the next full recheck, so the setter is
+        // revisions itself with "zdo.DataRevision += 100" after editing connections, terrain or attachments directly,
+        // and those objects would sit in sectors marked clean until the next full recheck, so the setter is
         // hooked too. The setter is a tiny auto-property the JIT may inline into a caller, where no patch runs, so it can only
         // ADD marks, never replace the IncreaseDataRevision one (a double Mark is harmless). Zero is Reset/Load clearing a
         // pooled object, never something to send.
@@ -239,7 +234,7 @@ namespace FiresGhettoNetworkMod
             s_fullScan = now >= scans.NextFullRescan;
             if (s_fullScan)
             {
-                scans.NextFullRescan = now + (ConfigFullRescanSeconds?.Value ?? 15f);
+                scans.NextFullRescan = now + (ConfigFullRescanSeconds?.Value ?? DefaultFullRescanSeconds);
                 if (scans.Sectors.Count > MaxSectorStates) scans.Sectors.Clear();
                 FullRescans++;
             }
@@ -421,7 +416,6 @@ namespace FiresGhettoNetworkMod
             return true;
         }
 
-
         private static bool Unsent(ZDOMan.ZDOPeer peer, ZDO zdo)
         {
             return !peer.m_zdos.TryGetValue(zdo.m_uid, out var sent)
@@ -434,11 +428,10 @@ namespace FiresGhettoNetworkMod
         // skips the position read below, which is why the check comes first.
         private static void Mark(ZDO zdo)
         {
-            // 1.5.35: only the live object, on the main thread. Expand World Prefabs' ServerSideData.BeforeSave Sets a value on each
-            // world-save CLONE on the save thread; that IncreaseDataRevision used to journal the clone, the walk put it in a peer's send
-            // list, vanilla's send sort wrote its m_tempSortValue (>= 0), which is ZDO's SaveClone flag, and SaveCleanup's Reset then
-            // ran ZDOExtraData.Release(uid) on the LIVE object: every field of a LocationProxy, Skull1 or chest gone (Enigma 2026-10-02,
-            // caught by ITTO's DataWipeWatch in launch 13: "RELEASE of LIVE LocationProxy ... via ZDOMan.SaveCleanup").
+            // Only the live object, on the main thread. Expand World Prefabs' ServerSideData.BeforeSave Sets a value on each
+            // world-save CLONE on the save thread. Journalling that clone would put it in a peer's send list, vanilla's send sort
+            // would write its m_tempSortValue (>= 0), which is ZDO's SaveClone flag, and SaveCleanup's Reset would then run
+            // ZDOExtraData.Release(uid) on the LIVE object, wiping every field of it.
             if (System.Threading.Thread.CurrentThread.ManagedThreadId != OwnerSafeRevisions.MainThreadId) return;
             if (ZDOMan.instance == null || !ReferenceEquals(ZDOMan.instance.GetZDO(zdo.m_uid), zdo)) return;
             if (ReferenceEquals(zdo, s_lastMarked) && s_lastMarkedFrame == s_frame) return;

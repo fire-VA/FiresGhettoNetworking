@@ -11,23 +11,16 @@ namespace FiresGhettoNetworkMod
         private const int WireFormatByteCountCeiling = 255;
 
         // True only while ZDOMan is iterating the full ZDO set to disk.
-        // During a full-world save every ZDO.Save fires this prefix; on a large
-        // world that is millions of calls in one burst. The diagnostic allocates
-        // seven Lists per call (one GetSave* each), which roughly doubles the
-        // save's allocation cost and can push the save past the ~30s Steam
-        // peer-timeout — peers then drop, mass-reconnect, and trigger a
-        // ServerSync re-sync storm. The diagnostic provides no actionable value
-        // mid-save anyway (you cannot act on a per-ZDO warning during a bulk
-        // write), so it is skipped entirely while a bulk save is in progress.
-        // The Serialize-path diagnostic (live network send) still catches the
-        // same oversized buckets during normal play.
+        // During a full-world save every ZDO.Save fires this prefix, millions of calls
+        // on a large world; the extra cost can push the save past the Steam peer
+        // timeout and drop every peer. A per-ZDO warning is not actionable mid-save,
+        // so it is skipped then; the Serialize path still catches oversized buckets
+        // during normal play.
         private static bool s_bulkSaveInProgress;
 
-        // Valheim 1.0 replaced ZDOMan.SaveAsync with a save state machine
-        // (PrepareSave/BeginSave/UpdateSaveState/EndSave/SaveChunk(s)/SaveCleanup). SaveChunk is
-        // the method that actually loops zdo.Save() over the world, so bracketing it is both the
-        // exact analogue of the old patch and self-balancing — the flag cannot get stuck on if a
-        // save is abandoned midway, which a PrepareSave/SaveCleanup pair could.
+        // SaveChunk is the method that loops zdo.Save() over the world. Bracketing it is
+        // self-balancing: the flag cannot get stuck on if a save is abandoned midway, which a
+        // PrepareSave/SaveCleanup pair could.
         [HarmonyPatch(typeof(ZDOMan), "SaveChunk")]
         [HarmonyPrefix]
         public static void ZDOMan_SaveChunk_Prefix() => s_bulkSaveInProgress = true;
@@ -76,9 +69,6 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        // Valheim 1.0 folded the seven per-type getters into one call that hands back every
-        // bucket at once. That is strictly better here: the old shape allocated seven lists per
-        // ZDO, which is exactly the cost the bulk-save guard below exists to dodge.
         private static BucketSnapshot SnapshotSaveBuckets(ZDOID uid)
         {
             ZDOExtraData.GetSaveData(uid,

@@ -37,8 +37,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Slow Fuel Ticks On Long Burning Fires", true,
-                "Slow-burning fires such as torches send their fuel level every 30 s instead of every 2 s; fuel burns the same.\n" +
-                "Fast-burning fires keep the 2 s update. Applies on whichever machine runs the fire.");
+                Cfg.Adv("Torches and slow fires send fuel updates less often. Fuel burns the same."));
         }
 
         [HarmonyPatch(typeof(Fireplace), "UpdateFireplace")]

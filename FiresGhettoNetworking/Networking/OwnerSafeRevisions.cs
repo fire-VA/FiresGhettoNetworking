@@ -11,8 +11,7 @@ namespace FiresGhettoNetworkMod
     /// writes on the server to a client-owned object (Expand World Prefabs rules: data injected into players, Skull1 trackers,
     /// signs; each Set bumps the revision and EWP adds 100 on top) pushes the server's revision far past what the owner has, so:
     ///   - the server's copy, with the position and fields it last heard from the owner, replaces the owner's own copy: across a
-    ///     teleport that puts the local player's ZDO back in its old sector and the instance cleanup destroys the player
-    ///     (2026-10-02 Enigma, launch M 03:41: server rev 9226 vs owner 9025, the player lost one frame later);
+    ///     teleport that puts the local player's ZDO back in its old sector and the instance cleanup destroys the player;
     ///   - every change the owner made after its last send (sign text, a tracker's state) is dropped by the server, whose revision
     ///     is higher, and then reverted on the owner by the server's copy.
     /// So, on the server, a write that did not come from the owner is held to ONE revision above what the server and that owner
@@ -27,6 +26,8 @@ namespace FiresGhettoNetworkMod
     internal static class OwnerSafeRevisions
     {
         public static ConfigEntry<bool> ConfigEnabled;
+
+        private const float LogIntervalSeconds = 60f;
 
         // Expand World Prefabs writes from Valheim's world-save thread (ServerSideData.BeforeSave/AfterSave on the save clones); those are
         // not owner traffic, and these sets are main-thread only, so anything off the main thread is ignored.
@@ -45,9 +46,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("13 - Compatibility", "Owner-Safe Server Writes", true,
-                "Server only. When a world script (e.g. Expand World Prefabs) writes to an object a player owns, keep that write only one\n" +
-                "revision ahead of the player instead of far ahead, so it cannot overwrite the player's newer position or changes\n" +
-                "(a teleporting player lost, sign text reverted). Players without FGN merge it by vanilla's own rule.");
+                Cfg.Adv("Stops server-side world scripts overwriting a player's newer changes, like sign text."));
         }
 
         private static bool Active => ConfigEnabled != null && ConfigEnabled.Value && ZNet.instance != null && ZNet.instance.IsServer();
@@ -115,7 +114,7 @@ namespace FiresGhettoNetworkMod
             }
             if (s_held > 0 && Time.unscaledTime >= s_nextLog)
             {
-                s_nextLog = Time.unscaledTime + 60f;
+                s_nextLog = Time.unscaledTime + LogIntervalSeconds;
                 LoggerOptions.LogDebug($"[OwnerSafe] {s_held} server write(s) to player-owned objects held to one revision above the owner "
                     + $"({s_heldRevisions} revisions not jumped) so far");
             }

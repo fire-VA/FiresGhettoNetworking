@@ -17,6 +17,20 @@ namespace FiresGhettoNetworkMod
         // Player) + Ship. The freeze in V1 was the release/transfer
         // deviations, not this scope.
         private static readonly HashSet<int> s_simulatedPrefabs = new HashSet<int>();
+
+        // Creatures whose AI, animation and physics run on the CLIENT by their mod's design are never server-owned: a
+        // server-owned wild companion T-posed and floated because nothing animated it. Built-in: the Fires companions; other mods add theirs with FgnApi.ExcludeFromServerSimulation. Survives a set rebuild (not cleared on shutdown).
+        private static readonly HashSet<int> s_excluded = new HashSet<int> { "CompanionNpc".GetStableHashCode(), "CompanionNpc_Wild".GetStableHashCode() };
+        private static readonly List<string> s_excludedNames = new List<string> { "CompanionNpc", "CompanionNpc_Wild" };
+        internal static bool Exclude(string prefabName)
+        {
+            int h = prefabName.GetStableHashCode();
+            if (!s_excluded.Add(h)) return false;
+            s_excludedNames.Add(prefabName);
+            s_simulatedPrefabs.Remove(h);   // registered after the set was built: out from now on
+            return true;
+        }
+        internal static bool IsExcluded(int prefabHash) => s_excluded.Contains(prefabHash);
         private static bool s_built;
 
         // Reusable list — matches vanilla m_tempNearObjects, no per-tick alloc.
@@ -31,7 +45,8 @@ namespace FiresGhettoNetworkMod
         private static int s_releases;
         private static int s_simulatedSeen;
         private static int s_nonSimulatedTransfersToPeer;
-        private static int s_takenOver;   // creatures taken from their present peer owner (1.5.15)
+        private static int s_takenOver;   // creatures taken from their present peer owner
+        private static int s_interactablesReturned;   // server-owned interactables handed to the covering player
         private static float s_nextStatLogTime;
 
         // ====================================================================
@@ -61,16 +76,22 @@ namespace FiresGhettoNetworkMod
                 if (isShip && !ownShips) continue;
                 if (isShip || prefab.GetComponent<Character>() != null)
                 {
-                    s_simulatedPrefabs.Add(prefab.name.GetStableHashCode());
+                    int h = prefab.name.GetStableHashCode();
+                    if (!s_excluded.Contains(h)) s_simulatedPrefabs.Add(h);
                 }
             }
             s_built = true;
             LoggerOptions.LogMessage(
                 $"[ServerOwnership-V3] simulated-prefab set built ({s_simulatedPrefabs.Count} entries — "
                 + (ownShips
-                    ? "Character + Ship; server-side ship physics is ON)."
-                    : "Character only; ships stay peer-owned because 'Server-Side Ship Simulation' is off)."));
+                    ? "Character + Ship; server-side ship physics is ON"
+                    : "Character only; ships stay peer-owned because 'Server-Side Ship Simulation' is off")
+                + $"; left to the clients: {string.Join(", ", s_excludedNames)}).");
         }
+
+        // The broad mode (ServerOwnershipPatches) reuses this set so it never claims ItemDrop / TerrainComp / pieces.
+        internal static bool IsBuilt => s_built;
+        internal static bool IsSimulatedPrefab(int prefabHash) => s_simulatedPrefabs.Contains(prefabHash);
 
         public static void ZNetScene_Shutdown_DropSet()
         {
@@ -131,12 +152,11 @@ namespace FiresGhettoNetworkMod
                 long owner = zdo.GetOwner();
                 bool simulated = s_simulatedPrefabs.Contains(zdo.m_prefab);
                 if (simulated) simulatedThisPass++;
-                // 1.5.37: a creature a player possesses (FiresValcast 'valcast_possessed') stays with that player's peer
+                // A creature a player possesses (FiresValcast 'valcast_possessed') stays with that player's peer
                 if (simulated && ValcastPossession.Handle(zdo)) continue;
                 owner = zdo.GetOwner();   // Handle may have cleared a stale claim; the owner itself is unchanged then
 
-                // R82 S3: the server only ever got the monsters it spawned itself ("2 of 4 Greydwarfs owned by the server";
-                // boars stayed the player's with 0 owner changes). The branches below are vanilla's stale-owner rule, which never
+                // Without this the server only ever gets the monsters it spawned itself. The branches below are vanilla's stale-owner rule, which never
                 // moves a creature away from a player who still covers it, and the player's own SpawnSystem makes it that
                 // player's. Selective means "the server owns monsters": a simulated (non-tamed) creature owned by the peer whose
                 // pass this is goes to the server, once, when the server has it instantiated (so it really simulates it).
@@ -145,6 +165,17 @@ namespace FiresGhettoNetworkMod
                 {
                     zdo.SetOwner(serverUid);
                     s_takenOver++;
+                    continue;
+                }
+
+                // An interactable (not in the simulated set) the SERVER owns, e.g. one it spawned while simulating a zone, would
+                // stay the server's for as long as a player covered it, so the players' pick / open / use RPCs would run on the
+                // headless server, where vanilla's code reaches for the local player (NRE in Pickable.RPC_Pick).
+                // Selective only ever wants creatures (and opted-in ships); the covering player takes it, as on vanilla.
+                if (!simulated && owner == serverUid && uid != serverUid && ZNetScene.InActiveArea(zdo.GetPosition(), zone))
+                {
+                    zdo.SetOwner(uid);
+                    s_interactablesReturned++;
                     continue;
                 }
 
@@ -197,7 +228,7 @@ namespace FiresGhettoNetworkMod
                     // Only route to server if the prefab is one we want the
                     // server to simulate. Otherwise behave like vanilla and
                     // hand ownership to the asking peer (uid).
-                    // Never a tamed one (2026-09-29): a Core companion simulates only on its owner player's peer (its
+                    // Never a tamed one: a Core companion simulates only on its owner player's peer (its
                     // AI, commands and OwnerAssist gate on IsOwner), so it takes the vanilla path below and Core's keeper claims it back.
                     if (simulated && !zdo.GetBool(ZDOVars.s_tamed))
                     {
@@ -212,10 +243,10 @@ namespace FiresGhettoNetworkMod
                         // ZDOs for itself (that would re-introduce the V2
                         // problems we're avoiding).
                         //
-                        // 1.5.43: and only when the object is inside the CALLER's active area, vanilla's own test. "Any
+                        // And only when the object is inside the CALLER's active area, vanilla's own test. "Any
                         // peer covers the sector" (the 2-zone near radius) also holds for the ring between 1.5 and 2 zones,
-                        // where no owner ever covers it on vanilla's test, so two players took that ring from each other
-                        // on every pass (perf leg B1: 22010 hand-overs every 10 s, each one resent to both clients).
+                        // where no owner ever covers it on vanilla's test, so two players would take that ring from each
+                        // other on every pass, each hand-over resent to both clients.
                         if (uid != serverUid && ZNetScene.InActiveArea(zdo.GetPosition(), zone))
                         {
                             NoteHandOff(zdo.m_uid, owner, uid, now);
@@ -250,6 +281,7 @@ namespace FiresGhettoNetworkMod
                     $"[ServerOwnership-V3] Last 10s: {s_passCount} passes, {s_zdosProcessed} ZDOs processed "
                     + $"({s_simulatedSeen} simulated-class), "
                     + $"{s_transfersToServer} transfers-to-server, {s_takenOver} taken over from a present owner, "
+                    + $"{s_interactablesReturned} server-owned interactable(s) handed to the covering player, "
                     + $"{s_nonSimulatedTransfersToPeer} transfers-to-peer (non-simulated), "
                     + $"{s_releases} releases-to-unowned, "
                     + $"{s_flipBacks} handed back to their previous peer within {FlipBackSeconds:F0} s.");
@@ -260,6 +292,7 @@ namespace FiresGhettoNetworkMod
                 s_simulatedSeen = 0;
                 s_transfersToServer = 0;
                 s_takenOver = 0;
+                s_interactablesReturned = 0;
                 s_nonSimulatedTransfersToPeer = 0;
                 s_releases = 0;
                 s_nextStatLogTime = now + 10f;
@@ -268,7 +301,7 @@ namespace FiresGhettoNetworkMod
             return false; // we handled it; skip vanilla
         }
 
-        // 1.5.43: a peer hand-over that undoes one made moments ago is ownership ping-pong; counted so a regression of the
+        // A peer hand-over that undoes one made moments ago is ownership ping-pong; counted so a regression of the
         // ring fix shows in the 10 s rollup (healthy = 0, or a handful when players cross each other's areas).
         private const float FlipBackSeconds = 10f;
         private struct HandOff { public long From, To; public float At; }

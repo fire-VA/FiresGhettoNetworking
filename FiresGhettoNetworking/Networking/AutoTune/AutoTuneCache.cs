@@ -12,12 +12,12 @@ namespace FiresGhettoNetworkMod.AutoTune
     /// </summary>
     public static class AutoTuneCache
     {
-        // 'F','G','N','A' little-endian as int32 — checked on load to reject random
-        // files / corrupted writes / pre-binary .bin files written by some prior build.
+        // 'F','G','N','A' little-endian as int32, checked on load to reject foreign or corrupted files.
         private const int FileMagic = 0x414E4746;
         private const string FileName = "com.Fire.FiresGhettoNetworkMod_autotune.bin";
         public  const int    SchemaVersion = 3;  // 1 = old JSON, 2 = binary, 3 = + measured upload
 
+        private const int MaxEntryCount = 100_000;
         private static readonly TimeSpan DefaultTtl = TimeSpan.FromDays(7);
 
         private static Dictionary<string, CacheEntry> _entries;
@@ -64,7 +64,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                         return;
                     }
                     int count = br.ReadInt32();
-                    if (count < 0 || count > 100_000) // sanity ceiling vs. truncated file
+                    if (count < 0 || count > MaxEntryCount) // sanity ceiling vs. truncated file
                     {
                         LoggerOptions.LogWarning($"[AutoTune] Cache entry count {count} out of range — starting fresh.");
                         return;

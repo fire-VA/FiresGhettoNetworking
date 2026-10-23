@@ -17,7 +17,7 @@ namespace FiresGhettoNetworkMod.AutoTune
     {
         // ----- Cap-bump transpiler tuning -----
 
-        // Sanity range for "per-frame creation cap" constants. Vanilla 0.221.12 uses
+        // Sanity range for "per-frame creation cap" constants. Vanilla uses
         // 10 and 100; this range is wide enough to absorb minor Valheim tweaks but
         // tight enough that we won't accidentally rewrite e.g. a 4 (loop limit) or
         // 1000 (a count buffer) elsewhere in the method.
@@ -184,17 +184,14 @@ namespace FiresGhettoNetworkMod.AutoTune
             return false;
         }
 
-        // R30G (BlueHills, one player, SSS + Selective): the dedi building the city around that player ran at 18.8 fps
-        // with a 1,559 ms frame ("object creation 1473"), against 29.3-29.7 fps with SSS off. Vanilla's InLoadingScreen()
-        // is true whenever there is no local player, so a dedicated server always takes the 100-a-frame loading-screen
-        // cap with no time limit, and sorts by its own reference position rather than the players'. Under SSS the server
-        // now creates within 'Server Instantiation Budget Ms' (0 = vanilla), nearest to ANY player first, in vanilla's
+        // Vanilla's InLoadingScreen() is true whenever there is no local player, so a dedicated server always takes the
+        // 100-a-frame loading-screen cap with no time limit (long frame stalls while building a city around a player), and
+        // sorts by its own reference position rather than the players'. Under SSS the server creates within 'Server Instantiation Budget Ms' (0 = vanilla), nearest to ANY player first, in vanilla's
         // terrain -> buildings -> rest order and only once each zone is ready for that type. At least one object a frame.
         private const int ServerMaxPerFrame = 100;
         private static readonly List<Vector3> s_peerPositions = new List<Vector3>();
-        // 1.5.21 (BlueHills proof, 1.5.20): the budget was checked only BETWEEN creates, so one heavy city piece blew past it
-        // ("unity: Object.Instantiate 1,044 ms / 46 frames", ~35 ms of creation per stall frame against an 8 ms budget). Each
-        // prefab's last measured cost (ticks, smoothed) now decides whether the next create still fits; the frame stops in
+        // Checking the budget only BETWEEN creates lets one heavy piece blow far past it, so each prefab's last measured
+        // cost (ticks, smoothed) decides whether the next create still fits; the frame stops in
         // order (it never skips ahead past a building to the items resting on it), and always creates at least one.
         private static readonly Dictionary<int, long> s_prefabCostTicks = new Dictionary<int, long>();
         private const int CostSmoothingOld = 3, CostSmoothingNew = 1;   // new = (3*old + 1*sample) / 4
@@ -235,10 +232,8 @@ namespace FiresGhettoNetworkMod.AutoTune
             int created = 0;
             try
             {
-                // 1.5.22 (BlueHills proof of 1.5.21: "create 45.88 ms a frame (0 objects)"): the whole backlog of uncreated near
-                // ZDOs (up to ~129k in a city) was scored and fully sorted every frame, and the budget clock was already running,
-                // so the sort alone spent it and the loop broke before its first create: the server stopped creating at all.
-                // Now only the nearest ServerMaxPerFrame creatable ZDOs are kept (a bounded heap in vanilla's ZDOCompare order,
+                // The backlog of uncreated near ZDOs can be ~129k in a city; fully sorting it every frame would spend the whole
+                // budget before the first create. So only the nearest ServerMaxPerFrame creatable ZDOs are kept (a bounded heap in vanilla's ZDOCompare order,
                 // O(n log k) instead of a full sort), and the budget clock covers the creates only, the first one always made.
                 if (nearCount > 0 && ZoneSystem.instance.IsActiveAreaLoaded())
                 {
@@ -335,6 +330,9 @@ namespace FiresGhettoNetworkMod.AutoTune
         // a runtime helper so config / tier changes take effect immediately.
 
         private static readonly Dictionary<int, int> s_loggedBatchCaps = new Dictionary<int, int>();
+        private static int s_transpilerRuns;
+        // Upper bound on how far Zone Load Batch Size may multiply a vanilla cap.
+        private const int MaxBatchCapMultiplier = 8;
 
         public static int ScaleBatchCap(int vanillaCap)
         {
@@ -355,7 +353,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 int batch = EffectiveConfig.ZoneLoadBatchSize();
                 if (batch <= 1) return vanillaCap;
                 int scaled = vanillaCap * batch;
-                if (scaled > vanillaCap * 8) scaled = vanillaCap * 8;
+                if (scaled > vanillaCap * MaxBatchCapMultiplier) scaled = vanillaCap * MaxBatchCapMultiplier;
                 return scaled;
             }
             catch
@@ -391,9 +389,15 @@ namespace FiresGhettoNetworkMod.AutoTune
             {
                 LoggerOptions.LogWarning("[AutoTune] ZoneLoadBatch: no per-frame cap constant found in ZNetScene.CreateObjects — game IL may have changed; ZoneLoadBatchSize will be a no-op until a follow-up patch addresses the new IL shape.");
             }
-            else
+            else if (++s_transpilerRuns == 1)
             {
                 LoggerOptions.LogInfo($"[AutoTune] ZoneLoadBatch: patched {patched} per-frame cap constant(s) (in-game cap + loading-screen cap) via runtime helper.");
+            }
+            else
+            {
+                // Harmony re-runs every transpiler of a method when ANY mod patches/unpatches it, so a re-run's stack names the
+                // mod that touched CreateObjects.
+                LoggerOptions.LogDebug($"[AutoTune] ZoneLoadBatch: transpiler re-run #{s_transpilerRuns} (another mod patched/unpatched ZNetScene.CreateObjects); stack:\n{Environment.StackTrace}");
             }
 
             return code;

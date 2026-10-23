@@ -8,10 +8,10 @@ namespace FiresGhettoNetworkMod
     /// <summary>
     /// What Steam itself reports for each connection while a bulk transfer is on it. Once per connection it logs the route
     /// (remote address, relayed or direct, flags); every five seconds with a quarter megabyte or more pending or unacked it
-    /// logs Steam's send rate, the bytes going out, what is pending and unacked, the queue wait, ping and quality. On the rig
-    /// (2026-09-28 R5) the bot's connection moved 1 MB/s with the same config that moved 8 MB/s to Fire's; these lines say
-    /// whether Steam's own rate, loss, or the route holds such a connection back.
-    /// 1.5.49 (Xbox build has no ZSteamSocket): Steam-only; LinkController calls it only when SteamSide.Present.
+    /// logs Steam's send rate, the bytes going out, what is pending and unacked, the queue wait, ping and quality. Two
+    /// connections with the same config can move very different rates; these lines say whether Steam's own rate, loss, or
+    /// the route holds such a connection back.
+    /// Steam-only (the Xbox build has no ZSteamSocket); LinkController calls it only when SteamSide.Present.
     /// </summary>
     internal static class LinkPace
     {

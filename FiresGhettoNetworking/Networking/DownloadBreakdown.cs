@@ -35,6 +35,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static void HandlePackage_Prefix(ZRpc __instance, ZPackage package)
         {
+            JoinGrace.OnPackageReceived(__instance);   // a joining client's ping timer counts any data as a sign of life
             try
             {
                 int position = package.GetPos();
@@ -63,8 +64,8 @@ namespace FiresGhettoNetworkMod
         }
 
         // ---- how long each package's handler ran ----
-        // A handler runs inside ZNet.Update, so a slow one reads in ServerHealth as "networking" (R34: an 808 ms dedi frame,
-        // 546 ms "networking", of which FGN's own sending was 8 ms). Timed here and named, so the worst frame says whose it was.
+        // A handler runs inside ZNet.Update, so a slow one reads in ServerHealth as "networking" even when FGN's own
+        // sending is a tiny part of it. Timed here and named, so the worst frame says whose it was.
 
         private const double SlowHandlerMs = 50.0;
         private const int SlowHandlersListed = 5;
@@ -192,8 +193,8 @@ namespace FiresGhettoNetworkMod
 
         // ---- packages for a handler that isn't registered (yet) ----
         // Vanilla ZRpc.HandlePackage drops such a package without a word. A mod that pushes data in the server's RPC_PeerInfo
-        // frame loses it whenever the client registers its handler later in the join (Vedr's settings at the 02:45 Craters
-        // join, 2026-09-28), and nothing in either log said so.
+        // frame loses it whenever the client registers its handler later in the join, and nothing in
+        // either log said so.
 
         private const float DropCheckIntervalSeconds = 1f;
         private const float NeverRegisteredAfterSeconds = 60f;

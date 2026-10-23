@@ -43,6 +43,10 @@ namespace FiresGhettoNetworkMod
         private const float SendStallSecs = 60f;                       // bail a level if the socket stops draining entirely
         private const float RatePriorDataFallbackBytesPerSec = 512 * BytesPerKB;
         private const int RawBlockSeed = 0x5713;
+        // Headroom over the rate-predicted delivery time before a level counts as stalled.
+        private const float AckTimeoutRateMultiplier = 2f;
+        // Start offset step into the random block per packet, so consecutive packets differ.
+        private const int RawBlockSeqStride = 7;
 
         // The ramp lifts a connection to the SAME ceiling the HYPERBOOST config applies (single source of
         // truth in EffectiveConfig), so the ramp measures exactly what HyperBoost unlocks whether or not
@@ -356,7 +360,7 @@ namespace FiresGhettoNetworkMod
 
             // Adaptive timeout scales with the observed rate so a slow-pipe level isn't false-positive'd as the cliff.
             float rate = s_lastRateBytesPerSec > 0f ? s_lastRateBytesPerSec : RatePriorDataFallbackBytesPerSec;
-            s_resTimeoutSecs = Mathf.Clamp(AckTimeoutSecs + (totalBytes / rate) * 2f, AckTimeoutSecs, AckTimeoutCapSecs);
+            s_resTimeoutSecs = Mathf.Clamp(AckTimeoutSecs + (totalBytes / rate) * AckTimeoutRateMultiplier, AckTimeoutSecs, AckTimeoutCapSecs);
             float deadline = Time.time + s_resTimeoutSecs;
             while (Time.time < deadline)
             {
@@ -444,7 +448,7 @@ namespace FiresGhettoNetworkMod
                 // Incompressible: copy from the high-entropy block (Deflate can't shrink it, so the wire
                 // carries the full size). seq shifts the start so consecutive packets aren't identical.
                 byte[] block = RawBlock;
-                int off = (seq * 7) % block.Length;
+                int off = (seq * RawBlockSeqStride) % block.Length;
                 for (int i = 0; i < size; i++) p[i] = block[(off + i) % block.Length];
             }
             else
@@ -470,7 +474,6 @@ namespace FiresGhettoNetworkMod
             try { return ZNet.instance != null && ZNet.instance.GetPeers().Any(p => p != null && p.m_uid == uid); }
             catch { return false; }
         }
-
 
         private static void Msg(long target, string msg) => AdminConsoleEcho.Send(RpcMsg, target, msg);
     }

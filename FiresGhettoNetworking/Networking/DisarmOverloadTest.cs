@@ -21,7 +21,9 @@ namespace FiresGhettoNetworkMod
     {
         private const int ForcedQueueBytes = 50000;       // comfortably above the 20 KB ServerSync gate
         private const int DefaultSeconds = 60;
+        private const int MinSeconds = 5;
         private const int MaxSeconds = 300;
+        private const float PollSeconds = 5f;
         private const float ArmedTimeoutSeconds = 30f;    // ServerSync's real timeout, for the control
         private const string RpcStart = "FGN_OverloadStart";
         private const string RpcResult = "FGN_OverloadResult";
@@ -30,7 +32,7 @@ namespace FiresGhettoNetworkMod
         private static long s_forceCount;
         private static bool s_commandRegistered;
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): the ZSteamSocket patch on its own, attached by Ascend only when
+        // Some builds (Xbox) have no ZSteamSocket: the ZSteamSocket patch on its own, attached by Ascend only when
         // SteamSide.Present, so reading DisarmOverloadTest's attributes never resolves ZSteamSocket.
         [HarmonyPatch]
         internal static class SteamPatch
@@ -70,7 +72,7 @@ namespace FiresGhettoNetworkMod
         {
             int secs = DefaultSeconds;
             if (args.Length >= 2) int.TryParse(args[1], out secs);
-            secs = Mathf.Clamp(secs, 5, MaxSeconds);
+            secs = Mathf.Clamp(secs, MinSeconds, MaxSeconds);
             int arm = (args.Length >= 3 && args[2] != null && args[2].ToLower().StartsWith("arm")) ? 1 : 0;
 
             if (ZNet.instance == null || ZRoutedRpc.instance == null)
@@ -89,7 +91,7 @@ namespace FiresGhettoNetworkMod
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
             if (!SenderIsAdmin(sender)) { Reply(sender, "FGN overload test denied — admin only."); return; }
             if (s_active) { Reply(sender, "FGN overload test already running."); return; }
-            seconds = Mathf.Clamp(seconds, 5, MaxSeconds);
+            seconds = Mathf.Clamp(seconds, MinSeconds, MaxSeconds);
             if (FiresGhettoNetworkMod.Instance != null)
                 FiresGhettoNetworkMod.Instance.StartCoroutine(Run(seconds, sender, arm == 1));
         }
@@ -125,8 +127,8 @@ namespace FiresGhettoNetworkMod
             int minPeers = startPeers;
             while (elapsed < secs)
             {
-                yield return new WaitForSeconds(5f);
-                elapsed += 5f;
+                yield return new WaitForSeconds(PollSeconds);
+                elapsed += PollSeconds;
                 int now = PeerCount();
                 if (now < minPeers) minPeers = now;
                 if (now < startPeers && !dropSeen)

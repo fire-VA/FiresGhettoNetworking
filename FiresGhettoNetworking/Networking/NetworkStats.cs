@@ -195,11 +195,11 @@ namespace FiresGhettoNetworkMod
             ping = 0;
             outBytesSec = 0f;
             inBytesSec = 0f;
-            // 1.5.49 (Xbox build has no ZSteamSocket): no Steam, no game-server path; the caller falls back to vanilla.
+            // The Xbox build has no ZSteamSocket: no Steam, no game-server path; the caller falls back to vanilla.
             return SteamSide.Present && TryGameServerPeerStatusSteam(socket, out ping, out outBytesSec, out inBytesSec);
         }
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): NoInlining, so only a Steam build ever JITs a Steam type here.
+        // The Xbox build has no ZSteamSocket: NoInlining, so only a Steam build ever JITs a Steam type here.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static bool TryGameServerPeerStatusSteam(ISocket socket, out int ping, out float outBytesSec, out float inBytesSec)
         {
@@ -217,7 +217,7 @@ namespace FiresGhettoNetworkMod
             return true;
         }
 
-        /// <summary>1.5.49 (Xbox build has no ZSteamSocket): the Steam-typed reads, reached only when SteamSide.Present.</summary>
+        /// <summary>The Xbox build has no ZSteamSocket: the Steam-typed reads, reached only when SteamSide.Present.</summary>
         internal static class SteamStats
         {
             // Steam's whole real-time view of a hosted server's peer connection: its pacing rate, how long new data waits,

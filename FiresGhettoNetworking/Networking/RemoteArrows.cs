@@ -6,9 +6,9 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Remote Arrows (Tools\PVP_TEST.md, "Why the remote arrow copies are drawn 3-6 m off"): a projectile another player shot is flown
+    /// Remote Arrows: a projectile another player shot is flown
     /// here along its real flight instead of drawn from its synced positions, which trail the shooter's own by the link plus vanilla's
-    /// drawing lag (R43: 130-155 ms, 4.5-5.5 m at 35 m/s). The shooter's game stamps each projectile it launches with its start,
+    /// drawing lag. The shooter's game stamps each projectile it launches with its start,
     /// velocity and physics time; here it is flown from there with vanilla's own step up to the shooter's present (Remote Motion's clock
     /// for that player), stopped at the first solid or character it meets, and handed back to vanilla's syncing when it stops, goes
     /// off course (a bounce) or the shooter's clock isn't known. Hits are still decided by the shooter's game.
@@ -29,6 +29,7 @@ namespace FiresGhettoNetworkMod
         private const float HeldAtHitSeconds = 0.5f;
         private const int MaxStepsPerFixedUpdate = 50;
         private const int CleanupAbove = 64;
+        private const float MinSpeedSqr = 0.01f;
 
         private sealed class Flight
         {
@@ -39,8 +40,7 @@ namespace FiresGhettoNetworkMod
             public float StoppedAt;
         }
 
-        // R49: the copies still measured 1.4-8.4 m off and nothing said whether they were flown here at all. What happened to each
-        // remote projectile, summed and logged once a minute while any came by.
+        // What happened to each remote projectile, summed and logged once a minute while any came by.
         private const float ReportEverySeconds = 60f;
         private static float s_nextReport;
         private static int s_flown, s_noStamp, s_noClock, s_stoppedCharacter, s_stoppedSolid, s_offCourse, s_clockLost, s_timedOut;
@@ -65,14 +65,13 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("03 - Player Sync", "Remote Arrows", true,
-                "Draws other players' arrows where they really are in flight, not a few metres behind. Needs Remote Motion on and\n" +
-                "the shooter running FGN with this on (it also marks your own shots). Visual only; hits are decided by the shooter.");
+                Cfg.Adv("Draws other players' arrows where they really are in flight. Visual only."));
         }
 
         private static bool Drawing => ConfigEnabled != null && ConfigEnabled.Value;
 
         /// <summary>Whether this object is a projectile flown here, so vanilla's ClientSync stays off it (OwnershipHandoffPatches).</summary>
-        internal static bool Handles(ZNetView view) => s_flying.Count > 0 && view != null && s_flying.Contains(view);
+        internal static bool Handles(ZNetView view) => s_flying.Count > 0 && (object)view != null && s_flying.Contains(view);
 
         // ------------------------------------------------------------ shooter
 
@@ -161,7 +160,7 @@ namespace FiresGhettoNetworkMod
                 s_leadCount++;
             }
             transform.position = flight.Position;
-            if (__instance.m_rotateVisual == 0f && flight.Velocity.sqrMagnitude > 0.01f) transform.rotation = Quaternion.LookRotation(flight.Velocity);
+            if (__instance.m_rotateVisual == 0f && flight.Velocity.sqrMagnitude > MinSpeedSqr) transform.rotation = Quaternion.LookRotation(flight.Velocity);
         }
 
         private static Flight Begin(Projectile projectile, ZNetView view)
@@ -186,7 +185,7 @@ namespace FiresGhettoNetworkMod
                 Time = launched,
                 Launched = launched,
             };
-            if (flight.Velocity.sqrMagnitude < 0.01f)
+            if (flight.Velocity.sqrMagnitude < MinSpeedSqr)
             {
                 s_vanilla.Add(projectile);
                 return null;

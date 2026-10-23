@@ -10,6 +10,7 @@ namespace FiresGhettoNetworkMod
         private const float DefaultIntervalSec = 60f;
         private const float DefaultAILODNearMeters = 100f;
         private const float DefaultAILODFarMeters = 300f;
+        private const int StatusLineCapacity = 640;
 
         private static int s_lastSeenUpdateCount;
 
@@ -103,7 +104,7 @@ namespace FiresGhettoNetworkMod
             int peerCount = ZNet.instance?.GetPeers()?.Count ?? 0;
             float windowDisplay = Mathf.Round(windowSec);
 
-            var sb = new StringBuilder(640);
+            var sb = new StringBuilder(StatusLineCapacity);
             sb.Append("[ServerStatus] +").Append(windowDisplay).Append("s")
               .Append(" | tick: ").Append(updateCount).Append(" (+").Append(updateDelta).Append(")")
               .Append(" | peers: ").Append(peerCount)

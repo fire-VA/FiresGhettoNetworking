@@ -1,4 +1,4 @@
-﻿using BepInEx;
+using BepInEx;
 using BepInEx.Configuration;
 using FiresGhettoNetworkMod.AutoTune;
 using HarmonyLib;
@@ -18,7 +18,7 @@ namespace FiresGhettoNetworkMod
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.5.49";
+        public const string PluginVersion = "1.5.72";
 
         // ValheimPerformanceOptimizations (ontrigger) replaces ZNetScene.CreateDestroyObjects (always skipping vanilla, around
         // ZNet's reference position) and ZDOMan.ReleaseNearbyZDOS, the two methods Server-Side Simulation and ZDO ownership
@@ -104,8 +104,21 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<int> ConfigBulkTransferBudgetPercent;
         public static ConfigEntry<bool> ConfigHyperBoost;
 
-
+        // A type that can't load on this game build (Steam-only types on the Microsoft
+        // Store build) fails the JIT of the method that names it BEFORE any line of it runs, so a check inside Awake can't help. The
+        // body lives in AwakeCore (never inlined) and a load failure is caught and logged here instead of silently killing FGN.
         private void Awake()
+        {
+            try { AwakeCore(); }
+            catch (Exception ex) when (ex is TypeLoadException || ex is MissingMemberException || ex is System.IO.FileNotFoundException)
+            {
+                Logger.LogError($"FiresGhettoNetworkMod could not finish loading on this game build ({ex.GetType().Name}: {ex.Message}). " +
+                                "Please report it with this log.");
+            }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private void AwakeCore()
         {
             Instance = this;
             Log = Logger;
@@ -187,16 +200,21 @@ namespace FiresGhettoNetworkMod
             RemoteArrows.InitConfig(Config);
             FgnVersionGate.InitConfig(Config);
             OwnerSafeRevisions.InitConfig(Config);
+            PickupClaimGuard.InitConfig(Config);
+            Api.FgnApi.InitConfig(Config);
+            DropStaleConfigKeys();   // after every key is bound, so moved values carry over
+            try { Config.Save(); } catch (Exception ex) { Logger.LogWarning($"Failed to save the tidied config: {ex.Message}"); }
 
             if (!SteamSide.Present)
                 LoggerOptions.LogMessage("Steam networking not present: FGN's Steam features off, the rest on");
 
             TryPatchAll(typeof(CompressionGroup));
             TryPatchAll(typeof(NetworkingRatesGroup));
-            if (SteamSide.Present) TryPatchAll(typeof(NetworkingRatesGroup.SteamConnectPatch));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
+            if (SteamSide.Present) TryPatchAll(typeof(NetworkingRatesGroup.SteamConnectPatch));   // Steam-only (the Xbox build has no ZSteamSocket)
             TryPatchAll(typeof(DedicatedServerGroup));
-            if (SteamSide.Present) TryPatchAll(typeof(DedicatedServerGroup.SteamPatches));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
-            TryPatchAll(typeof(PlayFabJoinCodeGuard));   // 1.5.39: crossplay join-code check (null lobby entry), servers and hosts
+            if (SteamSide.Present) TryPatchAll(typeof(DedicatedServerGroup.SteamPatches));   // Steam-only (the Xbox build has no ZSteamSocket)
+            TryPatchAll(typeof(PlayFabJoinCodeGuard));   // crossplay join-code check (null lobby entry), servers and hosts
+            TryPatchAll(typeof(ServerSafePick));   // a server-owned Pickable no longer throws in RPC_Pick (no local player)
             TryPatchAll(typeof(SyncListRefPosPatches));
             TryPatchAll(typeof(UploadBreakdown));
             TryPatchAll(typeof(DownloadBreakdown));
@@ -210,7 +228,7 @@ namespace FiresGhettoNetworkMod
             }
 
             TryPatchAll(typeof(ServerDisconnectDiagnostics));
-            if (SteamSide.Present) TryPatchAll(typeof(CloseWithoutSleep));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
+            if (SteamSide.Present) TryPatchAll(typeof(CloseWithoutSleep));   // Steam-only (the Xbox build has no ZSteamSocket)
             PlayFabZlibWorker.Apply();
 
             TryPatchAll(typeof(BulkTransferGatePatches));
@@ -218,7 +236,8 @@ namespace FiresGhettoNetworkMod
             TryPatchAll(typeof(BigZdoDiagnostic));
 
             TryPatchAll(typeof(FireplaceFuelTicks));
-            TryPatchAll(typeof(TransformWriteRate));
+            // OwnerSync's prefix attaches only while one of its features is on (ZSyncHookGate)
+            ZSyncHookGate.Init(TransformWriteRate.ConfigEnabled, TransformWriteRate.ConfigPrefabs, TransformWriteRate.ConfigWritesPerSecond, RemoteMotion.ConfigSendStamps);
 
             ZdoWireWriter.Initialize();
             TryPatchAll(typeof(ZdoWireWriter));
@@ -230,7 +249,7 @@ namespace FiresGhettoNetworkMod
             }
 
             TryPatchAll(typeof(DisarmOverloadTest));
-            if (SteamSide.Present) TryPatchAll(typeof(DisarmOverloadTest.SteamPatch));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
+            if (SteamSide.Present) TryPatchAll(typeof(DisarmOverloadTest.SteamPatch));   // Steam-only (the Xbox build has no ZSteamSocket)
 
             TryPatchAll(typeof(CompressionRoundTripTest));
 
@@ -255,7 +274,7 @@ namespace FiresGhettoNetworkMod
 
             TryPatchAll(typeof(TargetSync));
 
-            if (SteamSide.Present) TryPatchAll(typeof(KeepaliveFirst));   // 1.5.49 (Xbox build has no ZSteamSocket): Steam-only
+            if (SteamSide.Present) TryPatchAll(typeof(KeepaliveFirst));   // Steam-only (the Xbox build has no ZSteamSocket)
 
             TryPatchAll(typeof(JoinGrace));
 
@@ -272,8 +291,6 @@ namespace FiresGhettoNetworkMod
 
             WackyDatabaseCompatibilityPatch.Init(Harmony);
 
-
-
             TryPatchAll(typeof(PlayerPositionSyncPatches));
 
             TryPatchAll(typeof(WearNTearClientSupportPatches));
@@ -282,10 +299,11 @@ namespace FiresGhettoNetworkMod
 
             TryPatchAll(typeof(GroundSnapPatches));
 
-            TryPatchAll(typeof(OwnershipHandoffPatches));
+            TryPatchAll(typeof(ZSyncHookGate));   // the handoff prefix is attached by its session gate (off for a solo host), not here
 
             TryPatchAll(typeof(OwnedPositionEcho));
             TryPatchAll(typeof(OwnerSafeRevisions));
+            TryPatchAll(typeof(PickupClaimGuard));   // a full player never claims a drop it cannot carry
             TryPatchAll(typeof(PendingServerKeys));
             OwnerSafeRevisions.MainThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
 
@@ -306,6 +324,16 @@ namespace FiresGhettoNetworkMod
             catch (System.Exception ex)
             {
                 LoggerOptions.LogWarning($"[TerrainComp] could not be attached; vanilla behaviour is unchanged. {ex.Message}");
+            }
+
+            // Always attached: it must run on clients too, not only with the server-only MonsterAIPatches.
+            try
+            {
+                TryPatchAll(typeof(SpawnHeightmapGuard));
+            }
+            catch (System.Exception ex)
+            {
+                LoggerOptions.LogWarning($"[Spawn] heightmap guard could not be attached; vanilla behaviour is unchanged. {ex.Message}");
             }
 
             TryPatchAll(typeof(SleepTimeSkipFix));
@@ -357,6 +385,7 @@ namespace FiresGhettoNetworkMod
                     ApplyServerSideSimulationPatches();
                     ServerAuthorityPatches.SimulationActive = true;
                     simulationActive = true;
+                    ZSyncHookGate.Refresh("Server-Side Simulation started");   // the kill-plane rescue needs OwnerSync
                 }
 
                 EmitServerFeatureSummary(simulationActive);
@@ -370,6 +399,9 @@ namespace FiresGhettoNetworkMod
                 TryPatchAll(hooks);
 
             StartCoroutine(EmitCompactBannerWhenZNetReady());
+
+            TmlGuard.Capture();   // our own settings, before any later plugin's Awake
+            StartCoroutine(TmlGuard.Run(this));
         }
 
         /// <summary>Dedicated-server traffic shaping. None of it needs Server-Side Simulation; each feature follows its own toggle.</summary>
@@ -412,7 +444,7 @@ namespace FiresGhettoNetworkMod
             TryPatchAll(typeof(ServerShipSimulationPatches));
 
             TryPatchAll(typeof(ServerAuthorityPatches));
-            TryPatchAll(typeof(SssQuietPass));   // 1.5.47 dry run: quiet-pass counter for the [SSS] line
+            TryPatchAll(typeof(SssQuietPass));   // quiet-pass counter for the [SSS] line
             TryPatchAll(typeof(ServerStabilityPatches));
             TryPatchAll(typeof(MonsterAIPatches));
 
@@ -506,7 +538,7 @@ namespace FiresGhettoNetworkMod
             {
                 float giveUpAt = Time.realtimeSinceStartup + JoinAddressWaitSeconds;
                 while (!TryGetJoinAddress(out joinAddress) && Time.realtimeSinceStartup < giveUpAt)
-                    yield return new WaitForSecondsRealtime(0.5f);
+                    yield return new WaitForSecondsRealtime(JoinAddressPollSeconds);
             }
 
             try { VAGhettoBanner.Print(); }
@@ -524,16 +556,19 @@ namespace FiresGhettoNetworkMod
         }
 
         private const float JoinAddressWaitSeconds = 60f;
+        private const float JoinAddressPollSeconds = 0.5f;
+        private const int DefaultServerPort = 2456;
 
         private static bool TryGetJoinAddress(out string address)
         {
             address = null;
             int port = ServerPort();
             if (port <= 0) return false;
-            // 1.5.49 (Xbox build has no ZSteamSocket): the Steam game-server read is JIT'd only when Steam is there.
+            // The Xbox build has no ZSteamSocket: the Steam game-server read is JIT'd only when Steam is there.
             return SteamSide.Present && TryGetSteamJoinAddress(port, out address);
         }
 
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]   // never inlined into a non-Steam caller
         private static bool TryGetSteamJoinAddress(int port, out string address)
         {
             address = null;
@@ -562,7 +597,7 @@ namespace FiresGhettoNetworkMod
                 if (string.Equals(args[i], "-port", StringComparison.OrdinalIgnoreCase) && int.TryParse(args[i + 1], out int port) && port > 0)
                     return port;
             }
-            return 2456;
+            return DefaultServerPort;
         }
 
         // Compatibility patch for WackyDatabase — safely skips SnapshotItem for broken/null items
@@ -628,13 +663,10 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-
-        
-
         /// <summary>
         /// One patch class. Harmony compiles each patched method as it attaches, so a patch the game's IL can't take throws here;
         /// it is logged and that feature stays off, instead of the exception leaving Awake and skipping everything after it
-        /// (1.4.81: the WorkerMain prefix threw, and every peer ran a half-initialised FGN).
+        /// (which would leave every peer running a half-initialised FGN).
         /// </summary>
         private static void TryPatchAll(Type type)
         {
@@ -724,8 +756,7 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>Carries a pre-KB/s "_2048KB" dropdown value across the type change, so BepInEx does
-        /// not reject it and reset the player to the default. A no-op once the file holds a number.
-        /// Plan: Docs/PLAN_UploadBudgetAndAutoTune.md</summary>
+        /// not reject it and reset the player to the default. A no-op once the file holds a number.</summary>
         private int MigrateLegacyKb(string section, string key, int defaultKb)
         {
             int legacyKb = -1;
@@ -769,13 +800,55 @@ namespace FiresGhettoNetworkMod
             return Mathf.Clamp(legacyKb, SendRateKbLow, SendRateKbHigh);
         }
 
+        /// <summary>
+        /// Removes keys FGN no longer reads from the cfg, so the file
+        /// shows only live settings: the old Selective key whose dash an earlier save garbled, two retired [12 - Advanced] keys, and
+        /// the diagnostics' old "10 - Diagnostics" section (it clashed with "10 - Server Authority"; now "14 - Diagnostics").
+        /// Only these named leftovers go; anything else another tool wrote is kept.
+        /// </summary>
+        private void DropStaleConfigKeys()
+        {
+            try
+            {
+                var prop = typeof(ConfigFile).GetProperty("OrphanedEntries", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                if (!(prop?.GetValue(Config) is System.Collections.Generic.Dictionary<ConfigDefinition, string> orphans)) return;
+                var drop = new System.Collections.Generic.List<ConfigDefinition>();
+                foreach (ConfigDefinition d in orphans.Keys)
+                {
+                    bool garbled = d.Section == "10 - Server Authority" && d.Key.IndexOf('â') >= 0;   // "â€”" = an em dash saved twice
+                    bool retired = d.Section == "12 - Advanced" && (d.Key == "Fix Boat Damage From Server Time Sync" || d.Key == "Max Active ZDOs");
+                    bool moved = d.Section == "10 - Diagnostics";
+                    if (garbled || retired || moved) drop.Add(d);
+                }
+                foreach (ConfigDefinition d in drop)
+                {
+                    // a moved key: the player's old value goes into the new key once, then the old line is removed
+                    var target = new ConfigDefinition("14 - Diagnostics", d.Key);
+                    if (d.Section == "10 - Diagnostics" && Config.ContainsKey(target) && Config[target] is ConfigEntryBase moved)
+                    {
+                        string old = orphans[d];
+                        if (old != moved.GetSerializedValue())
+                        {
+                            moved.SetSerializedValue(old);
+                            Logger.LogInfo($"[Config] '{d.Key}' moved from [10 - Diagnostics] to [14 - Diagnostics]; your value '{old}' was kept.");
+                        }
+                    }
+                    orphans.Remove(d);
+                }
+                if (drop.Count > 0) Logger.LogInfo($"[Config] removed {drop.Count} setting(s) FGN no longer uses from the cfg file.");
+            }
+            catch (Exception ex) { Logger.LogWarning($"[Config] could not tidy old settings: {ex.Message}"); }
+        }
+
         private void BindConfigs()
         {
+            // Config UI rules: only the basics a player or server admin needs show without "Show Advanced" (Cfg.Basic);
+            // everything else is Cfg.Adv. Descriptions are one short line. Section and key names are unchanged so saved values stay.
             ConfigLogLevel = Config.Bind(
                 "01 - General",
                 "Log Level",
                 LogLevel.Message,
-                "How much FGN writes to the BepInEx log. Message is normal; Info adds detail for troubleshooting; Debug also adds the timed reports (traffic, server timings, ownership counts).");
+                Cfg.Basic("How much FGN writes to the log. Message is normal; Info and Debug are for troubleshooting."));
 
             // ConfigManager sections render in first-Bind() order. The priming
             // binds + Init calls below set sections 02..08 to match the "NN - "
@@ -785,10 +858,7 @@ namespace FiresGhettoNetworkMod
                 "02 - Client Performance",
                 "Zone Load Batch Size",
                 1,
-                new ConfigDescription(
-                    "Multiplies how many objects the game creates per frame while an area loads in (1 = vanilla).\n" +
-                    "Higher loads areas faster but with bigger hitches. Used when 'Enable Time-Slice Instantiation' is off\n" +
-                    "or behind the loading screen; Client Auto-Tune replaces it with its own value. Client only.",
+                Cfg.Adv("How many objects load per frame when an area loads in (1 = vanilla). Higher = faster, bigger hitches.",
                     new AcceptableValueRange<int>(1, 8)));
 
             PlayerPositionSyncPatches.Init(Config);
@@ -797,48 +867,39 @@ namespace FiresGhettoNetworkMod
                 "04 - Networking",
                 "Enable Compression",
                 true,
-                "Compresses network traffic (recommended). It is agreed per connection, so it is only used with players and\n" +
-                "servers that also run FGN with compression on. Install on both server and clients.");
+                Cfg.Basic("Compresses network traffic. Works when both server and player run FGN."));
 
             ConfigUpdateRate = Config.Bind(
                 "04 - Networking",
                 "ZDO Send Rate",
                 UpdateRateOptions._100,
-                "How often world updates are sent; 100% (20/s) is vanilla. Lower helps a slow upload, higher looks smoother if\n" +
-                "bandwidth allows. While Auto-Tune is on it writes this value and your edits are replaced.");
+                Cfg.Adv("How often world updates are sent (100% = vanilla). Auto-Tune overwrites this while on."));
 
             ConfigSendRateMin = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Min",
                 MigrateLegacyKb("05 - Networking - Steamworks", "Send Rate Min", DefaultSendRateMinKb),
-                new ConfigDescription(
-                "Lowest Steam send rate in KB/s, held even when the connection struggles. Keep it well below your real upload\n" +
-                "so there is room to back off. While Auto-Tune is on it writes this value and your edits are replaced.",
+                Cfg.Adv("Lowest Steam send rate in KB/s. Auto-Tune overwrites this while on.",
                 new AcceptableValueRange<int>(SendRateKbLow, SendRateKbHigh)));
 
             ConfigSendRateMax = Config.Bind(
                 "05 - Networking - Steamworks",
                 "Send Rate Max",
                 MigrateLegacyKb("05 - Networking - Steamworks", "Send Rate Max", DefaultSendRateMaxKb),
-                new ConfigDescription(
-                "Highest Steam send rate in KB/s for this PC (on a client, your upload ceiling). Adaptive Upload and Adaptive\n" +
-                "Send Rate move the live rate between Min and Max. While Auto-Tune is on it writes this value and your edits are replaced.",
+                Cfg.Adv("Highest Steam send rate in KB/s (your upload ceiling). Auto-Tune overwrites this while on.",
                 new AcceptableValueRange<int>(SendRateKbLow, SendRateKbHigh)));
 
             ConfigAdaptiveUpload = Config.Bind(
                 "04 - Networking",
                 "Adaptive Upload",
                 true,
-                "Keeps your live send rate (between Send Rate Min and Max) under what your connection actually delivers, so a\n" +
-                "busy line backs off instead of flooding. Off = Steam's own rate control. Steam connections only, not crossplay.");
+                Cfg.Adv("Backs your send rate off when your connection struggles instead of flooding it. Steam only."));
 
             ConfigHyperBoost = Config.Bind(
                 "05 - Networking - Steamworks",
                 "HYPERBOOST",
                 false,
-                "Maximum-throughput mode: overrides Auto-Tune and Send Rate Min/Max and lifts Steam's send rate and buffers to\n" +
-                "their limits, live. Set it on both server and client; the receive side needs FiresSteamworksPatcher.\n" +
-                "Leave off for normal play; it is meant for very fast links and benchmarking.");
+                Cfg.Adv("Max-throughput mode for very fast links and benchmarks. Leave off for normal play."));
 
             AutoTuneConfig.Init(Config);
 
@@ -846,323 +907,252 @@ namespace FiresGhettoNetworkMod
                 "04 - Networking",
                 "Queue Size",
                 QueueSizeOptions._32KB,
-                "Largest batch of world updates sent to one player at a time, and each player's starting send window (the fixed\n" +
-                "limit when 'Adaptive Send Window' is off). Crossplay players use 'Crossplay In-Flight KB' instead.\n" +
-                "While Auto-Tune is on it writes this value and your edits are replaced.");
+                Cfg.Adv("Biggest batch of world updates sent to one player at once. Auto-Tune overwrites this while on."));
 
             ConfigForceCrossplay = Config.Bind(
                 "09 - Dedicated Server",
                 "Force Crossplay",
                 ForceCrossplayOptions.vanilla,
-                "Which network backend a dedicated server uses. vanilla = follow the -crossplay launch flag; steamworks = Steam only\n" +
-                "(no Xbox / Game Pass / PlayStation players); playfab = crossplay on, players join with the printed join code.\n" +
-                "Requires a restart. Leave clients on vanilla.");
+                Cfg.Basic("Server backend: vanilla follows -crossplay, steamworks = Steam only, playfab = crossplay. Restart."));
 
             ConfigPlayerLimit = Config.Bind(
                 "09 - Dedicated Server",
                 "Player Limit",
                 10,
-                new ConfigDescription("Maximum players on a dedicated server. Ignored when the MaxPlayerCount mod is installed. Requires a restart.", new AcceptableValueRange<int>(1, 999)));
+                Cfg.Basic("Max players on a dedicated server. Restart to apply.", new AcceptableValueRange<int>(1, 999)));
 
             ConfigAdvertisedPlayerLimit = Config.Bind(
                 "09 - Dedicated Server",
                 "Advertised Player Limit",
                 0,
-                new ConfigDescription(
-                    "Player cap shown in server listings (Steam server browser, crossplay). Does not change the real limit set by " +
-                    "'Player Limit'. 0 = show 'Player Limit'. Ignored when the MaxPlayerCount mod is installed. Requires a restart.",
+                Cfg.Basic("Player cap shown in server lists (0 = same as Player Limit). Restart to apply.",
                     new AcceptableValueRange<int>(0, 9999)));
 
-            // ---- Client-side perf knobs (formerly stubbed; wired up by AutoTune patches) ----
+            // ---- Client-side perf knobs ----
             // Zone Load Batch Size is bound once, at the top of this method, where it primes section 02's position.
 
             ConfigZPackageReceiveBufferSize = Config.Bind(
                 "02 - Client Performance",
                 "ZPackage Receive Buffer Bytes",
                 256 * 1024,
-                new ConfigDescription(
-                    "Steam receive buffer size in bytes, used when Auto-Tune is off. A bigger buffer rides out short stalls without\n" +
-                    "losing data, at the cost of memory. Values below 2 MB (including the default) are raised to 2 MB.",
+                Cfg.Adv("Steam receive buffer in bytes when Auto-Tune is off (raised to at least 2 MB).",
                     new AcceptableValueRange<int>(64 * 1024, 4 * 1024 * 1024)));
 
-            // ---- Time-sliced instantiation (Workstream A) ----
+            // ---- Time-sliced instantiation ----
             ConfigEnableTimeSliceInstantiation = Config.Bind(
                 "02 - Client Performance",
                 "Enable Time-Slice Instantiation",
                 false,
-                "Creates incoming objects within a time budget per frame instead of vanilla's fixed count, so walking into a busy\n" +
-                "area spreads the work over several frames instead of one big hitch. Off = 'Zone Load Batch Size' is used.\n" +
-                "Client only; the loading screen still uses vanilla.");
+                Cfg.Adv("Spreads loading a busy area over several frames instead of one big hitch."));
 
             ConfigInstantiationBudgetMs = Config.Bind(
                 "02 - Client Performance",
                 "Instantiation Budget Ms",
                 3,
-                new ConfigDescription(
-                    "Milliseconds per frame spent creating objects when 'Enable Time-Slice Instantiation' is on. Lower = smoother\n" +
-                    "frames while an area loads in; higher = it loads faster. Client Auto-Tune replaces it with its own value.",
+                Cfg.Adv("Milliseconds per frame spent loading objects with time-slicing. Lower = smoother, higher = faster.",
                     new AcceptableValueRange<int>(1, 16)));
 
             ConfigMaxInstancesPerFrame = Config.Bind(
                 "02 - Client Performance",
                 "Max Instances Per Frame",
                 100,
-                new ConfigDescription(
-                    "Most objects created in one frame under time-slicing, however much of the budget is left.\n" +
-                    "Client Auto-Tune replaces it with its own value.",
+                Cfg.Adv("Most objects loaded in one frame with time-slicing.",
                     new AcceptableValueRange<int>(10, 500)));
 
             ConfigSafetyFallbackEnabled = Config.Bind(
                 "02 - Client Performance",
                 "Safety Fallback Enabled",
                 true,
-                "Under time-slicing, triples the per-frame budget (up to 16 ms) while more than 'Safety Fallback Threshold'\n" +
-                "objects are waiting, such as after teleporting into a large base. Client Auto-Tune replaces it with its own value.");
+                Cfg.Adv("Loads faster when a huge backlog is waiting, like after teleporting into a big base."));
 
             ConfigSafetyFallbackThreshold = Config.Bind(
                 "02 - Client Performance",
                 "Safety Fallback Threshold",
                 5000,
-                new ConfigDescription(
-                    "Number of objects waiting to be created at which 'Safety Fallback Enabled' widens the budget.\n" +
-                    "Client Auto-Tune replaces it with its own value.",
+                Cfg.Adv("Backlog size at which the safety fallback kicks in.",
                     new AcceptableValueRange<int>(100, 50000)));
 
             ConfigEnableRpcRouter = Config.Bind(
                 "10 - Server Authority",
                 "Enable RPC Router",
                 true,
-                "Lets the server relay the messages players broadcast (hits, effects, damage numbers) instead of vanilla sending\n" +
-                "each one to everyone. Needed for 'Enable RPC Area-of-Interest'. Dedicated server only; requires a restart.");
+                Cfg.Adv("Server relays hits and effects instead of everyone sending to everyone. Restart."));
 
             ConfigEnableShipFixes = Config.Bind(
                 "11 - Ship Fixes",
                 "Enable Universal Ship Fixes",
                 true,
-                "When the dedicated server simulates ships, keeps the speed and rudder the steering player set instead of\n" +
-                "resetting them. Only applies with Server-Side Simulation on; requires a restart.");
+                Cfg.Adv("Keeps a server-run ship's speed and rudder as the helmsman set them. Restart."));
 
             ConfigEnableServerSideShipSimulation = Config.Bind(
                 "11 - Ship Fixes",
                 "Server-Side Ship Simulation",
                 false,
-                "Lets Selective server ownership claim ships as well as creatures, so the dedicated server runs their physics.\n" +
-                "Off = ships stay with the players as in vanilla. Broad ownership claims ships either way. Requires a restart.");
+                Cfg.Adv("Lets the server run ship physics too (with Selective ownership). Restart."));
 
             ConfigEnableRpcAoI = Config.Bind(
                 "10 - Server Authority",
                 "Enable RPC Area-of-Interest",
                 true,
-                "Sends a message about an object only to players who have that object loaded, and damage numbers only to players\n" +
-                "within 'RPC AoI Radius'; others would ignore them anyway. Needs 'Enable RPC Router'. Dedicated server only.");
+                Cfg.Adv("Only sends object messages and damage numbers to players close enough to see them."));
 
             ConfigRpcAoIRadius = Config.Bind(
                 "10 - Server Authority",
                 "RPC AoI Radius",
                 256f,
-                new ConfigDescription(
-                    "Meters around a player within which they are sent position-only messages such as damage numbers.\n" +
-                    "Server Auto-Tune replaces it with its own value.",
+                Cfg.Adv("Meters around a player for damage numbers and similar messages.",
                     new AcceptableValueRange<float>(64f, 1024f)));
 
             ConfigClientMaxDestroysPerFrame = Config.Bind(
                 "02 - Client Performance",
                 "Max Destroys Per Frame",
                 200,
-                new ConfigDescription(
-                    "Most objects removed per frame when you leave an area. Vanilla removes them all in one frame, which can freeze\n" +
-                    "the game for seconds after leaving a big base; this spreads it out. 0 = vanilla. Client only.",
+                Cfg.Adv("Most objects removed per frame when leaving an area, avoids freezes (0 = vanilla).",
                     new AcceptableValueRange<int>(0, 5000)));
 
             ConfigDediFellOutRescueLayers = Config.Bind(
                 "10 - Server Authority",
                 "Dedi Fell-Out Rescue Layers",
                 "Default,static_solid,Default_small,piece,terrain,vehicle",
-                new ConfigDescription(
-                    "Comma-separated Unity layers that count as solid ground when FGN looks for a surface: rescuing a creature that\n" +
-                    "fell out of the world on the server, and 'Fix Ground Snap Through Floors'. Add a modded terrain layer here if\n" +
-                    "creatures fail to recover. Takes effect live.",
-                    null));
+                Cfg.Adv("Layers that count as solid ground when rescuing things that fell out of the world."));
 
             ConfigFixGroundSnapThroughFloors = Config.Bind(
                 "12 - Advanced",
                 "Fix Ground Snap Through Floors",
                 true,
-                new ConfigDescription(
-                    "Stops vanilla teleporting creatures and tombstones up through a floor that sits below ground level (a cellar\n" +
-                    "under a mound): before treating them as fallen out of the world, it checks for a real surface underneath.",
-                    null));
+                Cfg.Adv("Stops creatures and tombstones popping up through floors built below ground."));
 
             ConfigShowAILODInServerStatus = Config.Bind(
                 "01 - General",
                 "Show AILOD in ServerStatus",
                 true,
-                "Adds AI LOD throttling stats to the server's periodic [ServerStatus] log line. Turn off for a shorter log.");
+                Cfg.Adv("Adds AI LOD stats to the server status log line."));
 
             ConfigDiagnosticIntervalSec = Config.Bind(
                 "01 - General",
                 "Diagnostic Rollup Interval (sec)",
                 60f,
-                new ConfigDescription(
-                    "Seconds between [ServerStatus] health lines in a dedicated server's log (written while Server-Side Simulation\n" +
-                    "is on). Lower = more detail, more log.",
+                Cfg.Adv("Seconds between server status log lines.",
                     new AcceptableValueRange<float>(10f, 3600f)));
 
             ConfigEnableBulkTransferBoost = Config.Bind(
                 "04 - Networking",
                 "Enable Bulk Transfer Queue Boost",
                 true,
-                new ConfigDescription(
-                    "Speeds up config syncing for mods built on ServerSync or ServerCharacters by raising their 20 KB send limit, and "
-                    + "stops them dropping slow players after 30 seconds. Turn off if you suspect it conflicts with one of those mods. "
-                    + "Server and client; requires a restart.",
-                    null));
+                Cfg.Adv("Speeds up ServerSync config syncing on join and stops it kicking slow players. Restart."));
 
             ConfigBulkTransferBudgetPercent = Config.Bind(
                 "04 - Networking",
                 "Bulk Transfer Budget Percent",
                 40,
-                new ConfigDescription(
-                    "Share of the Steam send buffer that all ServerSync mods together may use with 'Enable Bulk Transfer Queue Boost' "
-                    + "on, so they cannot crowd out world updates. Lower it if players disconnect in busy areas; raise it if config "
-                    + "sync on join is slow. Never goes below vanilla's 20 KB per mod.",
+                Cfg.Adv("Share of the send buffer ServerSync mods may use with the boost on.",
                     new AcceptableValueRange<int>(10, 80)));
 
             ConfigEnableServerAuthority = Config.Bind(
                 "10 - Server Authority",
                 "Enable Server-Side Simulation",
                 false,
-                new ConfigDescription(
-                    "The server builds the world around every player so it can run creatures and ships there (see ownership below).\n" +
-                    "Off with ValheimCommunityPatch or ValheimPerformanceOptimizations. Dedicated server; requires a restart.",
-                    null));
+                Cfg.Basic("Dedicated server runs the world around every player so it can run creatures and ships. Restart."));
 
             ConfigServerInstantiationBudgetMs = Config.Bind(
                 "10 - Server Authority",
                 "Server Instantiation Budget Ms",
                 8,
-                new ConfigDescription(
-                    "With Server-Side Simulation on, milliseconds per frame the server may spend building objects around players,\n" +
-                    "nearest first, so a player arriving in a dense base does not stall the server. 0 = vanilla (up to 100 objects a\n" +
-                    "frame with no time limit). Dedicated server only.",
+                Cfg.Adv("Milliseconds per frame the server spends loading objects near players (0 = vanilla).",
                     new AcceptableValueRange<int>(0, 50)));
 
             ConfigServerPassHz = Config.Bind(
                 "10 - Server Authority",
                 "Server Object Pass Hz",
                 10,
-                new ConfigDescription(
-                    "With Server-Side Simulation on, how many times a second the server updates which objects exist around players\n" +
-                    "(creating new ones, removing far ones). Fewer passes save server time in dense bases; objects appear or go up\n" +
-                    "to one pass later. 0 = every frame. Dedicated server only.",
+                Cfg.Adv("How often per second the server refreshes objects around players (0 = every frame).",
                     new AcceptableValueRange<int>(0, 30)));
 
             ConfigEnableServerOwnership = Config.Bind(
                 "10 - Server Authority",
                 "Enable Server ZDO Ownership Transfer (EXPERIMENTAL)",
                 false,
-                new ConfigDescription(
-                    "The server takes over almost everything near players except carts and tames; can break pickup and terrain edits,\n" +
-                    "so prefer Selective. Needs Server-Side Simulation; ignored when Selective is on. Dedicated server; restart.",
-                    null));
+                Cfg.Adv("Server takes over almost everything near players. Can break pickups; prefer Selective. Restart."));
 
             ConfigEnableServerOwnershipSelective = Config.Bind(
                 "10 - Server Authority",
                 "Enable Server ZDO Ownership Transfer — Selective (EXPERIMENTAL)",
                 false,
-                new ConfigDescription(
-                    "The server runs wild creatures near players (and ships with 'Server-Side Ship Simulation'); everything else stays\n" +
-                    "with players. Needs Server-Side Simulation; wins over the broad setting. Dedicated server; restart.",
-                    null));
+                Cfg.Adv("Server runs wild creatures near players; everything else stays with players. Restart."));
 
             ConfigExtendedZoneRadius = Config.Bind(
                 "10 - Server Authority",
                 "Extended Zone Radius",
                 0,
-                new ConfigDescription(
-                    "With Server-Side Simulation on, extra rings of zones (64 m each) the server loads around every player. Higher\n" +
-                    "means fewer hitches at zone borders but much more server CPU and memory per player. 0 = vanilla. Not used when\n" +
-                    "the Render Limits mod is installed. Dedicated server only.",
+                Cfg.Adv("Extra zone rings the server loads around each player (0 = vanilla). Costs server CPU and RAM.",
                     new AcceptableValueRange<int>(0, 3)));
 
-            // ---- Predictive zone pre-streaming (Workstream C) ----
+            // ---- Predictive zone pre-streaming ----
             ConfigEnablePredictiveZoneStreaming = Config.Bind(
                 "10 - Server Authority",
                 "Enable Predictive Zone Streaming",
                 true,
-                "With Server-Side Simulation on, the server loads the area ahead of a moving player instead of around where they\n" +
-                "stand, so it is ready when they arrive. Dedicated server only.");
+                Cfg.Adv("Server loads the area ahead of a moving player so it is ready when they arrive."));
 
             ConfigPredictionLookaheadSec = Config.Bind(
                 "10 - Server Authority",
                 "Prediction Lookahead Sec",
                 3.0f,
-                new ConfigDescription(
-                    "How many seconds of travel ahead 'Enable Predictive Zone Streaming' looks.",
+                Cfg.Adv("Seconds of travel ahead the prediction looks.",
                     new AcceptableValueRange<float>(0.5f, 10f)));
 
             ConfigPredictionMinVelocity = Config.Bind(
                 "10 - Server Authority",
                 "Prediction Min Velocity",
                 2.0f,
-                new ConfigDescription(
-                    "Speed in m/s below which a player's real position is used instead of a predicted one.",
+                Cfg.Adv("Speed in m/s below which prediction is not used.",
                     new AcceptableValueRange<float>(0.5f, 20f)));
 
             ConfigPredictionMaxLookaheadZones = Config.Bind(
                 "10 - Server Authority",
                 "Prediction Max Lookahead Zones",
                 9,
-                new ConfigDescription(
-                    "Furthest ahead the prediction may reach, in zones (64 m each), so a very fast or teleporting player does not\n" +
-                    "make the server load distant areas.",
+                Cfg.Adv("Furthest ahead the prediction may reach, in zones.",
                     new AcceptableValueRange<int>(1, 25)));
 
-            // NEW: ZDO Throttling (server-only bandwidth optimization)
+            // ZDO Throttling (server-only bandwidth optimization)
             ConfigEnableZDOThrottling = Config.Bind(
                 "10 - Server Authority",
                 "Enable ZDO Throttling",
                 true,
-                "When a player's connection backs up, the server sends loose objects beyond 'ZDO Throttle Distance' after\n" +
-                "everything nearer. Buildings and terrain are not delayed. Dedicated server only.");
+                Cfg.Adv("On a backed-up connection, far loose objects are sent after nearer ones."));
 
             ConfigZDOThrottleDistance = Config.Bind(
                 "10 - Server Authority",
                 "ZDO Throttle Distance",
                 500f,
-                new ConfigDescription(
-                    "Meters from a player beyond which loose objects are sent last when 'Enable ZDO Throttling' is on. 0 = off.\n" +
-                    "Server Auto-Tune replaces it with its own value.",
+                Cfg.Adv("Meters beyond which loose objects are sent last (0 = off).",
                     new AcceptableValueRange<float>(0f, 1000f)));
 
-            // NEW: AI LOD Throttling (server-only CPU optimization)
+            // AI LOD Throttling (server-only CPU optimization)
             ConfigEnableAILOD = Config.Bind(
                 "10 - Server Authority",
                 "Enable AI LOD Throttling",
                 true,
-                "Updates wild creatures beyond 'AI LOD Far Distance' from every player less often, to save server CPU. Closer\n" +
-                "creatures, players and tames run at full rate. Dedicated server only.");
+                Cfg.Adv("Updates creatures far from every player less often to save server CPU."));
 
             ConfigAILODNearDistance = Config.Bind(
                 "10 - Server Authority",
                 "AI LOD Near Distance",
                 100f,
-                new ConfigDescription("Stats only: used to count near creatures in the [ServerStatus] line and changes no behaviour. Creatures\n" +
-                    "inside 'AI LOD Far Distance' run at full rate. Server Auto-Tune replaces it with its own value.", new AcceptableValueRange<float>(50f, 200f)));
+                Cfg.Adv("Stats only: distance counted as near in the status log.", new AcceptableValueRange<float>(50f, 200f)));
 
             ConfigAILODFarDistance = Config.Bind(
                 "10 - Server Authority",
                 "AI LOD Far Distance",
                 300f,
-                new ConfigDescription("Meters from the nearest player beyond which AI LOD slows creature updates. Server Auto-Tune replaces it\n" +
-                    "with its own value.", new AcceptableValueRange<float>(200f, 600f)));
+                Cfg.Adv("Meters from the nearest player beyond which creatures update less often.", new AcceptableValueRange<float>(200f, 600f)));
 
             ConfigAILODThrottleFactor = Config.Bind(
                 "10 - Server Authority",
                 "AI LOD Throttle Factor",
                 0.5f,
-                new ConfigDescription("Share of updates far creatures still get (0.5 = half, 0.25 = a quarter). Lower saves more CPU.\n" +
-                    "Server Auto-Tune replaces it with its own value.", new AcceptableValueRange<float>(0.25f, 0.75f)));
+                Cfg.Adv("Share of updates far creatures still get (0.5 = half).", new AcceptableValueRange<float>(0.25f, 0.75f)));
 
             // Adaptive gate — the optimizations above only run when a peer's send queue
             // is actually backing up. Healthy server = vanilla behaviour (smoother).
@@ -1170,132 +1160,106 @@ namespace FiresGhettoNetworkMod
                 "10 - Server Authority",
                 "Adaptive Throttling",
                 true,
-                "Runs ZDO throttling, the player position boost and AI LOD only while some player's connection is backing up;\n" +
-                "otherwise the server behaves as vanilla. Off = those run all the time. Dedicated server only.");
+                Cfg.Adv("Only throttles while a player's connection is backing up; otherwise plays like vanilla."));
 
             ConfigSendCongestionThresholdPct = Config.Bind(
                 "10 - Server Authority",
                 "Congestion Threshold",
                 50,
-                new ConfigDescription(
-                    "How full a player's send window must get, in percent, before 'Adaptive Throttling' counts the connection as\n" +
-                    "backed up. Lower = kicks in sooner. Dedicated server only.",
+                Cfg.Adv("How full (percent) a send window must be to count as backed up.",
                     new AcceptableValueRange<int>(10, 100)));
 
             ConfigEnableSendHeartbeatLog = Config.Bind(
                 "12 - Advanced",
                 "Log Send Queue Heartbeat",
                 false,
-                "Diagnostic: logs each player's send-queue health every 10 seconds (one line per player). Useful when\n" +
-                "investigating lag; leave off for normal play. Dedicated server only.");
+                Cfg.Adv("Debug log: each player's send queue health every 10 s."));
 
             ConfigEnableBootPatchVerification = Config.Bind(
                 "12 - Advanced",
                 "Enable Boot Patch Verification",
                 false,
-                new ConfigDescription(
-                    "Diagnostic: at startup, logs every mod's patches on the AI, object-creation and zone-loading methods FGN relies on,\n" +
-                    "to track down mod conflicts. Dedicated server with Server-Side Simulation on only.",
-                    null));
+                Cfg.Adv("Debug log: lists other mods' patches on methods FGN relies on at startup."));
 
             ConfigEnableLargeZdoDiagnostics = Config.Bind(
                 "12 - Advanced",
                 "Enable Large ZDO Diagnostics",
                 false,
-                new ConfigDescription(
-                    "Diagnostic: when vanilla logs 'Writing a lot of data ... is not optimal', also logs which object caused it\n" +
-                    "(prefab, position, owner). Turn on to track that warning down; leave off otherwise.",
-                    null));
+                Cfg.Adv("Debug log: names the object behind vanilla's 'Writing a lot of data' warning."));
 
             ConfigEnableZDODelta = Config.Bind(
                 "12 - Advanced",
                 "Enable ZDO Delta Compression",
                 true,
-                "After an object's first full send, only the values that changed are sent again, which saves a lot of bandwidth\n" +
-                "for creatures and players. Applies to server and client sends. Requires a restart.");
+                Cfg.Adv("Only resends values that changed, saving lots of bandwidth. Restart."));
 
             ConfigAllocationFreeZdoWrites = Config.Bind(
                 "12 - Advanced",
                 "Allocation-free ZDO Writes",
                 true,
-                "Writes outgoing objects with the same bytes as vanilla but without its temporary memory use, cutting garbage\n" +
-                "collection hitches. Checks itself against vanilla at the start of each session and falls back if anything differs.\n" +
-                "Affects this machine only; takes effect live.");
+                Cfg.Adv("Writes network data without garbage, cutting stutter. Falls back to vanilla if anything differs."));
 
             ConfigEnableWNTServerOptimization = Config.Bind(
                 "12 - Advanced",
                 "Enable WearNTear Server Optimization",
                 true,
-                "Skips the wear and support update for fully invulnerable building pieces (all damage Immune or Ignored, e.g.\n" +
-                "Infinity Hammer pieces) that the server owns. Other pieces are unchanged. Dedicated server; requires a restart.");
+                Cfg.Adv("Server skips wear updates on fully invulnerable build pieces. Restart."));
 
             ConfigEnableInvulnerableSupportSkip = Config.Bind(
                 "12 - Advanced",
                 "Enable Invulnerable Support Skip",
                 true,
-                "Client counterpart of the WearNTear server optimization: skips the costly support check for fully invulnerable\n" +
-                "pieces and keeps them at full support, so pieces resting on them are unaffected. Big CPU saving in large bases\n" +
-                "built with such pieces.");
+                Cfg.Adv("Skips support checks on fully invulnerable pieces; big CPU save in large bases."));
 
             ConfigEnableInstanceOrphanPrune = Config.Bind(
                 "12 - Advanced",
                 "Enable Instance Orphan Prune",
                 true,
-                "With Server-Side Simulation on, if removing objects hits a broken entry left behind by another mod, clears those\n" +
-                "entries and retries instead of erroring. Each cleanup is logged; repeated ones point to a conflicting mod.\n" +
-                "Dedicated server only.");
+                Cfg.Adv("Cleans up broken object entries left by other mods instead of erroring."));
 
             ConfigFixTeleportGhosts = Config.Bind(
                 "12 - Advanced",
                 "Fix Teleport Ghost Players",
                 true,
-                "Fixes a vanilla bug where a player (or anything) that teleports away stays visible to others, frozen where it\n" +
-                "left. Steps aside if the game or another mod (such as ValheimCommunityPatch) already fixes it. Server or host only.");
+                Cfg.Adv("Fixes players staying visible, frozen, after they teleport away."));
 
             ConfigFixSlowSleep = Config.Bind(
                 "12 - Advanced",
                 "Fix Slow Sleep On Busy Servers",
                 true,
-                "On a busy server with a low frame rate, vanilla's sleep skip can keep everyone in bed for a minute or more.\n" +
-                "With this on, morning arrives on time however busy the server is. Server or host only.");
+                Cfg.Adv("Morning arrives on time when sleeping on a laggy server."));
 
             ConfigKeepaliveFirst = Config.Bind(
                 "12 - Advanced",
                 "Keep Busy Connections Alive",
                 true,
-                "Sends keepalives ahead of queued data, so a large transfer (such as a big base loading in) cannot time a\n" +
-                "player out while data is still arriving. Works on whichever side has it; best on server and clients.");
+                Cfg.Adv("Stops big transfers, like a large base loading, from timing players out."));
 
             ConfigKeepWorldClockAtRealTime = Config.Bind(
                 "12 - Advanced",
                 "Keep World Clock At Real Time",
                 true,
-                "When the server has very slow frames, its world clock falls behind real time and every player's clock jumps\n" +
-                "back to match. With this on, the server adds the lost time back so the clock keeps real time. Dedicated server.");
+                Cfg.Adv("Stops the world clock falling behind and jumping back on a laggy server."));
 
             ConfigSmoothServerClockCorrections = Config.Bind(
                 "12 - Advanced",
                 "Smooth Server Clock Corrections",
                 true,
-                "Eases in the server's regular clock corrections instead of jumping, so waves, ships and timers do not visibly\n" +
-                "jerk. Large changes (sleeping, joining, an admin setting the time) still apply at once. Client side, per player.");
+                Cfg.Adv("Eases in clock corrections so waves, ships and timers do not jerk."));
 
             ConfigEnableCapeCrashDiagnostics = Config.Bind(
                 "01 - General",
                 "Enable Cape Crash Diagnostics",
                 false,
-                "Diagnostic for crashes during cape cloth setup: logs each step before it runs, so the last line before a crash\n" +
-                "names it. Very verbose; leave off for normal play. Client only; requires a restart.");
+                Cfg.Adv("Debug log for crashes during cape setup. Very noisy. Restart."));
 
             ConfigEnableFallThroughDiagnostics = Config.Bind(
                 "01 - General",
                 "Enable Fall-Through Diagnostics",
                 false,
-                "Diagnostic for items and tombstones sinking through floors: logs dropped items at risk or falling, and build\n" +
-                "pieces that load too late to hold them. Only observes, but costs performance; leave off for normal play.\n" +
-                "Requires a restart.");
+                Cfg.Adv("Debug log for items and tombstones sinking through floors. Costs performance. Restart."));
 
-            // === CONFIG CHANGE LOGGING (fixed for generic types) ===
+            // === CONFIG CHANGE LOGGING ===
             var allConfigs = new ConfigEntryBase[]
             {
         ConfigLogLevel,
@@ -1388,7 +1352,7 @@ namespace FiresGhettoNetworkMod
         Message,
         [Description("Everything including Info")]
         Info,
-        // Added last (1.5.28, Fire 2026-10-01: periodic diagnostics are debug logs) so the stored names and order of the others stay.
+        // Added last (periodic diagnostics are debug logs) so the stored names and order of the others stay.
         [Description("Info plus the timed reports")]
         Debug
     }
@@ -1427,5 +1391,23 @@ namespace FiresGhettoNetworkMod
         playfab,
         [Description("Force crossplay DISABLED (use Steamworks backend)")]
         steamworks
+    }
+
+    /// <summary>Tags Configuration Manager and Fires Core read by field name (reflection): Browsable, IsAdvanced, Order.</summary>
+    internal sealed class ConfigurationManagerAttributes
+    {
+        public bool? Browsable;
+        public bool? IsAdvanced;
+        public int? Order;
+    }
+
+    /// <summary>Config descriptions: Basic = shown by default, Adv = only with "Show Advanced", Hidden = never shown (still saved).</summary>
+    internal static class Cfg
+    {
+        internal static ConfigDescription Basic(string text, AcceptableValueBase range = null) => new ConfigDescription(text, range);
+        internal static ConfigDescription Adv(string text, AcceptableValueBase range = null)
+            => new ConfigDescription(text, range, new ConfigurationManagerAttributes { IsAdvanced = true });
+        internal static ConfigDescription Hidden(string text, AcceptableValueBase range = null)
+            => new ConfigDescription(text, range, new ConfigurationManagerAttributes { Browsable = false });
     }
 }

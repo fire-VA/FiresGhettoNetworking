@@ -89,6 +89,8 @@ namespace FiresGhettoNetworkMod.AutoTune
         private const float BandwidthSampleGapSeconds = 0.5f;
         private const float LatencyWarmupSettleSeconds = 0.3f;
         private const float LatencyPingGapSeconds = 0.2f;
+        private const int LatencyAbortBadSamples = 2;   // pings at/over the abort threshold before the probe gives up
+        private const int LatencyTrimMinSamples = 5;    // fewest samples before the worst one is dropped
 
         private const string RoundTripCommand = "fgn_rtt";
         private const int ManualTracePingCount = 20;
@@ -1042,7 +1044,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
                 if (sample >= pingAbortMs) badSamples++;
 
-                if (badSamples >= 2)
+                if (badSamples >= LatencyAbortBadSamples)
                 {
                     _latencyProbeAborted = true;
                     _latencyTier    = Tier.Low;
@@ -1068,7 +1070,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
 
             // Outlier trimming — drop worst sample (10% @ 10 pings).
-            List<long> trimmed = TrimWorst(_latencyRawSamplesMs, dropCount: _latencyRawSamplesMs.Count >= 5 ? 1 : 0);
+            List<long> trimmed = TrimWorst(_latencyRawSamplesMs, dropCount: _latencyRawSamplesMs.Count >= LatencyTrimMinSamples ? 1 : 0);
 
             _latencyMedianMs = (int)ComputeMedian(trimmed);
             _latencyP95Ms    = (int)ComputeP95(trimmed);

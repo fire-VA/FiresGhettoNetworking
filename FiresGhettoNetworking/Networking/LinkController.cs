@@ -46,6 +46,12 @@ namespace FiresGhettoNetworkMod
         private const float DelayToleranceMs = 30f;
         private const float BadConnectionSeconds = 5f;
         private const int BadConnectionSteps = 3;
+        private const float RttSmoothing = 0.25f;
+        private const float GoodputSmoothing = 0.5f;
+        private const float GoodputPeakDecay = 0.9f;
+        private const float DelayToleranceFraction = 0.5f;
+        private const float SlowStartFactor = 2f;
+        private const int DefaultMaxWindowKb = 1024;
 
         private const string RpcLinksRequest = "FGN_LinksReq";
         private const string RpcLinksReply = "FGN_LinksResp";
@@ -54,7 +60,7 @@ namespace FiresGhettoNetworkMod
         {
             public ZNetPeer Peer;
             public ISocket OuterSocket;
-            public object Steam;   // 1.5.49 (Xbox build has no ZSteamSocket): the ZSteamSocket, typed object so Link loads without Steam
+            public object Steam;   // the ZSteamSocket, typed object so Link loads on builds without Steam (Xbox / Game Pass)
             public bool Crossplay;
             public bool CrossplayNoticed;
             public int Window;
@@ -100,16 +106,12 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigAdaptiveWindow = config.Bind("04 - Networking", "Adaptive Send Window", true,
-                "Sizes how much world data each Steam connection may have in flight from that link's own health, instead of "
-                + "vanilla's fixed 10 KB. Off = Queue Size for everyone; crossplay players use Crossplay In-Flight KB. Client and server.");
+                Cfg.Adv("Sizes each Steam connection's send window from its health instead of a fixed 10 KB."));
             ConfigMaxWindowKB = config.Bind("04 - Networking", "Max Send Window", 1024,
-                new ConfigDescription("The most data, in KB, Adaptive Send Window lets be on its way over one connection at once. Has no effect "
-                    + "while Adaptive Send Window is off. Client and server.",
+                Cfg.Adv("Biggest send window in KB the adaptive window may use.",
                     new AcceptableValueRange<int>(64, 8192)));
             ConfigCrossplayInFlightKB = config.Bind("04 - Networking", "Crossplay In-Flight KB", DefaultCrossplayInFlightKb,
-                new ConfigDescription(
-                    "How much world data may be in flight over a crossplay (PlayFab) connection, in KB (vanilla is about 40). "
-                    + "Lower makes a lost packet cost less; higher sends more on a long link. Client and server.",
+                Cfg.Adv("KB of world data in flight on a crossplay connection (vanilla about 40).",
                     new AcceptableValueRange<int>(8, 128)));
             ConfigAdaptiveWindow.SettingChanged += (_, __) => ResetWindows();
             ConfigMaxWindowKB.SettingChanged += (_, __) => ClampWindows();
@@ -263,8 +265,7 @@ namespace FiresGhettoNetworkMod
         /// <summary>
         /// Links used to start at a player's first world update, which comes only after the server accepts its PeerInfo. A mod
         /// can hold that PeerInfo while it sends join data (FAT's BC join sync, 151 MB), so a first-time joiner downloaded on
-        /// Steam's own estimate instead of the pinned rate, and that estimate can sit near Send Rate Min (rig R6: 1.4 MB/s to
-        /// the bot beside 8.4 MB/s to a player whose estimate happened to climb). Every connection is stepped from the moment it
+        /// Steam's own estimate instead of the pinned rate, and that estimate can sit near Send Rate Min. Every connection is stepped from the moment it
         /// connects, and the link of a peer that leaves before joining is dropped here, since ZDOMan never sees it.
         /// </summary>
         private static void StepEveryConnection(ZNet net)
@@ -289,7 +290,7 @@ namespace FiresGhettoNetworkMod
         private static bool AdaptiveWindowEnabled() => ConfigAdaptiveWindow == null || ConfigAdaptiveWindow.Value;
 
         private static int MaxWindowBytes()
-            => Mathf.Max(StaticWindowBytes(), (ConfigMaxWindowKB != null ? ConfigMaxWindowKB.Value : 1024) * BytesPerKilobyte);
+            => Mathf.Max(StaticWindowBytes(), (ConfigMaxWindowKB != null ? ConfigMaxWindowKB.Value : DefaultMaxWindowKb) * BytesPerKilobyte);
 
         private static bool LogTicks() => AdaptiveSendRate.ConfigLog != null && AdaptiveSendRate.ConfigLog.Value;
 
@@ -318,7 +319,7 @@ namespace FiresGhettoNetworkMod
         }
 
         // Once per crossplay link, when the peer is known by name: a PlayFab socket exists before the handshake, where the name is
-        // still empty and the uid 0, and M1's first notice read "0 is connected".
+        // still empty and the uid 0.
         private static void NoticeCrossplay(Link link)
         {
             if (!link.Crossplay || link.CrossplayNoticed) return;
@@ -336,11 +337,11 @@ namespace FiresGhettoNetworkMod
             TrackSocket(link);
             NoticeCrossplay(link);
 
-            // 1.5.49 (Xbox build has no ZSteamSocket): the Steam figures are read in SteamLinks; link.Steam is null without Steam.
+            // The Steam figures are read in SteamLinks; link.Steam is null without Steam.
             link.HasStatus = link.Steam != null && SampleSteam(link, now);
         }
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): NoInlining steps into SteamLinks, called only when SteamSide.Present, so no
+        // Builds without ZSteamSocket (Xbox / Game Pass): NoInlining steps into SteamLinks, called only when SteamSide.Present, so no
         // always-on method's JIT ever sets up SteamLinks (its fields name Steam types).
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void InitSteamLinks() => SteamLinks.Init();
@@ -352,13 +353,14 @@ namespace FiresGhettoNetworkMod
         private static bool SampleSteam(Link link, double now) => SteamLinks.Sample(link, now);
 
         /// <summary>
-        /// 1.5.49 (Xbox build has no ZSteamSocket): every Steam-typed member of LinkController lives here, so LinkController
-        /// itself loads on a build without Steam. Reached only when SteamSide.Present.
+        /// Every Steam-typed member of LinkController lives here, so LinkController
+        /// itself loads on a build without Steam (Xbox / Game Pass). Reached only when SteamSide.Present.
         /// </summary>
         internal static class SteamLinks
         {
-            private static AccessTools.FieldRef<ZSteamSocket, HSteamNetConnection> s_connection;
-            private static AccessTools.FieldRef<ZSteamSocket, int> s_totalSent;
+            // Steam-typed fields fail the class load on the Microsoft Store build; kept as object, cast where used
+            private static object s_connection;   // AccessTools.FieldRef<ZSteamSocket, HSteamNetConnection>
+            private static object s_totalSent;    // AccessTools.FieldRef<ZSteamSocket, int>
 
             internal static void Init()
             {
@@ -379,7 +381,7 @@ namespace FiresGhettoNetworkMod
                 link.PingMs = status.m_nPing;
                 if (link.PingMs > 0)
                 {
-                    link.SmoothedRttMs = link.SmoothedRttMs > 0f ? Mathf.Lerp(link.SmoothedRttMs, link.PingMs, 0.25f) : link.PingMs;
+                    link.SmoothedRttMs = link.SmoothedRttMs > 0f ? Mathf.Lerp(link.SmoothedRttMs, link.PingMs, RttSmoothing) : link.PingMs;
                     if (now - link.MinRttEpochStart >= MinRttEpochSeconds)
                     {
                         link.MinRttPrevious = link.MinRttCurrent;
@@ -398,15 +400,15 @@ namespace FiresGhettoNetworkMod
                 link.Delivery = status.m_flConnectionQualityRemote;
                 link.PacingBytes = status.m_nSendRateBytesPerSecond;
 
-                int totalSent = s_totalSent(steam);
+                int totalSent = ((AccessTools.FieldRef<ZSteamSocket, int>)s_totalSent)(steam);
                 if (link.GoodputPrimed && elapsed > 0.0)
                 {
                     link.SentTotal += unchecked((uint)(totalSent - link.LastTotalSent));
                     long deliveredTotal = link.SentTotal - link.InFlightBytes;
                     float sample = Mathf.Max(0f, (float)((deliveredTotal - link.DeliveredTotal) / elapsed));
                     link.DeliveredTotal = deliveredTotal;
-                    link.Goodput = Mathf.Lerp(link.Goodput, sample, 0.5f);
-                    link.GoodputPeak = Mathf.Max(sample, link.GoodputPeak * 0.9f);
+                    link.Goodput = Mathf.Lerp(link.Goodput, sample, GoodputSmoothing);
+                    link.GoodputPeak = Mathf.Max(sample, link.GoodputPeak * GoodputPeakDecay);
                 }
                 else
                 {
@@ -421,12 +423,12 @@ namespace FiresGhettoNetworkMod
             }
 
             internal static HSteamNetConnection ConnectionOf(ZSteamSocket socket) =>
-                s_connection != null && socket != null ? s_connection(socket) : HSteamNetConnection.Invalid;
+                s_connection != null && socket != null ? ((AccessTools.FieldRef<ZSteamSocket, HSteamNetConnection>)s_connection)(socket) : HSteamNetConnection.Invalid;
 
             internal static bool TryStatus(ZSteamSocket socket, out SteamNetConnectionRealTimeStatus_t status)
             {
                 status = default;
-                var connection = s_connection(socket);
+                var connection = ((AccessTools.FieldRef<ZSteamSocket, HSteamNetConnection>)s_connection)(socket);
                 if (connection == HSteamNetConnection.Invalid) return false;
                 SteamNetConnectionRealTimeLaneStatus_t lanes = default;
                 try
@@ -455,7 +457,7 @@ namespace FiresGhettoNetworkMod
 
             int minRtt = MinRtt(link);
             bool lossy = link.Delivery >= 0f && link.Delivery < LossyDelivery;
-            bool delayed = minRtt > 0 && link.SmoothedRttMs > minRtt + Mathf.Max(DelayToleranceMs, minRtt * 0.5f);
+            bool delayed = minRtt > 0 && link.SmoothedRttMs > minRtt + Mathf.Max(DelayToleranceMs, minRtt * DelayToleranceFraction);
             link.LossyUpdates = lossy ? link.LossyUpdates + 1 : 0;
             link.DelayedUpdates = delayed ? link.DelayedUpdates + 1 : 0;
             link.Congested = link.LossyUpdates >= SustainUpdates || link.DelayedUpdates >= SustainUpdates;
@@ -477,7 +479,7 @@ namespace FiresGhettoNetworkMod
         }
 
         // A server (including a listen-server host) is governed by Adaptive Send Rate; a pure client
-        // by Adaptive Upload. Plan: Docs/PLAN_UploadBudgetAndAutoTune.md
+        // by Adaptive Upload.
         private static bool RateControlActive()
         {
             if (ZNet.instance == null || AdaptiveSendRate.Suspend || EffectiveConfig.HyperBoost()) return false;
@@ -489,7 +491,7 @@ namespace FiresGhettoNetworkMod
         private const float SaturatedGoodputFraction = 0.8f;
 
         // Queueing while goodput sits far below the allowed rate means the LINE is full, not that the
-        // rate is too low. Plan: Docs/PLAN_UploadBudgetAndAutoTune.md
+        // rate is too low.
         private static bool LinkSaturated(Link link, int current)
         {
             return link.GoodputPrimed && link.Goodput > 0f
@@ -556,7 +558,7 @@ namespace FiresGhettoNetworkMod
             }
             else if (link.QueueMs > QueueHoldMs && link.PendingBytes > 0 && current < ceiling)
             {
-                long raised = (long)(current * (link.RateSlowStart ? 2f : GrowFactor));
+                long raised = (long)(current * (link.RateSlowStart ? SlowStartFactor : GrowFactor));
                 next = (int)Math.Min(raised, ceiling);
                 decision = "raise, Steam is queueing";
             }
@@ -644,7 +646,7 @@ namespace FiresGhettoNetworkMod
                 TeleportGhostFix.DecideBeforeJoins(__instance);
                 StepEveryConnection(__instance);
             }
-            if (SteamSide.Present) LinkPace.ReportPeriodically();   // 1.5.49 (Xbox build has no ZSteamSocket): LinkPace is Steam-only
+            if (SteamSide.Present) LinkPace.ReportPeriodically();   // LinkPace is Steam-only
             if (s_links.Count == 0 || !__instance.IsDedicated()) return;
             double now = Time.realtimeSinceStartupAsDouble;
             if (s_nextReport <= 0.0) s_nextReport = now + ReportSeconds;

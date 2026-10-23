@@ -28,6 +28,15 @@ namespace FiresGhettoNetworkMod
         private const string DefaultPrefab = "Wood";
         private const float HitchMs = 50f;          // a frame slower than this counts as a hitch (~20 fps)
         private const int SpawnPerFrame = 100;      // server spawns in chunks so its own frame doesn't hard-stall
+        private const float MinWindowSeconds = 10f;
+        private const float MaxWindowSeconds = 60f;
+        private const float CountPerExtraWindowSecond = 500f;
+        private const float ScatterMetersPerSqrtCount = 2f;
+        private const float MinScatterRadius = 8f;
+        private const float MaxScatterRadius = 200f;
+        private const float CleanupDelaySeconds = 7f;
+        private const float SmoothWorstFrameMs = 100f;
+        private const float HitchWorstFrameMs = 250f;
 
         private static bool s_registered;
         private static bool s_busy;
@@ -88,12 +97,12 @@ namespace FiresGhettoNetworkMod
             CleanupNow();   // clear any leftovers from a prior run
 
             // Window scales with count so a big batch is measured long enough to finish syncing + instantiating.
-            float window = Mathf.Clamp(10f + count / 500f, 10f, 60f);
+            float window = Mathf.Clamp(MinWindowSeconds + count / CountPerExtraWindowSecond, MinWindowSeconds, MaxWindowSeconds);
             ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcMeasure, window, count);   // client starts sampling now
             Msg(target, $"[ZdoFlood] spawning {count} x {prefabName} around you...");
 
             // Scatter over a disc whose radius grows with count so they don't stack into a physics pile.
-            float radius = Mathf.Clamp(Mathf.Sqrt(count) * 2f, 8f, 200f);
+            float radius = Mathf.Clamp(Mathf.Sqrt(count) * ScatterMetersPerSqrtCount, MinScatterRadius, MaxScatterRadius);
             int inFrame = 0;
             for (int i = 0; i < count; i++)
             {
@@ -106,7 +115,7 @@ namespace FiresGhettoNetworkMod
             Msg(target, $"[ZdoFlood] {s_spawned.Count} spawned — your client is instantiating them now.");
 
             // Clean up well after the client's measurement window so cleanup doesn't skew the reading.
-            yield return new WaitForSeconds(window + 7f);
+            yield return new WaitForSeconds(window + CleanupDelaySeconds);
             int cleaned = CleanupNow();
             Msg(target, $"[ZdoFlood] cleaned up {cleaned} objects.");
             s_busy = false;
@@ -157,9 +166,9 @@ namespace FiresGhettoNetworkMod
             }
             float avgMs = frames > 0 ? sumMs / frames : 0f;
             float avgFps = avgMs > 0.01f ? 1000f / avgMs : 0f;
-            string verdict = worstMs < 100f
+            string verdict = worstMs < SmoothWorstFrameMs
                 ? "Time-slicing held it smooth."
-                : (worstMs < 250f ? "Noticeable hitch — instantiation is pushing the per-frame budget."
+                : (worstMs < HitchWorstFrameMs ? "Noticeable hitch — instantiation is pushing the per-frame budget."
                                   : "Big freeze — instantiation outran the budget at this count.");
             string msg = $"[ZdoFlood] client over {windowSecs:F0}s (~{count} objs): worst frame {worstMs:F0} ms, "
                 + $"{hitches} hitches (>{HitchMs:F0} ms), avg {avgFps:F0} fps. {verdict}";
@@ -172,6 +181,5 @@ namespace FiresGhettoNetworkMod
 
         // ---- helpers ----
         private static void Msg(long target, string msg) => AdminConsoleEcho.Send(RpcMsg, target, msg);
-
     }
 }

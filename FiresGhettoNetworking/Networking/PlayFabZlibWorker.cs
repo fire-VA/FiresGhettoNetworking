@@ -9,12 +9,11 @@ namespace FiresGhettoNetworkMod
     /// <summary>
     /// Vanilla's PlayFab compression thread holds one lock, shared by every crossplay socket, while it compresses and decompresses
     /// everything queued; the main thread takes the same lock for every crossplay send and for each socket's per-frame poll, so a
-    /// send waits out the whole batch. R34: the dedi's 872 ms frame was 841 ms blocked, 525 ms of it in one send, with 1 MB
-    /// messages and a 270 KB log upload queued, and PvP hits relayed through the dedi arrived 0.4-0.9 s late. This loop takes the
-    /// lock only to move one buffer in or out and runs zlib outside it: the same buffers, in the same order, on one thread.
+    /// send waits out the whole batch, and with large messages queued a server frame can block for hundreds of ms. This loop takes
+    /// the lock only to move one buffer in or out and runs zlib outside it: the same buffers, in the same order, on one thread.
     ///
-    /// No Harmony patch: vanilla's WorkerMain never returns (an endless loop around its locks), and Mono refused to compile both a
-    /// skipping prefix (1.4.81) and a body-replacing transpiler (1.4.82) onto it. Vanilla starts its thread only from the first
+    /// No Harmony patch: vanilla's WorkerMain never returns (an endless loop around its locks), and Mono refuses to compile both a
+    /// skipping prefix and a body-replacing transpiler onto it. Vanilla starts its thread only from the first
     /// queue's constructor, and only while PlayFabZLibWorkQueue.s_thread is null (under its lock), so FGN starts this loop's thread
     /// at load, before any crossplay socket exists, and records it there; vanilla then never starts its own.
     /// </summary>
@@ -44,8 +43,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("12 - Advanced", "Fix PlayFab Compression Stalls", true,
-                "Crossplay (PlayFab) only. Stops vanilla's crossplay compression blocking the game, which can delay sends (even\n" +
-                "relayed PvP hits) by hundreds of ms. Same messages, same order. Client and server; requires restart.");
+                Cfg.Adv("Crossplay: stops compression stalls that delay sends by hundreds of ms. Restart."));
         }
 
         /// <summary>At load, when the fix is on: FGN's loop takes vanilla's place. One result line either way; any failure leaves

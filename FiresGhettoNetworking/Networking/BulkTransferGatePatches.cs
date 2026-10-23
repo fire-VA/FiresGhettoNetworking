@@ -33,8 +33,8 @@ namespace FiresGhettoNetworkMod
 
         private static readonly Target[] Targets =
         {
-            new Target("ServerSync.ConfigSync",     "GetSendQueueSize", 20000),
-            new Target("ServerCharacters.Shared",   "GetSendQueueSize", 20000),
+            new Target("ServerSync.ConfigSync",     "GetSendQueueSize", ThirdPartyGateFloorBytes),
+            new Target("ServerCharacters.Shared",   "GetSendQueueSize", ThirdPartyGateFloorBytes),
         };
 
         // ServerSync's waitForQueue drops a peer if its send queue stays above the gate
@@ -66,6 +66,16 @@ namespace FiresGhettoNetworkMod
         private static int s_serverSyncCopyCount = 1;
         private static int s_budgetedGate;
 
+        // Fallback when the config entry is not bound yet; matches the config default.
+        private const int DefaultBudgetPercent = 40;
+        // ServerSync's baked-in self-disconnect timeout, in the float and double forms the compiler may emit.
+        private const float VanillaQueueTimeoutSeconds = 30f;
+        private const double VanillaQueueTimeoutSecondsDouble = 30.0;
+        // DisconnectTimeoutSeconds' default, for the double form that is rewritten to a constant.
+        private const double DisarmedTimeoutSecondsDouble = 86400.0;
+        // How many IL instructions from a GetSendQueueSize call the gate constant may sit.
+        private const int GateCallProximity = 8;
+
         internal static void ApplyOnZNetStart()
         {
             if (s_applied) return;
@@ -94,9 +104,9 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogInfo(
                 $"Bulk-transfer gate budget: {s_serverSyncCopyCount} ServerSync.ConfigSync copy/ies, "
                 + $"Steam buffer ceiling {GetEffectiveSendBufferCeilingBytes() / 1024}KB, "
-                + $"{FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? 40}% budget → per-mod gate "
+                + $"{FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? DefaultBudgetPercent}% budget → per-mod gate "
                 + $"{s_budgetedGate} bytes (Queue Size target {target}).");
-            if (s_budgetedGate <= 20000)
+            if (s_budgetedGate <= ThirdPartyGateFloorBytes)
                 LoggerOptions.LogInfo(
                     "Bulk-transfer budget floored the per-mod gate at the vanilla 20 KB (many ServerSync "
                     + "mods on the current Steam send buffer), so the gate is NOT raised — but the 30s "
@@ -139,9 +149,8 @@ namespace FiresGhettoNetworkMod
                             if (!IsGateLoop(m, t.GateMethodName, out string unreadable)) continue;
                             if (unreadable != null)
                             {
-                                // A user's server (2026-10-01): AzuAnticheat 4.3.11 is obfuscated, and its ServerSync copy's
-                                // waitForQueue reads back with a call Harmony cannot resolve, so HarmonyX failed it with
-                                // "Invalid argument for call NULL". No IL patch can land there; leave that copy as it ships.
+                                // An obfuscated mod's ServerSync copy can read back with a call Harmony cannot resolve, and HarmonyX
+                                // fails it with "Invalid argument for call NULL". No IL patch can land there; leave that copy as it ships.
                                 typesSkipped++;
                                 LoggerOptions.LogInfo(
                                     $"Bulk-transfer gate left as shipped in {asm.GetName().Name} → {inspectedType.FullName}.{m.Name}: "
@@ -150,8 +159,7 @@ namespace FiresGhettoNetworkMod
                                 continue;
                             }
 
-                            // 1.5.40 (Fire 10-05: "[Error : HarmonyX] Failed to patch … Invalid argument for call NULL [Label26]" on
-                            // AzuAnticheat's copy): run the rewrite on a copy of the body first and check what HarmonyX would write.
+                            // Run the rewrite on a copy of the body first and check what HarmonyX would write.
                             // A body it would refuse is left as shipped with one Info line, so HarmonyX never gets to log an Error.
                             s_currentVanillaConstant = t.VanillaConstant;
                             string bad = ValidateRewrite(m);
@@ -322,7 +330,7 @@ namespace FiresGhettoNetworkMod
                 }
 
                 // 2. Disarm the 30s timeout (float or double form), in place for the same reason.
-                if (code[i].opcode == OpCodes.Ldc_R4 && code[i].operand is float f && f == 30f)
+                if (code[i].opcode == OpCodes.Ldc_R4 && code[i].operand is float f && f == VanillaQueueTimeoutSeconds)
                 {
                     // Load the live timeout field instead of a baked constant, so the
                     // fgn_overload 'arm' control can restore 30s at runtime to prove the path.
@@ -330,9 +338,9 @@ namespace FiresGhettoNetworkMod
                     code[i].operand = TimeoutField;
                     disarmed++;
                 }
-                else if (code[i].opcode == OpCodes.Ldc_R8 && code[i].operand is double d && d == 30.0)
+                else if (code[i].opcode == OpCodes.Ldc_R8 && code[i].operand is double d && d == VanillaQueueTimeoutSecondsDouble)
                 {
-                    code[i].operand = 86400.0;
+                    code[i].operand = DisarmedTimeoutSecondsDouble;
                     disarmed++;
                 }
             }
@@ -369,7 +377,7 @@ namespace FiresGhettoNetworkMod
         private static bool NearAnyCall(List<int> callIdx, int i)
         {
             foreach (var ci in callIdx)
-                if (Math.Abs(ci - i) <= 8) return true;
+                if (Math.Abs(ci - i) <= GateCallProximity) return true;
             return false;
         }
 
@@ -407,10 +415,10 @@ namespace FiresGhettoNetworkMod
         private static int GetBudgetedGate()
         {
             int target = GetTargetQueueSize();
-            int pct = FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? 40;
+            int pct = FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? DefaultBudgetPercent;
             long budget = (long)GetEffectiveSendBufferCeilingBytes() * pct / 100L;
             int perMod = (int)(budget / Math.Max(1, s_serverSyncCopyCount));
-            return Math.Max(20000, Math.Min(target, perMod));
+            return Math.Max(ThirdPartyGateFloorBytes, Math.Min(target, perMod));
         }
 
         private const int ThirdPartyGateFloorBytes = 20000;

@@ -49,12 +49,9 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Send To Every Player Each Frame", true,
-                "Vanilla sends world updates to one player per frame, so updates slow as the server fills. With this on, every "
-                + "player gets them at the ZDO Send Rate, within Send Budget Per Frame. Client and server.");
+                Cfg.Adv("Every player gets world updates each frame instead of one player per frame."));
             ConfigBudgetMs = config.Bind("04 - Networking", "Send Budget Per Frame", 4f,
-                new ConfigDescription(
-                    "Milliseconds per frame Send To Every Player Each Frame may spend building world updates. Players left over "
-                    + "are served first next frame, and at least one is always served. Raise it on a busy server with CPU to spare.",
+                Cfg.Adv("Milliseconds per frame spent building world updates for players.",
                     new AcceptableValueRange<float>(MinBudgetMs, MaxBudgetMs)));
             ConfigEnabled.SettingChanged += (_, __) => ResetSlots();
         }
@@ -132,8 +129,8 @@ namespace FiresGhettoNetworkMod
                 if (due)
                 {
                     // An empty due tick usually means the next update is a few ms away (a moving player's own updates come every
-                    // ~50 ms on their clock, which drifts against this one), so look again soon instead of doubling the wait: R37
-                    // relayed a moving bot at 10-14/s with a 96 ms median gap because every empty tick waited 100 ms. Only a
+                    // ~50 ms on their clock, which drifts against this one), so look again soon instead of doubling the wait,
+                    // or a moving player is relayed at well under the target rate. Only a
                     // player with nothing new for IdleGraceTicks ticks in a row backs off.
                     double wait = sent ? interval
                         : slot.IdleStreak <= IdleGraceTicks ? interval * EmptyRecheckFraction

@@ -14,6 +14,12 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     public static class FallThroughProbe
     {
+        private const float SettleSeconds = 0.25f;
+        private const float RecheckSeconds = 3f;
+        private const float RayStartAbove = 0.3f;
+        private const float RayMaxDistance = 8f;
+        private const float FellDropMeters = 0.5f;
+
         private static int s_groundMask;
         private static bool s_maskReady;
 
@@ -49,7 +55,7 @@ namespace FiresGhettoNetworkMod
         {
             // Let the ZNetView bind, the ZDO position apply, and any same-frame
             // neighbours (the structure it rests on) instantiate before we look.
-            yield return new WaitForSeconds(0.25f);
+            yield return new WaitForSeconds(SettleSeconds);
             if (go == null) yield break;
 
             var nview = go.GetComponent<ZNetView>();
@@ -62,7 +68,7 @@ namespace FiresGhettoNetworkMod
 
             bool owner = nview != null && nview.IsValid() && nview.IsOwner();
             bool hit = Physics.Raycast(
-                spawnPos + Vector3.up * 0.3f, Vector3.down, out RaycastHit info, 8f,
+                spawnPos + Vector3.up * RayStartAbove, Vector3.down, out RaycastHit info, RayMaxDistance,
                 GroundMask(), QueryTriggerInteraction.Ignore);
             string beneath = hit
                 ? $"{info.collider.gameObject.name}@{info.distance:F2}m"
@@ -78,15 +84,15 @@ namespace FiresGhettoNetworkMod
 
             // Re-check whether it dropped, regardless of who owns it — a non-owner
             // still follows the owner's synced position, so a real fall shows here too.
-            yield return new WaitForSeconds(3f);
+            yield return new WaitForSeconds(RecheckSeconds);
             if (go == null) yield break;
 
             Vector3 nowPos = go.transform.position;
             float drop = spawnPos.y - nowPos.y;
-            if (drop > 0.5f)
+            if (drop > FellDropMeters)
             {
                 bool hitNow = Physics.Raycast(
-                    nowPos + Vector3.up * 0.3f, Vector3.down, out RaycastHit info2, 8f,
+                    nowPos + Vector3.up * RayStartAbove, Vector3.down, out RaycastHit info2, RayMaxDistance,
                     GroundMask(), QueryTriggerInteraction.Ignore);
                 string under = hitNow ? $"{info2.collider.gameObject.name}@{info2.distance:F2}m" : "NONE";
                 LoggerOptions.LogWarning(

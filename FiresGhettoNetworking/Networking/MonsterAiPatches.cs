@@ -113,7 +113,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         static bool UpdateSpawning_Prefix(SpawnSystem __instance, ZNetView ___m_nview, List<SpawnSystemList> ___m_spawnLists)
         {
-            if (!ServerClientUtils.ZNetIsDedicated()) return true;
+            if (!ServerClientUtils.ZNetIsDedicated()) return true;   // clients and hosts are covered by SpawnHeightmapGuard (always attached)
             if (___m_nview == null || !___m_nview.IsValid() || !___m_nview.IsOwner()) return false;
 
             bool shouldLogEventDiagnostic = ShouldLogEventDiagnosticForSpawnSystem(__instance,

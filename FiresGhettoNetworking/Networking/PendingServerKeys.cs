@@ -12,16 +12,17 @@ namespace FiresGhettoNetworkMod
     /// receive only adds and overwrites the fields in that copy, so a key the server added survives; a key the owner ALSO carries
     /// (an older value), or one the owner never received, does not reach both sides. So every value the server writes on a
     /// client-owned object is kept pending until the owner sends a copy that carries it. When the owner's copy arrives with that
-    /// key at an older value, the server's value is kept in place of it as the copy is read (1.5.34; the owner's position and every other field
+    /// key at an older value, the server's value is kept in place of it as the copy is read (the owner's position and every other field
     /// stay the owner's), and the object is sent again now and then, one revision above the owner. Server only; vanilla clients merge it by
-    /// vanilla's rule. ([lead]/Fire 2026-10-02: Expand World Prefabs' "+100" made its writes stick by outranking the owner, at the
-    /// cost of reverting the owner; this keeps the script's values without that.)
+    /// vanilla's rule. (Outranking the owner by a large revision jump would also make server writes stick, at the cost of reverting
+    /// the owner; this keeps the server's values without that.)
     /// </summary>
     [HarmonyPatch]
     internal static class PendingServerKeys
     {
         private const int MaxPendingObjects = 4096;
         private const float ResendEverySeconds = 2f;
+        private const float LogIntervalSeconds = 60f;
 
         private sealed class Pending
         {
@@ -59,9 +60,9 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch(typeof(ZDOExtraData), "Set", new[] { typeof(ZDOID), typeof(int), typeof(byte[]) }), HarmonyPostfix]
         private static void SetB(ZDOID zid, int hash, byte[] value, bool __result) { if (__result) Wrote(zid, 6, hash, value); }
 
-        // 1.5.34: PREFIXES, first of all, on Deserialize's way in. For a key the server has pending, a stale value in the owner's copy is
-        // replaced by the server's value before anything (Expand World Prefabs' change detection included) sees it: the server copy
-        // never flips back and forth, so no write-back and no "changed" events (1.5.33's write storm). The value the owner carried is
+        // PREFIXES, first of all, on Deserialize's way in. For a key the server has pending, a stale value in the owner's copy is
+        // replaced by the server's value before anything (other mods' change detection included) sees it: the server copy
+        // never flips back and forth, so no write-back and no "changed" events (no write storm). The value the owner carried is
         // still noted, for the ack.
         [HarmonyPatch(typeof(ZDOExtraData), "Add", new[] { typeof(ZDOID), typeof(int), typeof(float) }), HarmonyPrefix, HarmonyPriority(Priority.First)]
         private static void AddF(ZDOID zid, int hash, ref float value) { if (zid == s_receivingId) Keep(0, hash, ref value); }
@@ -138,7 +139,7 @@ namespace FiresGhettoNetworkMod
             }
             if (Time.unscaledTime >= s_nextLog)
             {
-                s_nextLog = Time.unscaledTime + 60f;
+                s_nextLog = Time.unscaledTime + LogIntervalSeconds;
                 LoggerOptions.LogDebug($"[OwnerSafe] stale owner values kept off server-written keys: {s_kept}; keys confirmed by the owner: {s_acked}; objects pending: {s_pending.Count}");
             }
         }
@@ -148,15 +149,10 @@ namespace FiresGhettoNetworkMod
 
         internal static void Clear() { s_pending.Clear(); s_received.Clear(); }
 
-        // ---- helpers ----
-
-
-
         private static bool Same(object a, object b)
         {
             if (a is byte[] x && b is byte[] y) return x.SequenceEqual(y);
             return Equals(a, b);
         }
-
     }
 }

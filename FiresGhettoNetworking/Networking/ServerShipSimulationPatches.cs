@@ -46,7 +46,7 @@ namespace FiresGhettoNetworkMod
                 return true;
             }
 
-            // 1.5.44 (perf leg C: ~40 µs a physics step per server-owned hull): a hull found ready stays ready while it
+            // The full check is costly per physics step and hull, so a hull found ready stays ready while it
             // stays in that zone, so the full check (zone loaded + water + ground) runs again only on a zone change
             // or every ReadyRecheckSteps steps.
             Vector2s zone = ZoneSystem.GetZone(__instance.transform.position);
@@ -108,7 +108,6 @@ namespace FiresGhettoNetworkMod
             _nextCheckReport = -1f;
             SssTestAreas.Clear();
         }
-
 
         private static bool IsEnvironmentReady(Ship ship)
         {

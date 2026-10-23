@@ -223,7 +223,7 @@ namespace FiresGhettoNetworkMod
         {
             if (t_writingVanillaReference) return true;
             // The world save thread can write ZDOExtraData while it runs: Expand World Prefabs' ServerSideData prefixes ZDO.Save
-            // and Sets a byte array on the live object (2026-10-02 EWP review), which can regrow the very bucket arrays read in
+            // and Sets a byte array on the live object, which can regrow the very bucket arrays read in
             // place here, keys/values/length read separately. Vanilla's Serialize takes its own copies through CopyTo, so for the
             // few seconds of a save it does the whole write and FGN adds no failure of its own (or a bad shape cached as verified);
             // a delta peer then gets a keyframe next time, since no snapshot was taken of this send.

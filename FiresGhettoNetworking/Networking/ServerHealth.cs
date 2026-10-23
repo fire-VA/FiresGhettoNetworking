@@ -25,7 +25,7 @@ namespace FiresGhettoNetworkMod
         private static int s_peakPlayers;
 
         // Frames before anyone has connected (the world load, several seconds) are the server starting, not a stall anyone
-        // saw; they are reported once on their own instead of as the window's worst frame (rig R14: an 8.6 s "worst frame").
+        // saw; they are reported once on their own instead of as the window's worst frame.
         private static bool s_anyoneConnected;
         private static double s_startupLongestMs;
         private static bool s_startupReported;
@@ -41,7 +41,7 @@ namespace FiresGhettoNetworkMod
                     if (frameMs > s_startupLongestMs) s_startupLongestMs = frameMs;
                     return;
                 }
-                // The first window starts now too: its uncounted frames' wall time read as 24.5 frames a second (rig R15).
+                // The first window starts now too, so the uncounted startup frames' wall time does not dilute its frame rate.
                 StartWindow(Time.realtimeSinceStartupAsDouble);
             }
             s_frames++;

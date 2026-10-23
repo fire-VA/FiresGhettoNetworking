@@ -5,9 +5,8 @@ using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
-    // Verbatim port of SSS Core.cs ZDOMan_ReleaseNearbyZDOS_Patch. Selective Character+Ship transfer, sticky
-    // server ownership and a server-always-covering shortcut were each tried and each froze mobs; keep the
-    // SSS shape (memory/reference_bulk_transfer_guard.md has the analysis).
+    // Port of SSS Core.cs ZDOMan_ReleaseNearbyZDOS_Patch. Sticky server ownership and a server-always-covering
+    // shortcut both froze mobs, so this keeps the SSS shape.
     //
     // ApplySssOwnershipRule carries one exception: with TargetPortalProtection loaded, TeleportWorld prefabs
     // stay peer-owned. TPP's WearNTear.RPC_Remove check reads Player.m_localPlayer, which is null on a dedi,
@@ -26,6 +25,10 @@ namespace FiresGhettoNetworkMod
             _teleportWorldPrefabs.Clear();
             _portalExclusionActive = false;
             if (__instance == null || __instance.m_prefabs == null) return;
+
+            // V3's simulated-prefab set (Character not Player, + Ship when ship sim is on); the broad mode only ever gives
+            // those to the server, so pickups (ItemDrop.RequestOwn) and terrain edits (TerrainComp) stay on a player's peer.
+            ServerOwnershipPatchesV3.ZNetScene_Awake_BuildSet(__instance);
 
             _cartPrefabs.Clear();
             foreach (var prefab in __instance.m_prefabs)
@@ -71,12 +74,8 @@ namespace FiresGhettoNetworkMod
             if (ZNet.instance == null || !ZNet.instance.IsDedicated()) return true;
             if (ZoneSystem.instance == null) return true;
 
-            // Runtime config guard — belt-and-suspenders on top of the
-            // startup-time Harmony.PatchAll gate in Ascend.cs. Allows the
-            // operator to flip the toggle off mid-session and immediately
-            // fall back to vanilla peer ownership without restarting.
-            // Also enforces mutual exclusion with V3 at runtime: if the
-            // selective toggle is on, V3 takes precedence and V2 bails.
+            // Runtime guard on top of the startup patch gate, so the toggle can be flipped off mid-session.
+            // Also keeps V3 exclusive: with the selective toggle on, V3 takes precedence.
             if (!(FiresGhettoNetworkMod.ConfigEnableServerAuthority?.Value ?? false)) return true;
             if (!(FiresGhettoNetworkMod.ConfigEnableServerOwnership?.Value ?? false)) return true;
             if (FiresGhettoNetworkMod.ConfigEnableServerOwnershipSelective?.Value ?? false) return true;
@@ -88,7 +87,7 @@ namespace FiresGhettoNetworkMod
             Vector2s zone = ZoneSystem.GetZone(refPosition);
 
             __instance.m_tempNearObjects.Clear();
-            // Near band only — the old call passed distantArea 0, which is a far distance of 0 now.
+            // Near band only (far distance 0).
             __instance.FindSectorObjects(zone, new SimulationDistance(SimDistance.Near(), 0), __instance.m_tempNearObjects);
 
             foreach (var zdo in __instance.m_tempNearObjects)
@@ -97,18 +96,67 @@ namespace FiresGhettoNetworkMod
                 if (_portalExclusionActive && _teleportWorldPrefabs.Contains(zdo.m_prefab)) continue;
                 if (_cartPrefabs.Contains(zdo.m_prefab)) continue;
                 ServerStatusDiagnostics.s_ownership_zdosProcessed++;
-                ApplySssOwnershipRule(__instance, zdo, uid, serverUid);
+                ApplySssOwnershipRule(__instance, zdo, uid, serverUid, zone);
+            }
+
+            float now = Time.realtimeSinceStartup;
+            if (now >= _nextProofLogTime)
+            {
+                _nextProofLogTime = now + ProofLogIntervalSeconds;
+                if (LoggerOptions.DebugEnabled) LoggerOptions.LogDebug(
+                    $"[ServerOwnership] Last 10s: {_nonCharacterSeen} non-Character ZDO(s) (ItemDrop/terrain/piece/interactable) kept off the "
+                    + $"server, {_nonCharacterToPeer} handed to the covering player on vanilla's rule, "
+                    + $"{_interactablesReturned} server-owned one(s) returned to the covering player.");
+                _nonCharacterSeen = 0;
+                _nonCharacterToPeer = 0;
+                _interactablesReturned = 0;
             }
 
             return false;
         }
 
-        private static void ApplySssOwnershipRule(ZDOMan zdoMan, ZDO zdo, long callerUid, long serverUid)
+        private static int _nonCharacterSeen;
+        private static int _nonCharacterToPeer;
+        private static int _interactablesReturned;
+        private static float _nextProofLogTime;
+        private const float ProofLogIntervalSeconds = 10f;
+
+        private static void ApplySssOwnershipRule(ZDOMan zdoMan, ZDO zdo, long callerUid, long serverUid, Vector2s callerZone)
         {
-            if (ValcastPossession.Handle(zdo)) return;   // 1.5.37: a possessed creature stays with its possessor's peer
             Vector2s sector = zdo.GetSector();
             bool coveredByAnyPeer = SectorCoveredByAnyConnectedPeer(sector);
             long owner = zdo.GetOwner();
+
+            // ItemDrops (pickup runs on the owner), TerrainComp (edits apply on its owner) and pieces/interactables must not be
+            // server-owned, or pickups never complete and terrain edits are lost. Only V3's simulated set (Characters, ships when
+            // ship sim is on) goes to the server; everything else follows vanilla's rule, and one the server already holds goes
+            // back to the covering player.
+            if (ServerOwnershipPatchesV3.IsBuilt && !ServerOwnershipPatchesV3.IsSimulatedPrefab(zdo.m_prefab))
+            {
+                _nonCharacterSeen++;
+                bool inCallerArea = callerUid != serverUid && ZNetScene.InActiveArea(zdo.GetPosition(), callerZone);
+                if (owner == serverUid && inCallerArea)
+                {
+                    zdo.SetOwner(callerUid);
+                    _interactablesReturned++;
+                    return;
+                }
+                if (owner == callerUid || owner == serverUid)
+                {
+                    if (!coveredByAnyPeer) { zdo.SetOwner(0L); ServerStatusDiagnostics.s_ownership_releases++; }
+                    return;
+                }
+                bool ownerCovers = owner != 0L && zdoMan.IsInPeerActiveArea(zdo.GetPosition(), owner);
+                if (!ownerCovers && inCallerArea)
+                {
+                    zdo.SetOwner(callerUid);
+                    _nonCharacterToPeer++;
+                }
+                return;
+            }
+
+            if (ValcastPossession.Handle(zdo)) return;   // a possessed creature stays with its possessor's peer
+            owner = zdo.GetOwner();
 
             if (owner == callerUid || owner == serverUid)
             {
@@ -120,8 +168,7 @@ namespace FiresGhettoNetworkMod
                 return;
             }
 
-            // IsInPeerActiveArea takes a world point now, not a sector — vanilla passes the ZDO's
-            // own position here.
+            // IsInPeerActiveArea takes a world point; vanilla passes the ZDO's own position here.
             bool currentOwnerCovers = owner != 0L && zdoMan.IsInPeerActiveArea(zdo.GetPosition(), owner);
             if (!currentOwnerCovers && coveredByAnyPeer)
             {
@@ -142,7 +189,7 @@ namespace FiresGhettoNetworkMod
             foreach (var peer in ZNet.instance.GetPeers())
             {
                 if (peer == null) continue;
-                // ZNetScene.InActiveArea now takes a world point, not a sector, so compare zones directly.
+                // ZNetScene.InActiveArea takes a world point, not a sector, so compare zones directly.
                 if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(peer.GetRefPos()), sector, near))
                     return true;
             }

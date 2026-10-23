@@ -1,7 +1,7 @@
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// 1.5.37 ([ghost], FiresValcast 0.6.54 creature possession): a player drives a creature with their own input while its BaseAI
+    /// Creature possession (FiresValcast): a player drives a creature with their own input while its BaseAI
     /// is off, so the possessor's game must OWN it (only the owner simulates a Character). Valcast writes the ZDO long
     /// "valcast_possessed" = the possessor's playerID on take (and ClaimOwnership), 0 on release. Server ownership must not take
     /// such a creature back: while the flag is set, the owner is the connected peer whose player has that playerID; when no

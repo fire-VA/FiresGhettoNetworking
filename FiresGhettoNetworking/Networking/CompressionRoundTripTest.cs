@@ -21,7 +21,7 @@ namespace FiresGhettoNetworkMod
         private const string RpcStatus = "FGN_CompTestStatus";  // server -> client (text)
         // Pace the burst so the in-flight queue stays bounded — Valheim back-pressures a full send
         // buffer (ZSteamSocket re-queues on EResult != OK, never drops), so blasting all N at once just
-        // balloons m_sendQueue and made the client tally get read mid-drain (the phantom "576/1000").
+        // balloons m_sendQueue and the client tally gets read mid-drain.
         private const int FlowControlBytes = 512 * 1024;
         private const int DefaultCount = 100;
         private const int DefaultSizeKB = 64;
@@ -29,6 +29,16 @@ namespace FiresGhettoNetworkMod
         private const int MaxSizeKB = 128;
         private const int GzipPartBytes = 2048;
         private const int PlainPartBytes = 4096;
+        // Report wait: a base, plus one second per this many KB sent, clamped to the cap.
+        private const float ReportBaseSeconds = 30f;
+        private const float ReportKBPerSecond = 512f;
+        private const float ReportCapSeconds = 600f;
+        // How long the burst waits for the compression handshake to land after a fresh join.
+        private const float HandshakeWaitSeconds = 8f;
+        // Yield a frame every this many packets (mask), even when the queue drains fast.
+        private const int YieldEveryPacketsMask = 31;
+        // Start offset step into the random block per packet, so consecutive packets differ.
+        private const int RawBlockSeqStride = 7;
 
         private enum PayloadKind { Compressible, Incompressible, WithGzip }
         private const int KindCount = 3;
@@ -147,13 +157,13 @@ namespace FiresGhettoNetworkMod
         // SAFETY CAP only — the report fires as soon as all packets actually arrive (ReportAfter polls).
         // This just bounds the wait if they never all arrive (a real stall). Generous, since the pipe is
         // send-rate limited and a big incompressible burst legitimately takes a while to drain.
-        private static float ReportDelay(int count, int sizeKB) => Mathf.Clamp(30f + (count * sizeKB) / 512f, 30f, 600f);
+        private static float ReportDelay(int count, int sizeKB) => Mathf.Clamp(ReportBaseSeconds + (count * sizeKB) / ReportKBPerSecond, ReportBaseSeconds, ReportCapSeconds);
 
         private static IEnumerator ReportAfter(float maxSeconds, Terminal ctx)
         {
-            // Fire as soon as every packet has actually arrived (the pipe is send-rate limited, so a big
+            // Report as soon as every packet has actually arrived (the pipe is send-rate limited, so a big
             // incompressible burst takes a while to drain — nothing is lost, ZSteamSocket re-queues), or
-            // bail at the safety cap. No more fixed-timer guessing that read the tally mid-drain.
+            // bail at the safety cap, so the tally is never read mid-drain.
             float deadline = Time.time + maxSeconds;
             while (Time.time < deadline && s_received < s_expectCount)
                 yield return null;
@@ -208,7 +218,7 @@ namespace FiresGhettoNetworkMod
             // The compression handshake lands a second or two after a peer connects; if the test is
             // fired right after joining, wait briefly so the burst is actually compressed and the
             // reported status is accurate (avoids a misleading INACTIVE on a healthy connection).
-            float deadline = Time.time + 8f;
+            float deadline = Time.time + HandshakeWaitSeconds;
             while (!IsCompressionActive(target) && Time.time < deadline) yield return null;
             bool active = IsCompressionActive(target);
             LoggerOptions.LogMessage($"[CompTest] diag: target={target} peers={ZNet.instance.GetPeers().Count} "
@@ -222,7 +232,7 @@ namespace FiresGhettoNetworkMod
             {
                 // Flow control: pace to the pipe so the in-flight queue stays bounded. Without it a big
                 // burst piles into m_sendQueue and the tally is read before the send-rate-limited drain
-                // finishes (the phantom "576/1000" — nothing lost, just not arrived yet).
+                // finishes (nothing lost, just not arrived yet).
                 while (GetTargetQueueBytes(target) > FlowControlBytes)
                 {
                     if (!PeerConnected(target)) yield break;   // they disconnected — stop
@@ -235,7 +245,7 @@ namespace FiresGhettoNetworkMod
                 pkg.Write(payload);
                 pkg.Write(Checksum(payload));
                 ZRoutedRpc.instance.InvokeRoutedRPC(target, RpcData, pkg);
-                if ((seq & 31) == 31) yield return null; // keep the frame breathing even when the queue drains fast
+                if ((seq & YieldEveryPacketsMask) == YieldEveryPacketsMask) yield return null; // keep the frame breathing even when the queue drains fast
             }
         }
 
@@ -301,7 +311,7 @@ namespace FiresGhettoNetworkMod
                 {
                     byte[] payload = new byte[size];
                     byte[] block = RawBlock;
-                    int off = (seq * 7) % block.Length;
+                    int off = (seq * RawBlockSeqStride) % block.Length;
                     for (int i = 0; i < size; i++) payload[i] = block[(off + i) % block.Length];
                     return payload;
                 }
@@ -347,7 +357,7 @@ namespace FiresGhettoNetworkMod
                 case PayloadKind.Incompressible:
                 {
                     byte[] block = RawBlock;
-                    int off = (seq * 7) % block.Length;
+                    int off = (seq * RawBlockSeqStride) % block.Length;
                     foreach (int i in probeOffsets) if (payload[i] != block[(off + i) % block.Length]) return false;
                     return true;
                 }

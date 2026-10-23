@@ -4,7 +4,7 @@ using HarmonyLib;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// 1.5.47, a DRY RUN (it changes nothing): how many of the SSS create/destroy passes (~490 a minute with two players) found the
+    /// A DRY RUN (it changes nothing): how many of the SSS create/destroy passes found the
     /// world exactly as the pass before left it, so they could have been skipped. A pass counts as quiet when, since the previous
     /// pass ended:
     ///   - no ZDO was added to or removed from any sector (ZDOMan.AddToSector / RemoveFromSector: every create, destroy, sector
@@ -12,8 +12,8 @@ namespace FiresGhettoNetworkMod
     ///   - the loaded-zone count is the same (a zone loading lets waiting near objects through the filter),
     ///   - every source (ready peer, SSS test area) is in the same zone, in the same order,
     ///   - and the previous pass created and removed no instance (a creation backlog keeps passes busy).
-    /// The count goes into the per-minute "[SSS] server pass" Debug line. If it is high while players stand still, a later build
-    /// can skip those passes; until then nothing is skipped. The hooks sit in the SSS patch set, so they exist only with SSS on.
+    /// The count goes into the per-minute "[SSS] server pass" Debug line. Nothing is skipped; the count shows whether skipping
+    /// such passes would pay off. The hooks sit in the SSS patch set, so they exist only with SSS on.
     /// </summary>
     [HarmonyPatch]
     internal static class SssQuietPass

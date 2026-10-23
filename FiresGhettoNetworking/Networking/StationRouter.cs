@@ -10,13 +10,18 @@ namespace FiresGhettoNetworkMod
     /// or ballista. Vanilla asks whoever the inserting player's game believes owns it, and the item is lost when that is wrong;
     /// the server forwards the request once the real owner's game knows it owns the station.
     /// </summary>
+    // Smelter output / inserts could vanish on dedicated servers when the router would (a) hand an OWNED station to the inserting player whenever it judged the owner not to be running it (a stale ref pos after
+    // a teleport was enough), so the old vanilla owner and the new one both smelted the same queue; (b) count an owner within a 160 m
+    // box as running it, where its game may have no instance and vanilla drops the RPC silently; (c) run the RPC on the headless
+    // server. Now an owned station is never reassigned (vanilla's ReleaseNearbyZDOS moves a stale owner), only an owner whose active
+    // area holds the station counts, nothing runs on the server, and an insert that cannot be delivered is given back at the player's
+    // feet instead of being eaten.
     [HarmonyPatch]
     public static class StationRouter
     {
         public static ConfigEntry<bool> ConfigEnabled;
 
         private const double HoldLimitSeconds = 30.0;
-        private const float OwnerReachMeters = 160f;
 
         private static readonly HashSet<int> s_methods = new HashSet<int>
         {
@@ -30,6 +35,11 @@ namespace FiresGhettoNetworkMod
             "RPC_RemoveDoneItem".GetStableHashCode(),
             "RPC_ToggleOn".GetStableHashCode(),
         };
+
+        private static readonly int s_addOre = "RPC_AddOre".GetStableHashCode();
+        private static readonly int s_addItem = "RPC_AddItem".GetStableHashCode();
+        private static readonly int s_addAmmo = "RPC_AddAmmo".GetStableHashCode();
+        private static readonly int s_addFuel = "RPC_AddFuel".GetStableHashCode();
 
         private sealed class Held
         {
@@ -45,9 +55,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("12 - Advanced", "Fix Lost Station Inserts", true,
-                "Vanilla can lose an item put into or taken from a smelter, kiln, fire or other station when your game is wrong about\n" +
-                "who runs it. With this on, the server routes it to whoever really does. Takes effect live. Dedicated server only;\n" +
-                "players do not need FGN.");
+                Cfg.Adv("Stops smelters, kilns and fires losing items put in or taken out (server only)."));
         }
 
         internal static void OnZNetShutdown()
@@ -70,15 +78,16 @@ namespace FiresGhettoNetworkMod
             var request = CopyRequest(data);
             if (s_waiting.Contains(zdo.m_uid))
             {
+                LoggerOptions.LogDebug($"[StationRouter] {Describe(zdo)}: {MethodName(request)} queued behind an earlier request.");
                 Hold(request, zdo.GetOwner());
                 return true;
             }
 
             long owner = ResolveOwner(routedRpc, zdo, request.m_senderPeerID);
-            if (owner == 0L) return false;
-            if (Deliver(routedRpc, zdo, request, owner)) return true;
+            if (owner != 0L && Deliver(zdo, request, owner)) return true;
 
-            ZDOMan.instance.ForceSendZDO(owner, zdo.m_uid);
+            if (owner != 0L) ZDOMan.instance.ForceSendZDO(owner, zdo.m_uid);
+            LoggerOptions.LogDebug($"[StationRouter] {Describe(zdo)}: {MethodName(request)} from {PeerName(request.m_senderPeerID)} held (owner {zdo.GetOwner()}, target {owner}).");
             Hold(request, owner);
             return true;
         }
@@ -103,7 +112,7 @@ namespace FiresGhettoNetworkMod
                 var zdo = ZDOMan.instance.GetZDO(station);
                 if (zdo == null)
                 {
-                    LogDropped(held, "the station no longer exists");
+                    GiveBack(held, null, "the station no longer exists");
                     s_held.RemoveAt(i--);
                     continue;
                 }
@@ -116,7 +125,7 @@ namespace FiresGhettoNetworkMod
                         held.Target = owner;
                         ZDOMan.instance.ForceSendZDO(owner, zdo.m_uid);
                     }
-                    if (owner != 0L && Deliver(routedRpc, zdo, held.Request, owner))
+                    if (owner != 0L && Deliver(zdo, held.Request, owner))
                     {
                         s_held.RemoveAt(i--);
                         continue;
@@ -125,7 +134,7 @@ namespace FiresGhettoNetworkMod
 
                 if (now - held.Since > HoldLimitSeconds)
                 {
-                    LogDropped(held, "nobody running the station could be reached");
+                    GiveBack(held, zdo, "nobody running the station could be reached");
                     s_held.RemoveAt(i--);
                     continue;
                 }
@@ -133,45 +142,45 @@ namespace FiresGhettoNetworkMod
             }
         }
 
+        /// <summary>The peer to deliver to, or 0 (hold). Only a station with NO player owner (none, or the headless server) is handed to
+        /// the player using it, and only when it is inside that player's active area. A player owner is never replaced here.</summary>
         private static long ResolveOwner(ZRoutedRpc routedRpc, ZDO zdo, long sender)
         {
             long owner = zdo.GetOwner();
-            if (RunsStation(routedRpc, owner, zdo)) return owner;
+            long server = VanillaAccess.RoutedRpcId(routedRpc);
+            if (owner != 0L && owner != server)
+            {
+                if (RunsStation(owner, zdo)) return owner;
+                LoggerOptions.LogDebug($"[StationRouter] {Describe(zdo)}: owner {PeerName(owner)} does not cover it; not reassigned, held for vanilla's hand-off.");
+                return 0L;
+            }
 
             var user = ZNet.instance.GetPeer(sender);
-            if (user == null || !user.IsReady() || !ZNetScene.InActiveArea(zdo.GetPosition(), user.GetRefPos())) return 0L;
-            if (owner != sender)
+            if (user == null || !user.IsReady()
+                || !ZNetScene.InActiveArea(zdo.GetPosition(), user.GetRefPos()))
             {
-                zdo.SetOwner(sender);
-                LoggerOptions.LogInfo($"[StationRouter] {Describe(zdo)} was not being run by anyone, handed to {PeerName(sender)}.");
+                LoggerOptions.LogDebug($"[StationRouter] {Describe(zdo)}: no player owner and {PeerName(sender)} does not cover it; held.");
+                return 0L;
             }
+            zdo.SetOwner(sender);
+            LoggerOptions.LogInfo($"[StationRouter] {Describe(zdo)} had no player running it ({(owner == 0L ? "no owner" : "server")}), handed to {PeerName(sender)}.");
             return sender;
         }
 
-        private static bool RunsStation(ZRoutedRpc routedRpc, long owner, ZDO zdo)
+        private static bool RunsStation(long owner, ZDO zdo)
         {
-            if (owner == 0L) return false;
-            if (owner == VanillaAccess.RoutedRpcId(routedRpc))
-                return ZNetScene.instance != null && ZNetScene.instance.FindInstance(zdo) != null;
             var peer = ZNet.instance.GetPeer(owner);
             if (peer == null || !peer.IsReady()) return false;
-            Vector3 position = zdo.GetPosition();
-            Vector3 refPos = peer.GetRefPos();
-            return ZNetScene.InActiveArea(position, refPos)
-                || Mathf.Max(Mathf.Abs(position.x - refPos.x), Mathf.Abs(position.z - refPos.z)) <= OwnerReachMeters;
+            return ZNetScene.InActiveArea(zdo.GetPosition(), peer.GetRefPos());
         }
 
-        private static bool Deliver(ZRoutedRpc routedRpc, ZDO zdo, ZRoutedRpc.RoutedRPCData request, long owner)
+        private static bool Deliver(ZDO zdo, ZRoutedRpc.RoutedRPCData request, long owner)
         {
             request.m_targetPeerID = owner;
-            if (owner == VanillaAccess.RoutedRpcId(routedRpc))
-            {
-                request.m_parameters.SetPos(0);
-                VanillaAccess.HandleRoutedRpc(routedRpc, request);
-                return true;
-            }
             if (!KnowsOwnership(owner, zdo)) return false;
-            VanillaAccess.RouteRpc(routedRpc, request);
+            request.m_parameters.SetPos(0);
+            VanillaAccess.RouteRpc(ZRoutedRpc.instance, request);
+            LoggerOptions.LogDebug($"[StationRouter] {Describe(zdo)}: {MethodName(request)} from {PeerName(request.m_senderPeerID)} delivered to {PeerName(owner)}.");
             return true;
         }
 
@@ -187,6 +196,52 @@ namespace FiresGhettoNetworkMod
         {
             s_held.Add(new Held { Request = request, Target = target, Since = Time.realtimeSinceStartupAsDouble });
             s_waiting.Add(request.m_targetZDO);
+        }
+
+        /// <summary>An insert that could not be delivered: the player's game already took the item, so one is dropped back at their feet
+        /// (a server-made ItemDrop; vanilla hands it to the covering player). A request that carries no item is only logged.</summary>
+        private static void GiveBack(Held held, ZDO zdo, string reason)
+        {
+            string item = ItemOf(held.Request, zdo);
+            var peer = ZNet.instance != null ? ZNet.instance.GetPeer(held.Request.m_senderPeerID) : null;
+            GameObject prefab = item != null && ZNetScene.instance != null ? ZNetScene.instance.GetPrefab(item) : null;
+            if (prefab == null || prefab.GetComponent<ItemDrop>() == null || peer == null)
+            {
+                LogDropped(held, reason + (item != null ? $" ({item} not given back: {(peer == null ? "player gone" : "unknown item")})" : ""));
+                return;
+            }
+            Vector3 at = peer.GetRefPos() + Vector3.up;
+            var drop = Object.Instantiate(prefab, at, Quaternion.identity).GetComponent<ItemDrop>();
+            drop.SetStack(1);
+            LoggerOptions.LogWarning($"[StationRouter] a {MethodName(held.Request)} to {(zdo != null ? Describe(zdo) : "a station")} from "
+                + $"{PeerName(held.Request.m_senderPeerID)} was not delivered ({reason}); 1 {item} given back at ({at.x:F0}, {at.z:F0}).");
+        }
+
+        private static string ItemOf(ZRoutedRpc.RoutedRPCData request, ZDO zdo)
+        {
+            int m = request.m_methodHash;
+            if (m == s_addOre || m == s_addItem || m == s_addAmmo)
+            {
+                try { request.m_parameters.SetPos(0); return request.m_parameters.ReadString(); }
+                catch { return null; }
+            }
+            if (m == s_addFuel && zdo != null && ZNetScene.instance != null)
+            {
+                var prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+                if (prefab == null) return null;
+                Smelter smelter = prefab.GetComponentInChildren<Smelter>(true);
+                if (smelter != null && smelter.m_fuelItem != null) return smelter.m_fuelItem.name;
+                Fireplace fire = prefab.GetComponentInChildren<Fireplace>(true);
+                if (fire != null && fire.m_fuelItem != null) return fire.m_fuelItem.name;
+            }
+            return null;
+        }
+
+        private static string MethodName(ZRoutedRpc.RoutedRPCData request)
+        {
+            foreach (string n in new[] { "RPC_AddOre", "RPC_AddFuel", "RPC_AddItem", "RPC_AddAmmo", "RPC_AddFuelAmount", "RPC_EmptyProcessed", "RPC_Tap", "RPC_RemoveDoneItem", "RPC_ToggleOn" })
+                if (n.GetStableHashCode() == request.m_methodHash) return n;
+            return request.m_methodHash.ToString();
         }
 
         private static ZRoutedRpc.RoutedRPCData CopyRequest(ZRoutedRpc.RoutedRPCData data)

@@ -89,7 +89,7 @@ namespace FiresGhettoNetworkMod
 
         /// <summary>
         /// Deciding reads the game's IL, and the first read of those method bodies can stall for seconds when that memory is
-        /// paged out (rig R22b: 1,559 ms, nearly all of it blocked, inside a joining player's frame). It is done on the
+        /// paged out (over a second inside a joining player's frame). It is done on the
         /// server's first frame with a world loaded, before anyone can join, instead of at the first zone change.
         /// </summary>
         internal static void DecideBeforeJoins(ZNet net)

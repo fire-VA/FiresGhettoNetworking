@@ -8,7 +8,7 @@ namespace FiresGhettoNetworkMod
     /// <summary>
     /// ZRpc drops a peer whose keepalive has gone unanswered for 30 seconds, and ZSteamSocket queues the 5-byte ping and
     /// its reply behind every packet already waiting to go out. A peer taking a large transfer was timed out while the
-    /// link was still delivering (rig, 2026-09-13: kicked 79 s into an 8 GB stream). Keepalives go to the front instead;
+    /// link was still delivering. Keepalives go to the front instead;
     /// their only wait is then Steam's own send buffer.
     /// </summary>
     [HarmonyPatch]
@@ -17,8 +17,10 @@ namespace FiresGhettoNetworkMod
         private const int KeepaliveBytes = 5;
         private const double ReportIntervalSeconds = 300.0;
 
-        private static AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>> s_sendQueue;
-        private static Action<ZSteamSocket> s_sendQueuedPackages;
+        // A field typed with a Steam type makes the CLASS fail to load on the Microsoft Store build (no ZSteamSocket), and FGN's Awake
+        // names this class, so all of FGN failed. The delegates are kept as object and cast only inside the Steam-only methods.
+        private static object s_sendQueue;            // AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>>
+        private static object s_sendQueuedPackages;   // Action<ZSteamSocket>
         private static int s_jumped;
         private static int s_deepestQueue;
         private static long s_nextReport;
@@ -45,7 +47,7 @@ namespace FiresGhettoNetworkMod
             if (!(FiresGhettoNetworkMod.ConfigKeepaliveFirst?.Value ?? false)) return true;
             if (pkg == null || pkg.Size() != KeepaliveBytes || !__instance.IsConnected()) return true;
 
-            Queue<byte[]> queue = s_sendQueue(__instance);
+            Queue<byte[]> queue = ((AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>>)s_sendQueue)(__instance);
             if (queue == null || queue.Count == 0) return true;
 
             // Method hash 0 is ZRpc's ping and pong and nothing else.
@@ -56,7 +58,7 @@ namespace FiresGhettoNetworkMod
             queue.Clear();
             queue.Enqueue(packet);
             for (int i = 0; i < waiting.Length; i++) queue.Enqueue(waiting[i]);
-            s_sendQueuedPackages(__instance);
+            ((Action<ZSteamSocket>)s_sendQueuedPackages)(__instance);
 
             s_jumped++;
             if (waiting.Length > s_deepestQueue) s_deepestQueue = waiting.Length;

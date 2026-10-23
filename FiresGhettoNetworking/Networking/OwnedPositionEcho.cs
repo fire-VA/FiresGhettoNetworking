@@ -10,7 +10,7 @@ namespace FiresGhettoNetworkMod
     /// setting data on a player), and ZSyncTransform.OwnerSync only rewrites the position when the body has moved since its last
     /// write. A body that stands still keeps the server's stale position in its ZDO: during a teleport the player is pinned at the
     /// target while it waits for the area, so its ZDO stays in the old sector, the new area's object list leaves the player out, and
-    /// the instance cleanup destroys the local player (2026-10-02, the Enigma world: a join script's teleport plus a goto).
+    /// the instance cleanup destroys the local player.
     /// When received data moves an object this client owns and runs a ZSyncTransform for, the owner's real position is written back
     /// as soon as the receive ends (see s_moved), before anything in that frame can act on the stale sector. Nothing is sent that
     /// vanilla would not send: it is the owner's ordinary position write.
@@ -23,6 +23,8 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     internal static class OwnedPositionEcho
     {
+        private const float LogIntervalSeconds = 10f;
+
         private static bool s_receiving;
         private static float s_nextLog;
         internal static long Restored;
@@ -31,8 +33,7 @@ namespace FiresGhettoNetworkMod
         // vanilla records the received revision for the server (peer.m_zdos) right after it, so a write-back there would be
         // recorded as already sent and the server would keep the stale position. Not left to the next OwnerSync either: that runs
         // in LateUpdate, and ZNetScene.Update's RemoveObjects runs before it in the same frame, sees the owned object's ZDO in the
-        // stale sector and destroys it (the local player, mid-teleport, 2026-10-02 Enigma: EWP rules writing the player on
-        // every teleport landing).
+        // stale sector and destroys it (e.g. the local player mid-teleport).
         private static readonly List<KeyValuePair<ZDO, ZNetView>> s_moved = new List<KeyValuePair<ZDO, ZNetView>>();
 
         [HarmonyPatch(typeof(ZDOMan), "RPC_ZDOData"), HarmonyPrefix]
@@ -57,7 +58,7 @@ namespace FiresGhettoNetworkMod
                 if (sync != null) sync.m_positionCached = body;
                 Restored++;
                 if (Time.unscaledTime < s_nextLog) continue;
-                s_nextLog = Time.unscaledTime + 10f;
+                s_nextLog = Time.unscaledTime + LogIntervalSeconds;
                 LoggerOptions.LogDebug($"[OwnedPositionEcho] received data moved an object this client owns ({view.gameObject.name}) to ({was.x:0}, {was.z:0}), "
                     + $"{Vector3.Distance(was, body):0} m from where it is; put back to ({body.x:0}, {body.z:0}) ({Restored} so far)");
             }

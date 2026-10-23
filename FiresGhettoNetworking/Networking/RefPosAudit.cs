@@ -3,8 +3,7 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// 1.5.23 ([generator], HomesteadRun HR1): the bot's companions were handed to the observer's client every 2-6 s although they
-    /// stood 6 m from the bot. Ownership hand-offs (vanilla ReleaseZDOS and FGN's ServerOwnershipPatchesV3) judge "does the owner
+    /// Objects can be handed to another client even while they stand right next to their owner. Ownership hand-offs (vanilla ReleaseZDOS and FGN's ServerOwnershipPatchesV3) judge "does the owner
     /// still cover it" by the owner peer's REPORTED reference position (ZNetPeer.GetRefPos), which a client sends every 2 s and
     /// which vanilla also points at any owned Tracker (cart, ship) every FixedUpdate. This logs, every 30 s on a dedicated server,
     /// each peer's reported position against its character's position, so a reported position that has drifted away shows.
@@ -14,8 +13,8 @@ namespace FiresGhettoNetworkMod
         private const float ReportSeconds = 30f;
         private const float DriftWarnMeters = 32f;
         private static float s_next = -1f;
-        // 1.5.48 (FGN user, 1.5.41: after a portal the reported position stayed 12 km from the character; Fire: "we should be using the
-        // ACTUAL position for ownership"): twice a second, a peer whose reported position is farther than SnapMeters from its character
+        // A reported position can stay far from the character (e.g. after a portal), so ownership should follow the actual
+        // position: twice a second, a peer whose reported position is farther than SnapMeters from its character
         // gets the character's position instead. Vanilla points the reported position at an owned ship or cart, which stays within a
         // few metres, so only a stale report (a portal, a loading screen) is replaced; the client's next report (every 2 s) wins again
         // once it is near. Every ownership and zone decision that reads ZNetPeer.GetRefPos then follows the body.

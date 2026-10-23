@@ -199,6 +199,12 @@ namespace FiresGhettoNetworkMod.AutoTune
         private const int ImplausibleCoreCount = 32;
         private const int ImplausibleRamMb = 128 * 1024;
 
+        // Minimum host specs for each server tier.
+        private const int HighTierMinCores = 8;
+        private const int HighTierMinRamMb = 16 * 1024;
+        private const int MediumTierMinCores = 4;
+        private const int MediumTierMinRamMb = 8 * 1024;
+
         private static Tier ScoreServerTier(int cores, int ramMb)
         {
             if (cores > ImplausibleCoreCount || ramMb > ImplausibleRamMb)
@@ -211,8 +217,8 @@ namespace FiresGhettoNetworkMod.AutoTune
                     + "manually if you know your real allocation.");
                 return Tier.Medium;
             }
-            if (cores >= 8 && ramMb >= 16 * 1024) return Tier.High;
-            if (cores >= 4 && ramMb >= 8  * 1024) return Tier.Medium;
+            if (cores >= HighTierMinCores && ramMb >= HighTierMinRamMb) return Tier.High;
+            if (cores >= MediumTierMinCores && ramMb >= MediumTierMinRamMb) return Tier.Medium;
             return Tier.Low;
         }
 
@@ -220,9 +226,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         // logged by AutoTuneApplier when it writes them. The zone radius is the tier's value, not EffectiveConfig's: that one
         // asks RenderLimitsCompat.Present, which caches its answer, and at Awake plugins loading after FGN are not listed yet.
         private static void LogAppliedTier(Tier tier, int cores, int ramMb)
-        {
-            TierPreset preset = TierPresets.For(tier);
-            LoggerOptions.LogMessage($"[AutoTune] SERVER auto-tune APPLIED: tier={tier} (cores={cores}, RAM={ramMb}MB). In use: "
+        {            LoggerOptions.LogMessage($"[AutoTune] SERVER auto-tune APPLIED: tier={tier} (cores={cores}, RAM={ramMb}MB). In use: "
                 + $"ZDO Throttle Distance {EffectiveConfig.ZDOThrottleDistance():0}m, "
                 + $"AI LOD Near {EffectiveConfig.AILODNearDistance():0}m / Far {EffectiveConfig.AILODFarDistance():0}m / "
                 + $"Throttle Factor {EffectiveConfig.AILODThrottleFactor():0.00}, "

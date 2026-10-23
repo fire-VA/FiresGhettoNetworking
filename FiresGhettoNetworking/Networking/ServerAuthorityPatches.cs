@@ -9,8 +9,6 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     public static class ServerAuthorityPatches
     {
-        private const int DefaultActiveArea = 3;
-        private const int DefaultDistantArea = 5;
         private const float ZoneSizeMeters = 64f;
 
         private const float KillPlaneY = -5000f;
@@ -102,12 +100,13 @@ namespace FiresGhettoNetworkMod
             return false;
         }
 
-        private static readonly List<ZDO> _cdoNearScratch = new List<ZDO>(8192);
-        private static readonly List<ZDO> _cdoDistantScratch = new List<ZDO>(8192);
+        private const int ZdoScratchCapacity = 8192;
+        private static readonly List<ZDO> _cdoNearScratch = new List<ZDO>(ZdoScratchCapacity);
+        private static readonly List<ZDO> _cdoDistantScratch = new List<ZDO>(ZdoScratchCapacity);
         private static int _cdoSources;   // areas collected this frame (ready peers + SSS test areas)
         private static float _cdoNextPass;   // realtime of the next server object pass ('Server Object Pass Hz')
-        private static readonly List<ZDO> _cdoNearFiltered = new List<ZDO>(8192);
-        private static readonly List<ZDO> _cdoDistantFiltered = new List<ZDO>(8192);
+        private static readonly List<ZDO> _cdoNearFiltered = new List<ZDO>(ZdoScratchCapacity);
+        private static readonly List<ZDO> _cdoDistantFiltered = new List<ZDO>(ZdoScratchCapacity);
 
         [HarmonyPatch(typeof(ZNetScene), "CreateDestroyObjects")]
         [HarmonyPrefix]
@@ -119,7 +118,7 @@ namespace FiresGhettoNetworkMod
                 return true;
             }
 
-            // 1.5.23 (BlueHills proof 3, one player in a city: "filter 12.15 ms, remove 8.32 ms" a frame, every frame): the pass
+            // Filtering and removal cost several ms a frame in a dense city, so the pass
             // runs at 'Server Object Pass Hz' (default 10) instead of every frame. Each pass that does run collects FRESH lists, so
             // RemoveObjects never sees a stale one (a stale list would destroy objects the server just spawned); in between, nothing
             // is created or removed and vanilla's pass is skipped too.
@@ -137,23 +136,26 @@ namespace FiresGhettoNetworkMod
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(ExtendedZoneRadius()));
                 long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
-                bool quiet = SssQuietPass.WasQuiet(_cdoZones);   // 1.5.47 dry run: read before this pass changes anything
+                bool quiet = SssQuietPass.WasQuiet(_cdoZones);   // read before this pass changes anything
+                long tQuiet = System.Diagnostics.Stopwatch.GetTimestamp();
                 FilterAndDedupeZdos(_cdoNearScratch, _cdoNearFiltered, requireLoadedZone: true);
+                long tNear = System.Diagnostics.Stopwatch.GetTimestamp();
                 FilterAndDedupeZdos(_cdoDistantScratch, _cdoDistantFiltered, requireLoadedZone: false);
+                long tDistant = System.Diagnostics.Stopwatch.GetTimestamp();
                 RecordCreateDestroyObjectsDiagnostics();
                 long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+                // The "filter" figure split into its parts (Debug line only; timing, no behaviour change)
+                ServerFrameSplit.FilterParts(tQuiet - t1, tNear - tQuiet, tDistant - tNear, t2 - tDistant);
 
                 int instancesBefore = __instance.m_instances.Count;
                 __instance.CreateObjects(_cdoNearFiltered, _cdoDistantFiltered);
                 int instancesCreated = __instance.m_instances.Count;
                 long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
 
-                // REACTIVE orphan prune. The previous code walked the ENTIRE
-                // m_instances dictionary every frame (30 Hz) to pre-empt a rare
-                // null-view/ZDO NRE in RemoveObjects — an O(instances) scan every tick
-                // to catch an orphan that only appears when another mod mismanages
-                // ZNetScene state (e.g. a permission mod blocking WearNTear.RPC_Remove
-                // on the dedi). Instead, let RemoveObjects run and only scan-and-prune
+                // REACTIVE orphan prune. A null-view/ZDO NRE in RemoveObjects only
+                // appears when another mod mismanages ZNetScene state (e.g. a permission
+                // mod blocking WearNTear.RPC_Remove on the dedi), so rather than scan
+                // m_instances every frame, let RemoveObjects run and only scan-and-prune
                 // when it actually hits one, then retry. On a healthy server (the normal
                 // case) this is zero per-frame prune cost; the full scan happens only the
                 // moment an orphan really exists.
@@ -179,9 +181,8 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        // 1.5.45 (FGN perf 10-07: "SSS filter 2.13 ms a pass", the largest FGN cost with two players): vanilla FindSectorObjects
-        // clears its visited-sector set on every call, so two players' overlapping areas returned every shared sector twice and
-        // the filter deduped object by object in a HashSet. Now every source's NEAR rings are walked first and then every
+        // Vanilla FindSectorObjects clears its visited-sector set on every call, so two players' overlapping areas would return
+        // every shared sector twice and need deduping object by object. Instead every source's NEAR rings are walked first and then every
         // source's DISTANT rings, all through one shared visited set (vanilla's own FindObjects / FindDistantObjects, which add
         // each sector they read). Each sector is read once: near wins over distant, exactly the union of the per-player calls.
         // One source still uses vanilla's FindSectorObjects unchanged.
@@ -278,23 +279,22 @@ namespace FiresGhettoNetworkMod
                 // SERVER branch destroys the ZDO ("Destroyed invalid prefab ZDO"), wiping the client's object.
                 // Leaving it out of the server's create sweep keeps it client-owned and intact.
                 // Prefab 0 is skipped the same way: nothing can be built from it, so letting it through only reached
-                // vanilla's destroy, and prefab-less ZDOs are how mods keep pure data objects (2026-10-02 EWP review).
+                // vanilla's destroy, and prefab-less ZDOs are how mods keep pure data objects.
                 int prefab = zdo.m_prefab;
                 if (prefab == 0 || (scene != null && !scene.HasPrefab(prefab))) continue;
                 if (loadedZones != null)
                 {
-                    // 1.5.45: objects arrive grouped by sector, so the zone lookup is made once per sector run, not per object
+                    // Objects arrive grouped by sector, so the zone lookup is made once per sector run, not per object
                     Vector2s sector = zdo.GetSector();
                     if (!haveLast || sector.x != lastSector.x || sector.y != lastSector.y) { lastSector = sector; lastLoaded = loadedZones.ContainsKey(sector); haveLast = true; }
                     if (!lastLoaded) continue;
                 }
-                // 1.5.45: no duplicates to drop. CollectZdosFromAllPeerActiveAreas reads each sector once across all sources (the
-                // per-object HashSet that 1.5.22 kept for two or more sources is gone)
+                // No duplicates to drop: CollectZdosFromAllPeerActiveAreas reads each sector once across all sources.
                 dest.Add(zdo);
             }
         }
 
-        // Always the config value, Auto-Tune on or off (Fire 2026-10-01): every tier says 0, and a server that raised it keeps it.
+        // Always the config value, Auto-Tune on or off: every tier says 0, and a server that raised it keeps it.
         internal static int ExtendedZoneRadius() => RenderLimitsCompat.DeferRadius(FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value);
 
         private static void RecordCreateDestroyObjectsDiagnostics()
@@ -492,10 +492,8 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool MeleeWeaponTrail_CustomFixedUpdate_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
-        // 1.5.25 (user report via Fire, SSS + Selective: putting a saddle on a tame printed "Failed to find rpc method 1127325378",
-        // = "AddSaddle", and the saddle item was gone): Tameable.Awake and Update used to be skipped on a dedicated server, so a tame
-        // the server owns had none of its RPCs ("Command", "SetName", "RPC_UnSummon", "AddSaddle", "SetSaddle"), no feeding hook and
-        // no TamingUpdate. They run again; only SetText stays off (it reads the platform's local user, which a headless server lacks).
+        // Tameable.Awake and Update must run on a dedicated server, or a tame the server owns has none of its RPCs ("Command",
+        // "SetName", "RPC_UnSummon", "AddSaddle", "SetSaddle"), no feeding hook and no TamingUpdate. Only SetText stays off (it reads the platform's local user, which a headless server lacks).
         [HarmonyPatch(typeof(Tameable), "SetText")]
         [HarmonyPrefix]
         public static bool Tameable_SetText_Prefix() => !ServerClientUtils.ZNetIsDedicated();
@@ -517,8 +515,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool Heightmap_RebuildRenderMesh_Prefix() => !ServerClientUtils.ZNetIsDedicated();
 
-        // 1.5.36 (user report via Fire, SSS + Selective: "NullReferenceException at ShieldDomeImageEffect.GetDomeColor" from
-        // ShieldGenerator.UpdateShield every 0.22 s): skipping this Awake on a dedi also skipped the one line that sets the static
+        // Skipping this Awake entirely on a dedi would also skip the one line that sets the static
         // gradient GetDomeColor reads, and a server-simulated shield generator calls it on every update. The dedi still skips the
         // material and texture, but takes the prefab's own gradient and smoothing as vanilla Awake does.
         [HarmonyPatch(typeof(ShieldDomeImageEffect), "Awake")]
@@ -531,7 +528,7 @@ namespace FiresGhettoNetworkMod
             return false;
         }
 
-        /// <summary>1.5.36: no ShieldDomeImageEffect has woken on this dedi (the camera's is inactive or absent): the gradient from any
+        /// <summary>When no ShieldDomeImageEffect has woken on this dedi (the camera's is inactive or absent): the gradient from any
         /// loaded one, else a plain white one, so GetDomeColor never reads null.</summary>
         [HarmonyPatch(typeof(ShieldGenerator), "UpdateShield")]
         [HarmonyPrefix]
@@ -653,7 +650,6 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogWarning($"[HoldStillOnDedi] ZSyncTransform kinematic snapshot not updated ({ex.Message}); the body is still frozen.");
             }
         }
-
 
         // The solid-surface mask lives in SolidSurface now: same config entry, one parser, shared with
         // the ground-snap fix so both answer "what can you stand on?" identically.

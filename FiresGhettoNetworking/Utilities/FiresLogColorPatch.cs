@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Reflection;
 using System.Text.RegularExpressions;
 using BepInEx.Logging;
 using HarmonyLib;
@@ -13,9 +11,7 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     internal static class FiresLogColorPatch
     {
-        // Default color for our mod tag when no class-keyword matches.
-        // Magenta to match FAT — keeps a consistent visual identity
-        // across the Fires* mod family.
+        // Colour for our mod tag when no class keyword matches; shared by the Fires* mod family.
         private const ConsoleColor DefaultColor = ConsoleColor.Magenta;
 
         // First-match-wins keyword → color rules. Substring match against
@@ -99,22 +95,11 @@ namespace FiresGhettoNetworkMod
             @"^\s*\[(?:Fires[A-Za-z0-9_:]*|VerdantsAscent[A-Za-z0-9_:]*)\]\s*\[([^\]]+)\]",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-        // Reflection cache — BepInEx.ConsoleManager is `internal` so
-        // direct access fails CS0122. Resolved once on first call.
-
-        // Cross-mod ownership coordination. Identical pattern to FAT's
-        // copy of FiresLogColorPatch — first Fires* color patch whose
-        // prefix fires claims ownership of the AppDomain-shared key,
-        // subsequent prefixes from other mods see a different owner
-        // and bail.
-        //
-        // Replaces the previous FAT-specific assembly-detection check
-        // which only handled one specific peer. The owner-key approach
-        // handles ANY combination of Fires* mods (FAT / FAP / FGN /
-        // future ports) symmetrically.
+        // Cross-mod ownership: the first Fires* colour patch whose prefix runs claims the
+        // AppDomain-shared key; the same patch in other mods then sees a different owner and
+        // passes through, so any combination of Fires* mods prints each line once.
         private const string OwnerKey = "FiresColorPatch.Owner";
         private const string MyOwnerName = "FiresGhettoNetworkMod";
-
 
         [HarmonyPatch(typeof(ConsoleLogListener), nameof(ConsoleLogListener.LogEvent))]
         [HarmonyPrefix]
@@ -126,9 +111,7 @@ namespace FiresGhettoNetworkMod
                 string message = eventArgs.Data?.ToString();
                 if (string.IsNullOrEmpty(message)) return true;
 
-                // Cross-mod ownership claim — first Fires* color patch to
-                // fire claims ownership. If another mod (FAT / FAP / future)
-                // already claimed, we bail (the owner is processing).
+                // If another mod already claimed ownership, it does the colouring.
                 var owner = AppDomain.CurrentDomain.GetData(OwnerKey) as string;
                 if (owner == null)
                 {
@@ -195,11 +178,8 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        // Manual install hook — call from Awake AFTER ResolveFatPresence
-        // is safe to run (i.e. after all plugins have had a chance to
-        // load). We auto-install via [HarmonyPatch] attribute at PatchAll
-        // time, which is fine — the runtime FAT-detection in the prefix
-        // gates execution per-call.
+        // Explicit install, for when the patch is not picked up by PatchAll. The ownership
+        // check in the prefix gates every call either way.
         public static void Install(Harmony harmony)
         {
             try { harmony.PatchAll(typeof(FiresLogColorPatch)); }

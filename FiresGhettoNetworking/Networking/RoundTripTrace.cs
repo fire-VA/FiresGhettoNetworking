@@ -158,12 +158,13 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>
-        /// 1.5.49 (Xbox build has no ZSteamSocket): every Steam-typed member of RoundTripTrace lives here, so the trace (and its
-        /// ZRpc.Update patch) loads on a build without Steam. Reached only when SteamSide.Present (or from the Recv transpiler).
+        /// Every Steam-typed member of RoundTripTrace lives here, so the trace (and its ZRpc.Update patch) loads on a build without
+        /// Steam (Xbox / Game Pass). Reached only when SteamSide.Present (or from the Recv transpiler).
         /// </summary>
         private static class SteamTrace
         {
-            private static AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>> s_valheimSendQueue;
+            // A Steam-typed field fails the class load on the Microsoft Store build; kept as object, cast where used.
+            private static object s_valheimSendQueue;   // AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>>
             private static bool s_valheimSendQueueResolved;
 
             internal static bool ReadsSteamMessage(CodeInstruction instruction) =>
@@ -233,7 +234,7 @@ namespace FiresGhettoNetworkMod
                     if (field != null && field.FieldType == typeof(Queue<byte[]>))
                         s_valheimSendQueue = AccessTools.FieldRefAccess<ZSteamSocket, Queue<byte[]>>(field);
                 }
-                return s_valheimSendQueue?.Invoke(socket);
+                return ((AccessTools.FieldRef<ZSteamSocket, Queue<byte[]>>)s_valheimSendQueue)?.Invoke(socket);
             }
         }
 
@@ -510,7 +511,7 @@ namespace FiresGhettoNetworkMod
             return receipt;
         }
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): the Steam reads live in SteamTrace, reached through these NoInlining steps
+        // Builds without Steam have no ZSteamSocket: the Steam reads live in SteamTrace, reached through these NoInlining steps
         // only when SteamSide.Present, so no always-on method's JIT ever sets up SteamTrace (its fields name Steam types).
         private static SendQueue CaptureSendQueue(ISocket socket) =>
             SteamSide.Present ? CaptureSteamSendQueue(socket) : new SendQueue();

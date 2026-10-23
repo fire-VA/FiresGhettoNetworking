@@ -5,8 +5,7 @@ namespace FiresGhettoNetworkMod
     /// <summary>
     /// How much a big download brings in per frame. Every Steam message this process receives is counted in the frame that
     /// drained it; a five-second window that took in a megabyte or more is logged with the bytes per frame and the frame
-    /// rate. A transfer paced by the receiver's frames (the 2026-09-28 BC join sync: ~128 KB a frame at 32 fps and at 8 fps)
-    /// shows as a flat KB-a-frame figure whatever the frame rate.
+    /// rate. A transfer paced by the receiver's frames shows as a flat KB-a-frame figure whatever the frame rate.
     /// </summary>
     internal static class RecvPace
     {

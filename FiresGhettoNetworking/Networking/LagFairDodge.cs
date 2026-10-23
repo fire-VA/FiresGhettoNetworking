@@ -5,7 +5,7 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// PvP lag-fair dodge (Fire, 2026-09-28; Tools\REMOTE_MOTION.md). A player-to-player hit that reaches the victim just after
+    /// PvP lag-fair dodge. A player-to-player hit that reaches the victim just after
     /// their dodge's invincibility ended counts as dodged when the dodge covered any moment in the last min(2 × ping + 100 ms,
     /// 200 ms): the time in which the attacker could still have been looking at the dodge. The victim's own game applies damage in
     /// vanilla, so it decides here, and needs FGN; the SERVER turns it on (config, default off) and tells each FGN client that
@@ -25,6 +25,7 @@ namespace FiresGhettoNetworkMod
         private const float PingRefreshSeconds = 1f;
         private const float DefaultPingSeconds = 0.05f;
         private const float MsPerSecond = 1000f;
+        private const float FullStaggerMultiplier = 100f;
 
         private static bool s_serverOn;
         private static bool s_asked;
@@ -36,8 +37,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("10 - Server Authority", "PvP Lag-Fair Dodge", false,
-                "PvP only. A hit landing just after your dodge ended (up to 200 ms, based on ping) still counts as dodged, fixing\n" +
-                "\"I dodged but still got hit\" at a small cost to attackers. Set it on the server; applies to players running FGN.");
+                Cfg.Basic("PvP: a hit landing just after your dodge (lag) still counts as dodged. Set on the server."));
         }
 
         /// <summary>Per session: the rules RPCs, and nothing known about this server until it answers.</summary>
@@ -111,7 +111,7 @@ namespace FiresGhettoNetworkMod
             float window = Mathf.Min(2f * s_pingSeconds + RenderDelaySeconds, MaxWindowSeconds);
             float since = Time.time - s_lastInvincible;
             if (since < 0f || since > window) return false;
-            if (!me.InCutscene() && !me.IsTeleporting() && hit.m_staggerMultiplier >= 100f) me.Stagger(hit.m_dir);
+            if (!me.InCutscene() && !me.IsTeleporting() && hit.m_staggerMultiplier >= FullStaggerMultiplier) me.Stagger(hit.m_dir);
             s_forgiven++;
             LoggerOptions.LogInfo($"[LagFairDodge] {attacker.GetPlayerName()}'s hit arrived {since * MsPerSecond:F0} ms after your dodge ended "
                 + $"(window {window * MsPerSecond:F0} ms): dodged ({s_forgiven} this session).");

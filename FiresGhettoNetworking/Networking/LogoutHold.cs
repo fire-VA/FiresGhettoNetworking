@@ -13,14 +13,14 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Finish sending before logout (R38: a character save sent at logout over crossplay never reached the server). Vanilla logs
+    /// Finish sending before logout, so a character save sent at logout over crossplay reaches the server. Vanilla logs
     /// out in one frame: ContinueLogout → Game.Shutdown → SavePlayerProfile → ZNet.Shutdown → Disconnect → each socket disposed,
     /// which throws away whatever a crossplay socket still held. Steam delivers what it was given; PlayFab doesn't.
     ///
     /// The hold keeps the game running until every crossplay link has had its messages acknowledged by the server (at most 5 s),
     /// then lets vanilla's logout run. "Its messages" are the ones queued when the hold began: the game keeps sending while it
-    /// waits, so an empty queue may never come (R43: the bot waited the full 5 s on 912 B of fresh position updates). It follows the logout-hold protocol the Fires mods share on Game.ContinueLogout, agreed with
-    /// VAngarde's author for its character save (no API between mods):
+    /// waits, so an empty queue may never come (fresh position updates keep arriving). It follows the logout-hold protocol
+    /// the Fires mods share on Game.ContinueLogout, which VAngarde uses for its character save (no API between mods):
     ///   1. hold at most once per logout, keyed on the Game instance;
     ///   2. when holding, start the wait on Game (frames keep running) and return false;
     ///   3. while the own wait is pending, return false for every call (other holders' re-invocations included);
@@ -53,24 +53,22 @@ namespace FiresGhettoNetworkMod
         private static readonly AccessTools.FieldRef<ZPlayFabSocket, PlayFabZLibWorkQueue> s_zlib =
             AccessTools.FieldRefAccess<ZPlayFabSocket, PlayFabZLibWorkQueue>("m_zlibWorkQueue");
 
-        // Fire, 2026-09-29 (R77: Ctrl+C in the dedi's window did nothing, twice; closing the window saved and quit): none of this is
-        // for a dedicated server. There it registers nothing and every hook returns at once, so vanilla's Ctrl+C -> save -> exit runs
+        // None of this is for a dedicated server, where holding a quit stopped Ctrl+C from working. There it registers nothing and every hook returns at once, so vanilla's Ctrl+C -> save -> exit runs
         // untouched. A dedicated server runs -nographics, so it is known from the first line, before ZNet exists.
         private static bool s_dedicated;
 
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Finish Sending Before Logout", true,
-                "Crossplay (PlayFab) only. Logout waits up to 5 s for the server to confirm what was queued (such as your character\n" +
-                "save) instead of dropping it, and quitting from a world logs out first. Client only.");
+                Cfg.Adv("Crossplay: logout waits up to 5 s so your last data, like your character save, arrives."));
             s_dedicated = SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null;
             if (!s_dedicated)
             {
                 Application.wantsToQuit += HoldQuit;
                 return;
             }
-            // Only watching, never holding: where a quit request goes on the server, for the Ctrl+C investigation. If Ctrl+C does
-            // nothing and neither line appears, Unity never turned it into a quit at all.
+            // Only watching, never holding: logs where a quit request goes on the server. If Ctrl+C does nothing and neither
+            // line appears, Unity never turned it into a quit at all.
             Application.wantsToQuit += () =>
             {
                 LoggerOptions.LogMessage("[LogoutHold] dedicated server: Unity asked to quit (wantsToQuit); FGN lets it go.");
@@ -86,10 +84,10 @@ namespace FiresGhettoNetworkMod
         private const string VAngardeGuid = "com.Fire.FiresVAngarde";
 
         /// <summary>
-        /// Quitting from a world on a crossplay link becomes a logout, and the game quits once vanilla's shutdown has run. R40: a quit
-        /// in the same frame as a logout reached OnApplicationQuit in that frame although wantsToQuit returned false; the link went
-        /// down and the character save was lost. The logout passes the ContinueLogout holds (this one and VAngarde's) like any other.
-        /// Agreed with VAngarde's author: VAngarde 0.2.32 converts the same way for server-held characters. Both converting is
+        /// Quitting from a world on a crossplay link becomes a logout, and the game quits once vanilla's shutdown has run. A quit
+        /// in the same frame as a logout can reach OnApplicationQuit in that frame although wantsToQuit returned false, taking the
+        /// link and the character save with it. The logout passes the ContinueLogout holds (this one and VAngarde's) like any other.
+        /// VAngarde converts the same way for server-held characters. Both converting is
         /// harmless: a second Logout meets the running holds, and whichever quits first after the shutdown ends it.
         /// Window close and Alt+F4 arrive through wantsToQuit, vanilla's Quit button through Menu.QuitGame.
         /// </summary>
@@ -129,10 +127,10 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>
-        /// R40 also showed Unity sending OnApplicationQuit although the quit had been put off: frames ran on for seconds after it.
+        /// Unity can send OnApplicationQuit although the quit has been put off, with frames running on for seconds after it.
         /// Vanilla's OnApplicationQuit shuts the game down (the save, then ZNet) and sleeps 2 s. Under a held logout that takes the
         /// link away from what the hold waits for. So while this hold runs, vanilla's body is skipped. The held logout does the
-        /// shutdown, and the quit comes after it. VAngarde 0.2.33 has the same guard for its own hold.
+        /// shutdown, and the quit comes after it. VAngarde has the same guard for its own hold.
         /// </summary>
         [HarmonyPatch(typeof(Game), "OnApplicationQuit"), HarmonyPrefix, HarmonyPriority(Priority.First)]
         static bool SkipEarlyQuitShutdown(Game __instance)
@@ -140,9 +138,8 @@ namespace FiresGhettoNetworkMod
             if (s_dedicated || __instance == null || !ReferenceEquals(s_holdingFor, __instance) || __instance.IsShuttingDown()) return true;
             LoggerOptions.LogInfo("[LogoutHold] OnApplicationQuit arrived during the held logout; vanilla's early shutdown skipped, the held logout shuts down, then the game quits.");
             // Last resort, once per quit: should the process end after all (an OS session end), the character is on disk. Vanilla's
-            // body would have saved here. A local save only: VAngarde 0.2.33 uploads no profile save while its own hold's upload is
-            // under way, and none at all when it isn't holding.
-            // VAngarde makes this save itself and knows whether the server has the profile; two saves cost R44 a 1.2 s frame.
+            // body would have saved here. A local save only.
+            // VAngarde makes this save itself and knows whether the server has the profile; saving twice costs a long frame.
             if (!s_lastResortSaved && !BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(VAngardeGuid))
             {
                 s_lastResortSaved = true;
@@ -211,8 +208,8 @@ namespace FiresGhettoNetworkMod
         }
 
         /// <summary>
-        /// R44: the OnApplicationQuit broadcast also reaches PlayFab Party's manager, which tears the Party endpoint down: the next send
-        /// failed ("suspend TX"), the server logged 4098 invalid handle, and the held character save never arrived. While a logout or quit
+        /// The OnApplicationQuit broadcast also reaches PlayFab Party's manager, which tears the Party endpoint down, so the held
+        /// character save would never arrive. While a logout or quit
         /// is held, Party's teardown waits. It runs once, after the logout has shut down (or the quit cap), just before the quit.
         /// </summary>
         [HarmonyPatch(typeof(PlayFabMultiplayerManager), "OnApplicationQuit"), HarmonyPrefix]
@@ -296,7 +293,7 @@ namespace FiresGhettoNetworkMod
                 pending = Pending(marks, clock);
             }
             double ms = clock.Elapsed.TotalMilliseconds;
-            // Pending counts only connected links, so a link that dropped reads as "nothing pending" (R40): tell it apart.
+            // Pending counts only connected links, so a link that dropped reads as "nothing pending": tell it apart.
             if (pending != null) LoggerOptions.LogWarning($"[LogoutHold] logout went ahead after {ms / 1000.0:F1} s with {pending} unacknowledged.");
             else if (CrossplaySockets().Count == 0) LoggerOptions.LogWarning($"[LogoutHold] the crossplay link was lost after {ms:F0} ms, with {lastSeen ?? "nothing"} unacknowledged when last seen.");
             else LoggerOptions.LogInfo($"[LogoutHold] logout held {ms:F0} ms until the server had acknowledged everything sent before it.");

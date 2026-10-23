@@ -22,49 +22,39 @@ namespace FiresGhettoNetworkMod
                 "03 - Player Sync",
                 "Enable High-Frequency Position Updates",
                 true,
-                "Sends other players' movement ahead of world objects when a connection is backed up (always, with\n" +
-                "'Adaptive Throttling' off). Does not change how often updates are sent. Dedicated server only.");
+                Cfg.Adv("Sends other players' movement ahead of world objects when a connection is busy."));
 
             ConfigPlayerPositionUpdateMultiplier = config.Bind(
                 "03 - Player Sync",
                 "Position Update Multiplier",
                 2.5f,
-                new ConfigDescription(
-                    "How strongly the setting above moves players ahead of world objects (1 = no boost). Higher puts\n" +
-                    "other players nearer the front of each update. Dedicated server only.",
+                Cfg.Adv("How strongly players are moved ahead of world objects (1 = no boost).",
                     new AcceptableValueRange<float>(1.0f, 5.0f)));
 
             ConfigEnableClientInterpolation = config.Bind(
                 "03 - Player Sync",
                 "Enable Client-Side Interpolation",
                 false,
-                "Older smoothing for other players' movement. Ignored while Remote Motion is on, which replaces it;\n" +
-                "only worth trying with Remote Motion off, and vanilla (off) usually looks smoother. Client only.");
+                Cfg.Adv("Older player smoothing, only used with Remote Motion off."));
 
             ConfigEnablePlayerPrediction = config.Bind(
                 "03 - Player Sync",
                 "Enable Client-Side Prediction",
                 false,
-                "Adds a guess ahead along other players' last velocity to the older smoothing above. Only works with\n" +
-                "Client-Side Interpolation on and Remote Motion off, and overshoots whenever a player changes direction.\n" +
-                "Client only.");
+                Cfg.Adv("Guesses ahead of other players for the older smoothing. Overshoots on turns."));
 
             ConfigSmoothingMinInterval = config.Bind(
                 "03 - Player Sync",
                 "Smoothing Min Interval (s)",
                 0.0f,
-                new ConfigDescription(
-                    "For Client-Side Interpolation only. A player whose updates arrive less than this many seconds\n" +
-                    "apart is drawn as vanilla, unsmoothed. 0 = always smooth.",
+                Cfg.Adv("Older smoothing: updates closer than this (s) are not smoothed.",
                     new AcceptableValueRange<float>(0.0f, 0.20f)));
 
             ConfigSmoothingMaxInterval = config.Bind(
                 "03 - Player Sync",
                 "Smoothing Max Interval (s)",
                 0.20f,
-                new ConfigDescription(
-                    "For Client-Side Interpolation only. A player whose updates arrive this far apart (seconds) or more\n" +
-                    "gets full smoothing; between Min and Max it fades in. Lower means more smoothing on good connections.",
+                Cfg.Adv("Older smoothing: updates this far apart (s) get full smoothing.",
                     new AcceptableValueRange<float>(0.05f, 0.50f)));
         }
 

@@ -89,7 +89,7 @@ namespace FiresGhettoNetworkMod
             }
 
             // Sort by the adjusted value only. Reordering by ObjectType here cannot change client
-            // instantiation order (ZNetScene.ZDOCompare re-sorts on arrival) and caused the 1.3.6 regression.
+            // instantiation order (ZNetScene.ZDOCompare re-sorts on arrival) and caused a regression.
             if (modified)
             {
                 objects.Sort((x, y) => x.m_tempSortValue.CompareTo(y.m_tempSortValue));

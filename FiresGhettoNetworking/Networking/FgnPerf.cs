@@ -5,7 +5,7 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// 1.5.42: what FGN's own hook code costs on the simulation and ownership paths, for the perf rounds. Each point times
+    /// What FGN's own hook code costs on the simulation and ownership paths. Each point times
     /// only FGN's handler inside its existing hook (no new hooks), and one "[FGN perf]" line a minute gives calls, average
     /// and worst microseconds and the total. Timing runs only at Log Level Debug; otherwise each point is one bool check.
     /// </summary>

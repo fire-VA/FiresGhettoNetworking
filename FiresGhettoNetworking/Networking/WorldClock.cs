@@ -56,7 +56,7 @@ namespace FiresGhettoNetworkMod
 
         /// <summary>
         /// A client's clock loses the same time on its own long frames (a load or a hitch), and the server's next re-sync then
-        /// pulls it forward by seconds (R43: 2.7 s after 5.5 s and 1.7 s frames, with a 30 fps dedi). Adding the loss back here
+        /// pulls it forward by seconds. Adding the loss back here
         /// keeps the client with the server, so the correction it eases in stays small. Only once synced to a server.
         /// </summary>
         private static void AddBackTimeLostToSlowClientFrame(ZNet znet)
@@ -64,8 +64,8 @@ namespace FiresGhettoNetworkMod
             if (!ClientSlewEnabled || znet == null || znet.IsServer() || !ReferenceEquals(s_syncedTo, znet)) return;
             if (!Mathf.Approximately(Time.timeScale, 1f)) return;
             // This runs after ZNet.Update, which already handled any server time that queued up during the long frame. That
-            // correction measured the loss too, so adding it back as well counted it twice (R52: 10.3 s added back, then the
-            // client 11.4 s AHEAD of the server, eased out at half speed): a correction taken as-is this frame leaves nothing to
+            // correction measured the loss too, so adding it back as well would count it twice (leaving the client
+            // AHEAD of the server, eased out at half speed): a correction taken as-is this frame leaves nothing to
             // add, and one being eased in shrinks by what is added here instead.
             if (s_snappedFrame == Time.frameCount) return;
             float lost = Time.unscaledDeltaTime - Time.deltaTime;
@@ -143,7 +143,7 @@ namespace FiresGhettoNetworkMod
                 + $"This client added back {s_reportClientAddedBackSeconds * MsPerSecond:F0} ms its own long frames dropped. "
                 + $"The world clock never stepped back. Next report in {ReportIntervalSec / 60f:F0} min at the earliest.";
             // A clock left behind by at most this client's own longest frame fell behind while this client stalled (a load or a
-            // hitch here); the server is only to blame for what that frame doesn't cover (rig R14: a 16.9 s join frame, 30 fps dedi).
+            // hitch here); the server is only to blame for what that frame doesn't cover.
             bool ownStall = s_reportLargestBehindSeconds >= s_reportLargestAheadSeconds
                 && s_reportLongestFrameSeconds >= s_reportLargestBehindSeconds;
             if (Math.Max(s_reportLargestBehindSeconds, s_reportLargestAheadSeconds) < NotableCorrectionSeconds)

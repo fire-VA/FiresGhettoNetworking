@@ -31,8 +31,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Sync Monster Targets", true,
-                "Shares who each monster is after, so other games (companions, clients when the server runs monsters) see its\n" +
-                "target and a new owner keeps chasing it. Applies wherever monsters are run. Mods can read 'fgn_target'/'fgn_target_by'.");
+                Cfg.Adv("Shares who each monster is chasing so it keeps chasing after changing owner."));
         }
 
         // One hook on BaseAI.SetTargetInfo: vanilla's owner-side call every target update, which gets the target's ZDOID and
@@ -57,12 +56,13 @@ namespace FiresGhettoNetworkMod
             LoggerOptions.LogInfo($"[FGN] target sync: on ({TargetKeyName})");
         }
 
-        // R85 (Selective ON): a pack spawned alerted and targeting went PASSIVE when the dedi took it over. The alert
+        // A pack spawned alerted and targeting would go PASSIVE when the dedi took it over. The alert
         // survives a handover (vanilla: a non-owner copy re-reads s_alert every UpdateAI), the target does not: MonsterAI keeps
         // m_targetCreature only on the owner's game. A new owner's first "no target" report finds the previous owner's
         // fgn_target (writer != this session) and takes it over when that target is still alive, still an enemy and within
         // AdoptMaxMeters; then the monster is after the same player on the new owner too. Tamed ones never (their owner decides).
         private const float AdoptMaxMeters = 60f;
+        private const float AdoptLogIntervalSeconds = 10f;
         private static int s_adopted;
         private static float s_nextAdoptLog;
 
@@ -86,7 +86,7 @@ namespace FiresGhettoNetworkMod
             float now = UnityEngine.Time.realtimeSinceStartup;
             if (now >= s_nextAdoptLog)
             {
-                s_nextAdoptLog = now + 10f;
+                s_nextAdoptLog = now + AdoptLogIntervalSeconds;
                 LoggerOptions.LogDebug($"[FGN] target sync: {s_adopted} monster(s) kept their target across an owner change "
                                          + $"(last: {monster.name} after {target.name})");
             }

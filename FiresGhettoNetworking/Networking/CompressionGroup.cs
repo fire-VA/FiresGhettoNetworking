@@ -35,6 +35,7 @@ namespace FiresGhettoNetworkMod
         // How long a joined client keeps greeting. ServerSync holds the server's routed RPCs to a joining client until its
         // config sync is sent, which can delay the answer by several seconds on big modpacks.
         private const float HandshakeAnswerSeconds = 60f;
+        private const float HelloRetrySeconds = 2f;
 
         private static readonly CompressionPolicy s_policy =
             new CompressionPolicy("ZDOData".GetStableHashCode(), "RoutedRPC".GetStableHashCode(), LogEncodeFailure);
@@ -241,7 +242,7 @@ namespace FiresGhettoNetworkMod
                 attempt++;
                 LoggerOptions.LogInfo($"Compression: greeting server via 0L routed RPC (attempt {attempt}).");
                 SendHelloToServer();
-                yield return new WaitForSeconds(2f);
+                yield return new WaitForSeconds(HelloRetrySeconds);
             }
             LoggerOptions.LogWarning($"Compression: the server has not answered {HandshakeAnswerSeconds:0}s after accepting this client, "
                 + "so it may not run the same compression version. Greetings stop; a late answer still turns compression on.");
@@ -307,7 +308,7 @@ namespace FiresGhettoNetworkMod
         }
 
         // Compression framing is only sent to a peer whose FGN build matches ours (FgnVersionGate): the compression version
-        // alone stayed 9 across builds whose wire paths differ (Enigma, 2026-10-02).
+        // alone can stay the same across builds whose wire paths differ.
         private static bool Agrees(ZNetPeer peer, CompressionStatus.SocketStatus status) =>
             status.version == CompressionStatus.ourStatus.version
             && status.compressionEnabled
@@ -360,7 +361,7 @@ namespace FiresGhettoNetworkMod
             return instructions;
         }
 
-        public static byte[] PacketForSendQueue(ZPackage pkg, ISocket socket)   // 1.5.49 (Xbox build has no ZSteamSocket): ISocket, so CompressionGroup loads without Steam
+        public static byte[] PacketForSendQueue(ZPackage pkg, ISocket socket)   // ISocket, so CompressionGroup loads on builds without ZSteamSocket (Xbox / Game Pass)
         {
             byte[] packet = pkg.GetArray();
             CompressionStatus.SocketStatus status = CompressionStatus.GetStatusOfRealSocket(socket);
@@ -395,7 +396,7 @@ namespace FiresGhettoNetworkMod
         // Decode on the frame itself, never on a per-socket flag, so no handshake timing can leave a frame unread. A packet
         // that begins with the magic but fails PacketFrame's checks is left as it arrived; its method hash is the magic, which
         // no RPC is registered under, so Valheim ignores it.
-        internal static void Steam_RecvCompressed(ref ZPackage __result, ISocket __instance)   // 1.5.49: ISocket, see PacketForSendQueue
+        internal static void Steam_RecvCompressed(ref ZPackage __result, ISocket __instance)   // ISocket, see PacketForSendQueue
         {
             if (__result == null || __result.Size() < PacketFrame.HeaderBytes) return;
             int method = __result.ReadInt();
@@ -471,7 +472,7 @@ namespace FiresGhettoNetworkMod
             foreach (string line in UploadBreakdown.TakeReport(period))
                 LoggerOptions.LogDebug(line);
 
-            // [RpcDrops] stays at Info: ITTO's fgn_test rpcdrops step and the rig watcher read it.
+            // [RpcDrops] stays at Info: test tooling reads it from the log.
             foreach (string line in DownloadBreakdown.TakeReport(period))
             {
                 if (line.StartsWith("[RpcDrops]", StringComparison.Ordinal)) LoggerOptions.LogInfo(line);

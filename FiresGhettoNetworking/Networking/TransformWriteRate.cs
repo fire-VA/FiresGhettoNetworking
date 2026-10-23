@@ -43,18 +43,14 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("04 - Networking", "Limit Transform Write Rate", true,
-                "Limits the objects listed below (fish, by default), which record their position every frame, to Transform Writes\n" +
-                "Per Second, so the server rechecks their area less. A hooked fish is never limited. Applies where the object runs.");
+                Cfg.Adv("Fish and other listed objects send their position less often, saving server work."));
 
             ConfigPrefabs = config.Bind("04 - Networking", "Transform Write Rate Objects",
                 "Fish1,Fish2,Fish3,Fish4_cave,Fish5,Fish6,Fish7,Fish8,Fish9,Fish10,Fish11,Fish12",
-                "Prefab names, separated by commas, that Limit Transform Write Rate applies to. Only add objects that move\n" +
-                "constantly on their own; never players, ships or carts.");
+                Cfg.Adv("Prefab names (comma list) the write rate limit applies to."));
 
             ConfigWritesPerSecond = config.Bind("04 - Networking", "Transform Writes Per Second", 10f,
-                new ConfigDescription(
-                    "How many times a second a listed object may record its position. Lower saves more server work; raise it\n" +
-                    "if listed objects look like they stutter for other players. Going above how often updates are sent changes nothing.",
+                Cfg.Adv("Position updates per second for listed objects.",
                     new AcceptableValueRange<float>(2f, 120f)));
         }
 
@@ -63,8 +59,7 @@ namespace FiresGhettoNetworkMod
         /// registered only on a dedicated server running server-side simulation, and the objects this limits are owned
         /// by clients.
         /// </summary>
-        [HarmonyPatch(typeof(ZSyncTransform), "OwnerSync")]
-        [HarmonyPrefix]
+        // Attached / detached by ZSyncHookGate (only while one of its three features can act), not by PatchAll.
         public static bool OwnerSync_Prefix(ZSyncTransform __instance, Rigidbody ___m_body, ZNetView ___m_nview)
         {
             if (ServerAuthorityPatches.TryRescueBelowKillPlane(__instance, ___m_body)) return false;
@@ -77,7 +72,7 @@ namespace FiresGhettoNetworkMod
         /// <summary>True when this object has already written within its allowance and vanilla's write should be skipped.</summary>
         internal static bool HoldBack(ZSyncTransform sync)
         {
-            if (ConfigEnabled == null || !ConfigEnabled.Value || sync == null) return false;
+            if (ConfigEnabled == null || !ConfigEnabled.Value || (object)sync == null) return false;
 
             if (!s_tracked.TryGetValue(sync, out var tracked))
             {

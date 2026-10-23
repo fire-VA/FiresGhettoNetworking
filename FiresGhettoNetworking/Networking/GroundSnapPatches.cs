@@ -119,7 +119,7 @@ namespace FiresGhettoNetworkMod
             if (!(FiresGhettoNetworkMod.ConfigFixGroundSnapThroughFloors?.Value ?? true)) return heightmapHeight;
             if (point.y >= heightmapHeight) return heightmapHeight;
 
-            // 1.5.24: on a dedicated server the heightmap and the physics ray below both read the uncarved ground (a VoxelWrap dedi
+            // On a dedicated server the heightmap and the physics ray below both read the uncarved ground (a VoxelWrap dedi
             // has no voxel colliders); FiresAdminTerrain's edited density knows the pond or pit, where it is loaded.
             if (ServerClientUtils.ZNetIsDedicated() && VoxelSurfaceProbe.TryGetSupport(point, out float voxelGround)) return voxelGround;
 

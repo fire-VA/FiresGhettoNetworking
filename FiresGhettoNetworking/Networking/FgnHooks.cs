@@ -26,7 +26,7 @@ namespace FiresGhettoNetworkMod
 
         private static bool On(Type feature) => s_attached.Contains(feature);
 
-        // 1.5.49 (Xbox build has no ZSteamSocket): KeepaliveFirst's fields name ZSteamSocket; this NoInlining step keeps
+        // Builds without ZSteamSocket (Xbox / Game Pass): KeepaliveFirst's fields name ZSteamSocket; this NoInlining step keeps
         // ReadAttachedFeatures' JIT from setting it up. Called only when SteamSide.Present.
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static bool KeepaliveReady() => KeepaliveFirst.Ready;
@@ -53,7 +53,7 @@ namespace FiresGhettoNetworkMod
             s_echo = On(typeof(ConnectionEcho));
             s_creatures = On(typeof(CreatureOwnership));
             s_helm = On(typeof(HelmOwnership));
-            s_keepalive = SteamSide.Present && On(typeof(KeepaliveFirst)) && KeepaliveReady();   // 1.5.49: KeepaliveFirst is Steam-only
+            s_keepalive = SteamSide.Present && On(typeof(KeepaliveFirst)) && KeepaliveReady();   // KeepaliveFirst is Steam-only
             s_roundTrip = On(typeof(RoundTripTrace));
             s_floodTest = On(typeof(ZdoFloodTest));
             s_playerSync = On(typeof(PlayerPositionSyncPatches));
@@ -73,7 +73,7 @@ namespace FiresGhettoNetworkMod
             s_ownershipV2 = On(typeof(ServerOwnershipPatches));
             Type[] hooks = typeof(FgnHooks).GetNestedTypes(BindingFlags.NonPublic);
             if (SteamSide.Present) return hooks;
-            // 1.5.49 (Xbox build has no ZSteamSocket): reading the ZSteamSocket hooks' attributes throws there, so they are
+            // Without ZSteamSocket (Xbox / Game Pass builds) reading the ZSteamSocket hooks' attributes throws there, so they are
             // not handed to Harmony at all.
             return Array.FindAll(hooks, hook => hook != typeof(ZSteamSocketSend) && hook != typeof(ZSteamSocketRecv));
         }
@@ -172,9 +172,9 @@ namespace FiresGhettoNetworkMod
                 typeof(GraphicsSettingsManager).GetEvent("GraphicsSettingsChanged", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
 
             /// <summary>
-            /// A vanilla error at quit (Fire, 2026-09-30: "if we can fix it we should"). Vanilla's OnDestroy disposes m_blockCheckHandler,
+            /// Fixes a vanilla error at quit. Vanilla's OnDestroy disposes m_blockCheckHandler,
             /// which only ZNet.Start creates. A game that quits while the main menu is still loading destroys that scene's ZNet after its
-            /// Awake but before its Start, and the Dispose throws (every bot log that logged out, then quit: "NullReferenceException at
+            /// Awake but before its Start, and the Dispose throws ("NullReferenceException at
             /// ZNet.DMD&lt;ZNet::OnDestroy&gt;"). For such a ZNet this does vanilla's work without the Dispose: log, clear the instance,
             /// and undo Awake's graphics-settings subscription.
             /// </summary>

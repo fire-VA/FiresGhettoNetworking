@@ -187,10 +187,10 @@ namespace FiresGhettoNetworkMod
                 || op == OpCodes.Ldc_I4_8;
         }
 
-        // A transpiler on ZSteamMatchmaking.RegisterServer broke the CreateLobby callback chain (v1.3.0), so the Steam SDK
+        // A transpiler on ZSteamMatchmaking.RegisterServer broke the CreateLobby callback chain, so the Steam SDK
         // entry points are prefixed instead. The dedicated build lists itself through SetMaxPlayerCount (10 in RegisterServer,
         // 64 in SteamManager.Awake); CreateLobby is the client build's path.
-        // 1.5.49 (Xbox build has no ZSteamSocket): these two live in SteamPatches, attached by Ascend only when
+        // The Xbox build has no ZSteamSocket: these two live in SteamPatches, attached by Ascend only when
         // SteamSide.Present, so reading DedicatedServerGroup's attributes never resolves a Steamworks type.
         [HarmonyPatch]
         internal static class SteamPatches

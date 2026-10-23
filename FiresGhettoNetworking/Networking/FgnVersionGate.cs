@@ -7,8 +7,8 @@ namespace FiresGhettoNetworkMod
     /// <summary>
     /// Client and server tell each other which FGN they run, and FGN's per-peer wire paths (ZDO deltas, compression, the
     /// ownership hand-offs) run only with a peer whose FGN matches ours. Until then, and for good with a vanilla or a
-    /// different FGN, that peer gets plain vanilla traffic. Enigma, 2026-10-02: deltas went to every peer with no check, and
-    /// a client that missed one keyframe built a partial ZDO from the next delta ("proxy stays, location gone").
+    /// different FGN, that peer gets plain vanilla traffic: a client that cannot read FGN's deltas would otherwise build a
+    /// partial ZDO from the next delta.
     ///
     /// The hello is a routed RPC carrying (plugin version, wire protocol) and follows CompressionGroup's handshake: one
     /// Register&lt;ZPackage&gt; at ZNet.Start, the client greeting the server via 0L, the handler resolving the peer by sender
@@ -29,9 +29,8 @@ namespace FiresGhettoNetworkMod
 
         // Server: an echo answered but no hello this long after it is an FGN from before the hello existed. No echo at all
         // this long after the peer is ready is a vanilla client (echoes go out every 2 s).
-        // 1.5.40 (a player, 10-05: "older than 1.5.36 … wire paths OFF" after backing out and joining again without restarting):
-        // was 10 s, while the client only greets once fully connected and waits 30 s itself. A client still loading on a rejoin
-        // missed it. Same 30 s as the client; a hello that arrives later still flips the peer to matched.
+        // The client only greets once fully connected and waits 30 s itself, so a shorter wait here would misjudge a client
+        // still loading on a rejoin. Same 30 s as the client; a hello that arrives later still flips the peer to matched.
         private const double OlderFgnSeconds = 30.0;
         private const double NoFgnSeconds = 15.0;
 
@@ -75,9 +74,7 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigRefuseMismatched = config.Bind("13 - Compatibility", "Refuse Mismatched FGN Clients", false,
-                "When true, the server disconnects a client whose FGN version differs from its own (it is told why first).\n" +
-                "A client without FGN can always join. When false, such a client plays with FGN's network features off for it.\n" +
-                "Server or host only.");
+                Cfg.Basic("Kicks players whose FGN version differs from the server's. Players without FGN can still join."));
         }
 
         /// <summary>True once this peer has told us it runs our exact FGN build and wire protocol.</summary>
@@ -314,14 +311,21 @@ namespace FiresGhettoNetworkMod
                     LoggerOptions.LogInfo($"[Version] peer {name} has no FGN: plain vanilla, as always.");
                     break;
                 case State.Mismatched:
-                    // Fire 10-05: plain vanilla for a peer is fine behaviour; only a REAL mismatch (its hello named another wire
+                    // Plain vanilla for a peer is fine behaviour; only a REAL mismatch (its hello named another wire
                     // protocol) is a Warning. "No hello yet" is an inference (an FGN before 1.5.31, or a slow join) and is Info.
                     if (entry.Protocol != 0)
                         LoggerOptions.LogWarning($"[Version] peer {name} runs FGN {shown} vs server {Ours}: FGN wire paths OFF for this peer (plain vanilla)");
                     else
                         LoggerOptions.LogInfo($"[Version] peer {name} runs FGN but sent no version hello in {OlderFgnSeconds:0} s (an FGN before 1.5.31, or still loading): "
                             + "plain vanilla for this peer until its hello arrives.");
-                    if (ConfigRefuseMismatched != null && ConfigRefuseMismatched.Value && entry.RefuseAt == 0)
+                    // A first join to a fresh world can spend 30+ s building world data and send nothing, so silence is never
+                    // grounds for a refusal. Only a REAL mismatch (a hello naming another wire protocol) is refused; a silent peer stays plain vanilla until its hello.
+                    if (entry.Protocol == 0)
+                    {
+                        if (ConfigRefuseMismatched != null && ConfigRefuseMismatched.Value)
+                            LoggerOptions.LogDebug($"[Version] {name}: no hello yet, not refused (only a hello naming another wire protocol is).");
+                    }
+                    else if (ConfigRefuseMismatched != null && ConfigRefuseMismatched.Value && entry.RefuseAt == 0)
                     {
                         // Clients from before 1.5.31 have no handler for this and simply drop it; they still get disconnected.
                         string message = $"FiresGhettoNetworking version mismatch: server {Ours}, you {shown} — this server refuses "
@@ -358,7 +362,7 @@ namespace FiresGhettoNetworkMod
         {
             if (s_pendingHud == null || MessageHud.instance == null) return;
             if (!s_pendingHudNow && Player.m_localPlayer == null) return;
-            // 1.5.38 (Fire 10-02: the HUD hidden for every test): it follows Ctrl+F3 like any vanilla message. While the HUD is hidden
+            // It follows Ctrl+F3 like any vanilla message. While the HUD is hidden
             // it stays pending and shows once the player brings the HUD back; the Warning line above is in the log either way.
             if (Hud.IsUserHidden()) return;
             MessageHud.instance.ShowMessage(MessageHud.MessageType.Center, s_pendingHud, 0, null, false);

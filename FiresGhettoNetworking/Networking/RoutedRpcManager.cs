@@ -36,7 +36,7 @@ namespace FiresGhettoNetworkMod
         private static float s_radiusHint;
 
         // Other mods' hooks on ZRoutedRpc.RouteRPC. Expand World Prefabs cancels Say there and tracks teleports there
-        // (2026-10-02 EWP review); a filtered player broadcast sent straight with SendTo never passes through it, so those
+        // a filtered player broadcast sent straight with SendTo never passes through it, so those
         // hooks went blind under FGN. While any foreign hook is attached, the filtered broadcast goes through RouteRPC and
         // FGN's own prefix (attached last) sends it to the filtered list, after the others have seen it and could veto it.
         // Rechecked every few seconds because some mods patch RouteRPC late (EWP does it when its config loads).
@@ -84,6 +84,7 @@ namespace FiresGhettoNetworkMod
             data.Deserialize(package);
             long target = data.m_targetPeerID;
             CreatureOwnership.ObserveRoutedRpc(data);
+            if (Api.FgnApi.RunFilters(data)) return;   // add-on filters (FgnApi), before FGN routes it
 
             if (target == VanillaAccess.RoutedRpcId(routedRpc))
             {

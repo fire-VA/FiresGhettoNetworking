@@ -6,7 +6,7 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// 1.5.24 ([worldgen] 2026-10-01): a VoxelWrap dedicated server is data-only (no voxel colliders), so ZoneSystem.GetGroundHeight
+    /// A VoxelWrap dedicated server is data-only (no voxel colliders), so ZoneSystem.GetGroundHeight
     /// and a physics ray both read the UNCARVED ground there, and GroundSnapPatches snapped a server-owned drop, floater or tombstone
     /// in a carved pond or pit up to it. FiresAdminTerrain's VoxelWorld.TrySampleSurfaceY reads the EDITED density (a lookup and a
     /// column scan, no physics, never builds a zone). Looked up softly by name: FGN does not reference FiresAdminTerrain, and without
@@ -16,7 +16,7 @@ namespace FiresGhettoNetworkMod
     {
         private const string TypeName = "VerdantsAscent.Terrain.Voxel.VoxelWorld";
         private const string MethodName = "TrySampleSurfaceY";
-        private const float AboveObjectMeters = 3f;     // [worldgen]: a few m above the object, so a roof or overhang is not taken
+        private const float AboveObjectMeters = 3f;     // a few m above the object, so a roof or overhang is not taken
         private const float WindowMeters = 60f;
 
         private delegate bool SampleSurface(float wx, float wz, float topY, float botY, out float surfY, out bool solidAtTop);

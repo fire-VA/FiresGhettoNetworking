@@ -29,8 +29,8 @@ namespace FiresGhettoNetworkMod
 
         /// <summary>FGN's one CustomFixedUpdate hook: vanilla's ClientSync stays off a player Remote Motion draws (it would move the
         /// body by its own lerp and velocity between frames), then the ownership-edge snap below.</summary>
-        [HarmonyPatch(typeof(ZSyncTransform), nameof(ZSyncTransform.CustomFixedUpdate))]
-        [HarmonyPrefix]
+        // Attached / detached by ZSyncHookGate - on while this process has any peer (or is a dedicated
+        // server), off for a solo host, where nothing it does can happen (no remote bodies, no ownership changing hands).
         public static bool ZSyncTransform_CustomFixedUpdate_Prefix(ZSyncTransform __instance, ZNetView ___m_nview, Rigidbody ___m_body)
         {
             long perf = FgnPerf.Begin();
@@ -45,8 +45,8 @@ namespace FiresGhettoNetworkMod
             ZNetView ___m_nview,
             Rigidbody ___m_body)
         {
-            // 1.5.46 (FGN perf 10-07: "synctransform-fixed ~100 ms/min at the river", ~6.5k calls a second, almost all of them
-            // returning here): the same tests in the same order, read straight from the fields (no Unity == null, which goes
+            // Hot path (thousands of calls a second, almost all of them returning here): the vanilla tests in the
+            // same order, read straight from the fields (no Unity == null, which goes
             // native, and no IsValid/GetZDO/IsOwner wrapper calls on ZNetView). ZNetView.IsValid() = m_zdo != null && m_zdo.IsValid().
             ZDO zdo = (object)___m_nview != null ? _zdoRef(___m_nview) : null;
             if (zdo == null || !zdo.IsValid())

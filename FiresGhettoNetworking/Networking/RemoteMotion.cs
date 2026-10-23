@@ -7,14 +7,13 @@ using UnityEngine;
 namespace FiresGhettoNetworkMod
 {
     /// <summary>
-    /// Remote Motion (Tools\REMOTE_MOTION.md): how this client draws other players. Each player's own game stamps every position it
+    /// Remote Motion: how this client draws other players. Each player's own game stamps every position it
     /// sends with the physics time of that position; here those updates are kept on the sender's clock and drawn a short delay
     /// behind the newest (cubic Hermite with the sent velocity), carried on by that velocity when the next update is late (capped),
-    /// and any jump a new update brings is blended out instead of snapped. Tuned offline on motion_test recordings (R39): 40 ms,
-    /// 200 ms, 50 ms beat vanilla on error, lag, overshoot, judder and lurches.
+    /// and any jump a new update brings is blended out instead of snapped.
     ///
-    /// Only players whose game stamps its updates (FGN 1.5.0+) and who aren't aboard a ship or cart; everyone else is vanilla.
-    /// Drawing is off by default (opt-in until a live A/B round confirms it); stamping is on, as other players' games need it.
+    /// Only players whose game stamps its updates and who aren't aboard a ship or cart; everyone else is vanilla.
+    /// Stamping is on by default, as other players' games need it.
     /// No hooks of its own: TransformWriteRate's OwnerSync prefix stamps, PlayerPositionSyncPatches' ZDO.Deserialize and
     /// Player.LateUpdate postfixes feed and draw, and OwnershipHandoffPatches' CustomFixedUpdate prefix keeps vanilla's
     /// ClientSync off a player drawn here.
@@ -56,22 +55,20 @@ namespace FiresGhettoNetworkMod
         public static void InitConfig(ConfigFile config)
         {
             ConfigEnabled = config.Bind("03 - Player Sync", "Remote Motion (experimental)", true,
-                "Draws other FGN players smoothly from their time-stamped updates; others, and players on a ship or cart, are\n" +
-                "drawn as vanilla. Replaces Client-Side Interpolation and Prediction while on. Client only.");
+                Cfg.Basic("Draws other players' movement smoothly."));
             ConfigSendStamps = config.Bind("03 - Player Sync", "Send Remote Motion Timestamps", true,
-                "Adds a timestamp (8 bytes) to your own movement updates so other players' Remote Motion can draw you smoothly.\n" +
-                "Players without FGN ignore it. Leave on unless you are chasing a problem.");
+                Cfg.Adv("Adds timestamps to your movement so others can draw you smoothly."));
             ConfigDelayMs = config.Bind("03 - Player Sync", "Remote Motion Delay (ms)", DefaultDelayMs,
-                new ConfigDescription("Remote Motion: how far behind their newest update other players are drawn. Lower is snappier but overshoots more. Client only.",
+                Cfg.Adv("How far behind other players are drawn. Lower = snappier, more overshoot.",
                     new AcceptableValueRange<int>(0, 200)));
             ConfigExtrapolationCapMs = config.Bind("03 - Player Sync", "Remote Motion Extrapolation Cap (ms)", DefaultCapMs,
-                new ConfigDescription("Remote Motion: how long a player keeps moving along their last velocity when their next update is late. Client only.",
+                Cfg.Adv("How long a player keeps moving on their own when an update is late.",
                     new AcceptableValueRange<int>(0, 500)));
             ConfigBlendMs = config.Bind("03 - Player Sync", "Remote Motion Blend (ms)", DefaultBlendMs,
-                new ConfigDescription("Remote Motion: how long a correction from a new update takes to blend in (0 = snap straight to it). Client only.", new AcceptableValueRange<int>(0, 500)));
-            // Fire, 2026-09-28 (after the R44/R44b A/B): ON at 20/100/100. A cfg still holding the untouched old defaults (off, 40/200/50)
-            // gets the new ones once; any value a player changed stays.
-            if (!ConfigEnabled.Value && ConfigDelayMs.Value == 40 && ConfigExtrapolationCapMs.Value == 200 && ConfigBlendMs.Value == 50)
+                Cfg.Adv("How long corrections take to blend in (0 = snap).", new AcceptableValueRange<int>(0, 500)));
+            // One-time migration: a cfg still holding the untouched old defaults gets the new ones; any value a player changed stays.
+            if (!ConfigEnabled.Value && ConfigDelayMs.Value == OldDefaultDelayMs && ConfigExtrapolationCapMs.Value == OldDefaultCapMs
+                && ConfigBlendMs.Value == OldDefaultBlendMs)
             {
                 ConfigEnabled.Value = true;
                 ConfigDelayMs.Value = DefaultDelayMs;
@@ -86,6 +83,9 @@ namespace FiresGhettoNetworkMod
         private const int DefaultDelayMs = 20;
         private const int DefaultCapMs = 100;
         private const int DefaultBlendMs = 100;
+        private const int OldDefaultDelayMs = 40;
+        private const int OldDefaultCapMs = 200;
+        private const int OldDefaultBlendMs = 50;
 
         /// <summary>The sender's physics clock (the one its stamps use) as of now, minus the fastest one-way trip seen from it, for the
         /// player whose peer is <paramref name="uid"/>; false when that player isn't tracked here (Remote Motion off, no stamps).</summary>
@@ -93,10 +93,9 @@ namespace FiresGhettoNetworkMod
         {
             senderNow = 0.0;
             double now = Now();
-            // R54: a player standing still sends no stamped updates (only moves are stamped), so its track goes stale in a second and
-            // Remote Arrows lost the clock mid-flight. R58: taking a re-created track's first offset (before its minimum settled)
-            // put the clock BEHIND the launch, and arrows waited at the bow (19 m off at 20 m). Each player's clock is therefore the
-            // lowest offset seen across its tracks, allowed to rise slowly for drift, and it comes first.
+            // A player standing still sends no stamped updates, so its track goes stale quickly, and a re-created track's first
+            // offset (before its minimum settles) puts the clock behind. Each player's clock is therefore the lowest offset seen
+            // across its tracks, allowed to rise slowly for drift, and it comes first.
             if (s_clocks.TryGetValue(uid, out (double Offset, double Seen) clock) && now - clock.Seen <= ClockKeepSeconds)
             {
                 senderNow = now - clock.Offset;
@@ -126,11 +125,8 @@ namespace FiresGhettoNetworkMod
 
         public static bool Drawing => ConfigEnabled != null && ConfigEnabled.Value;
 
-        // R86 (Selective ON): the DEDI's copy of Fire's player sat ~290 m off and fell to y -3973 while he stood at y 60.
-        // PlayerPositionSyncPatches is patched on the dedi too: Receive built a track per player there, Handles then kept vanilla's
-        // ZSyncTransform.ClientSync off that copy, but Draw never runs on a server (the Player.LateUpdate postfix returns for it),
-        // so nothing moved it and nothing turned its gravity off (ClientSync sets useGravity = false every step): frozen, then
-        // falling. With server-side simulation the dedi instantiates players, so it showed. No drawing on a server: vanilla syncs.
+        // No drawing on a server: Draw never runs there, so a track would only keep vanilla's ClientSync off the server's copy
+        // of a player and leave it frozen and falling. Vanilla syncs it instead.
         private static bool OnServer() => ZNet.instance != null && ZNet.instance.IsServer();
 
         private static double Now() => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
@@ -142,7 +138,7 @@ namespace FiresGhettoNetworkMod
         /// object every frame, so the view comes in from the hook, and non-players leave at the prefab check.</summary>
         internal static void Stamp(ZSyncTransform sync, ZNetView view, Rigidbody body)
         {
-            if (ConfigSendStamps == null || !ConfigSendStamps.Value || sync == null || view == null) return;
+            if (ConfigSendStamps == null || !ConfigSendStamps.Value || (object)sync == null || (object)view == null) return;   // plain reference checks: no native == on the hot path
             ZDO zdo = view.GetZDO();
             if (zdo == null || zdo.GetPrefab() != PlayerPrefab || !zdo.IsOwner()) return;
             Vector3 at = body != null ? body.position : sync.transform.position;
@@ -184,7 +180,7 @@ namespace FiresGhettoNetworkMod
         /// cheap when nothing is drawn).</summary>
         internal static bool Handles(ZNetView view)
         {
-            if (!Drawing || s_tracks.Count == 0 || view == null || OnServer()) return false;
+            if (!Drawing || s_tracks.Count == 0 || (object)view == null || OnServer()) return false;
             ZDO zdo = view.GetZDO();
             return zdo != null && zdo.GetPrefab() == PlayerPrefab && !zdo.IsOwner()
                    && s_tracks.TryGetValue(zdo.m_uid, out Track track) && Now() - track.LastReceived < StaleSeconds;
