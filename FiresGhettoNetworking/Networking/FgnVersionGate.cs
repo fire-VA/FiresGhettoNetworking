@@ -69,6 +69,15 @@ namespace FiresGhettoNetworkMod
         private static string s_pendingHud;
         private static bool s_pendingHudNow;
 
+        // 1.5.82: what the server's hello says about it (the homestead upgrade gate). False until the server's hello arrives.
+        private static bool s_serverSimulation, s_serverHomesteads, s_serverFlagsKnown;
+
+        /// <summary>Client: the server said Server-Side Simulation runs on it. On the server itself, its own state.</summary>
+        internal static bool ServerSimulationActive => s_isServer ? ServerAuthorityPatches.SimulationActive : s_serverSimulation;
+
+        /// <summary>Client: the server said it keeps homestead areas. On the server itself, its own state.</summary>
+        internal static bool ServerHomesteadsAvailable => s_isServer ? CompanionKeepAlive.HomesteadsAvailable : s_serverHomesteads;
+
         private static string Ours => FiresGhettoNetworkMod.PluginVersion;
 
         public static void InitConfig(ConfigFile config)
@@ -115,6 +124,7 @@ namespace FiresGhettoNetworkMod
             s_greetUntil = 0;
             s_pendingHud = null;
             s_pendingHudNow = false;
+            s_serverSimulation = s_serverHomesteads = s_serverFlagsKnown = false;
         }
 
         /// <summary>Client: the server sent a ConnectionEcho, so it runs FGN of some version.</summary>
@@ -221,6 +231,10 @@ namespace FiresGhettoNetworkMod
             var pkg = new ZPackage();
             pkg.Write(Ours);
             pkg.Write(WireProtocol);
+            // 1.5.82: trailing server flags. Older FGN stops reading after the protocol, so this needs no wire bump.
+            bool server = ZNet.instance != null && ZNet.instance.IsServer();
+            pkg.Write(server && ServerAuthorityPatches.SimulationActive);
+            pkg.Write(server && CompanionKeepAlive.HomesteadsAvailable);
             return pkg;
         }
 
@@ -245,6 +259,15 @@ namespace FiresGhettoNetworkMod
             {
                 version = pkg.ReadString();
                 protocol = pkg.ReadInt();
+                if (!s_isServer && peer.m_server && pkg.GetPos() < pkg.Size())
+                {
+                    s_serverSimulation = pkg.ReadBool();
+                    s_serverHomesteads = pkg.ReadBool();
+                    if (!s_serverFlagsKnown)
+                        LoggerOptions.LogDebug($"[Version] server flags: Server-Side Simulation {(s_serverSimulation ? "on" : "off")}, "
+                            + $"homestead areas {(s_serverHomesteads ? "available" : "not available")}");
+                    s_serverFlagsKnown = true;
+                }
             }
             catch
             {
@@ -305,10 +328,10 @@ namespace FiresGhettoNetworkMod
             {
                 case State.Matched:
                     if (shown != Ours) LoggerOptions.LogWarning($"[Version] peer {name} runs FGN {shown}, this server {Ours}: same wire protocol, so FGN wire paths stay on; update both to match.");
-                    else LoggerOptions.LogInfo($"[Version] peer {name} runs FGN {shown}, same as this server: FGN wire paths on for this peer.");
+                    else LoggerOptions.LogDebug($"[Version] peer {name} runs FGN {shown}, same as this server: FGN wire paths on for this peer.");
                     break;
                 case State.NoFgn:
-                    LoggerOptions.LogInfo($"[Version] peer {name} has no FGN: plain vanilla, as always.");
+                    LoggerOptions.LogDebug($"[Version] peer {name} has no FGN: plain vanilla, as always.");
                     break;
                 case State.Mismatched:
                     // Plain vanilla for a peer is fine behaviour; only a REAL mismatch (its hello named another wire
@@ -316,7 +339,7 @@ namespace FiresGhettoNetworkMod
                     if (entry.Protocol != 0)
                         LoggerOptions.LogWarning($"[Version] peer {name} runs FGN {shown} vs server {Ours}: FGN wire paths OFF for this peer (plain vanilla)");
                     else
-                        LoggerOptions.LogInfo($"[Version] peer {name} runs FGN but sent no version hello in {OlderFgnSeconds:0} s (an FGN before 1.5.31, or still loading): "
+                        LoggerOptions.LogDebug($"[Version] peer {name} runs FGN but sent no version hello in {OlderFgnSeconds:0} s (an FGN before 1.5.31, or still loading): "
                             + "plain vanilla for this peer until its hello arrives.");
                     // A first join to a fresh world can spend 30+ s building world data and send nothing, so silence is never
                     // grounds for a refusal. Only a REAL mismatch (a hello naming another wire protocol) is refused; a silent peer stays plain vanilla until its hello.
@@ -342,7 +365,7 @@ namespace FiresGhettoNetworkMod
             switch (state)
             {
                 case State.Matched:
-                    LoggerOptions.LogInfo($"[Version] the server runs FGN {shown}, same as this client: FGN wire paths on.");
+                    LoggerOptions.LogDebug($"[Version] the server runs FGN {shown}, same as this client: FGN wire paths on.");
                     break;
                 case State.Mismatched:
                     if (protocol != 0)
@@ -351,7 +374,7 @@ namespace FiresGhettoNetworkMod
                         s_pendingHud = $"FiresGhettoNetworking version mismatch: server {shown}, you {Ours} — update to match";
                     }
                     else
-                        LoggerOptions.LogInfo($"[Version] the server runs FGN but sent no version hello in {ServerHelloSeconds:0} s (an FGN before 1.5.31): "
+                        LoggerOptions.LogDebug($"[Version] the server runs FGN but sent no version hello in {ServerHelloSeconds:0} s (an FGN before 1.5.31): "
                             + "plain vanilla with this server until its hello arrives.");
                     break;
             }

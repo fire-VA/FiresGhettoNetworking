@@ -73,7 +73,7 @@ namespace FiresGhettoNetworkMod
                 if (!s_announced)
                 {
                     s_announced = true;
-                    LoggerOptions.LogInfo("ZDOMan.CreateSyncList: each player's update is gathered and sorted around their live character position.");
+                    LoggerOptions.LogDebug("ZDOMan.CreateSyncList: each player's update is gathered and sorted around their live character position.");
                 }
             }
             else if (swapped == 0)

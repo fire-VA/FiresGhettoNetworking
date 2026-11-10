@@ -64,7 +64,7 @@ namespace FiresGhettoNetworkMod
                 "<delay_ms> [jitter_ms] [spike% spike_ms] [for <seconds>] | off — FGN test tool (admin/host): holds everything this game sends "
                 + "for delay ± jitter ms (in order), plus spike_ms on spike% of messages (what a retransmit costs). Session only; off after "
                 + $"{DefaultSeconds / 60.0:F0} min unless 'for' says otherwise. No arguments: status.",
-                new Terminal.ConsoleEvent(OnCommand));
+                new Terminal.ConsoleEvent(OnCommand), isCheat: true);
         }
 
         private static void OnCommand(Terminal.ConsoleEventArgs args)
@@ -197,7 +197,7 @@ namespace FiresGhettoNetworkMod
             string added = sorted.Count == 0 ? "none sent"
                 : $"added {Ms(sorted[sorted.Count / 2])} median, {Ms(sorted[Math.Min(sorted.Count - 1, (int)(sorted.Count * 0.95))])} p95, "
                   + $"{Ms(sorted[sorted.Count - 1])} max";
-            LoggerOptions.LogMessage($"[NetSim] {window}: {sorted.Count} message(s) held on {s_links.Count} link(s), {added}; {s_spikes} spike(s), "
+            LoggerOptions.LogDebug($"[NetSim] {window}: {sorted.Count} message(s) held on {s_links.Count} link(s), {added}; {s_spikes} spike(s), "
                 + $"{s_dropped} dropped with their link.");
             s_added.Clear();
             s_spikes = s_dropped = 0;

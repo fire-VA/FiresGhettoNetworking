@@ -9,6 +9,8 @@ namespace FiresGhettoNetworkMod
     [HarmonyPatch]
     public static class ShipFixesGroup
     {
+        private static readonly AccessTools.FieldRef<Ship, Ship.Speed> s_speed = AccessTools.FieldRefAccess<Ship, Ship.Speed>("m_speed");
+        private static readonly AccessTools.FieldRef<Ship, float> s_rudder = AccessTools.FieldRefAccess<Ship, float>("m_rudderValue");
         public static void CustomFixedUpdate_Postfix(Ship __instance)
         {
             if (!ShipFixesActive()) return;
@@ -19,11 +21,11 @@ namespace FiresGhettoNetworkMod
 
             Ship.Speed publishedSpeed = (Ship.Speed)zdo.GetInt(ZDOVars.s_forward);
             if (__instance.GetSpeedSetting() == Ship.Speed.Stop && publishedSpeed != Ship.Speed.Stop)
-                AccessTools.Field(typeof(Ship), "m_speed").SetValue(__instance, publishedSpeed);
+                s_speed(__instance) = publishedSpeed;   // 1.6.26: cached FieldRef (was AccessTools.Field per call)
 
             float publishedRudder = zdo.GetFloat(ZDOVars.s_rudder);
             if (__instance.GetRudderValue() == 0f && publishedRudder != 0f)
-                AccessTools.Field(typeof(Ship), "m_rudderValue").SetValue(__instance, publishedRudder);
+                s_rudder(__instance) = publishedRudder;
         }
 
         /// <summary>Ownership stays with the server; vanilla hands it to an onboard player every two seconds.</summary>

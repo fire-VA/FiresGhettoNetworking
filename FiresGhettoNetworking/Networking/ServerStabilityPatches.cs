@@ -59,7 +59,7 @@ namespace FiresGhettoNetworkMod
             if (zdo == null) return;
 
             zdo.SetOwner(rpcData.m_targetPeerID);
-            LoggerOptions.LogInfo(
+            LoggerOptions.LogDebug(
                 $"RequestRespons: transferred ship ZDO {rpcData.m_targetZDO} to peer {rpcData.m_targetPeerID}.");
         }
     }

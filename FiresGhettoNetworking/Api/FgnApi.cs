@@ -13,7 +13,13 @@ namespace FiresGhettoNetworkMod.Api
     public static class FgnApi
     {
         /// <summary>1 = settings read/override, hand-off, routed-RPC filters. 2 = live state: GetRole, GetPeerCount, IsSimulationActive, GetTraffic. 3 =ExcludeFromServerSimulation / IsExcludedFromServerSimulation.</summary>
-        public const int Version = 3;
+        public const int Version = 9;   // 9 = RegisterDistantPrefab / UnregisterDistantPrefab / RefreshDistantPrefabs / DistantPrefabCount, IsAutoTuneEnabled / IsAutoTuneSettled / AutoTuneSettled
+        // was 8:   // 8 = GetStatsRows + StatsSection*, RegisterFarIdleSkip / UnregisterFarIdleSkip, KinematicSweepEnabled (FGN looks up no other mod)
+        // was 7:   // 7 = RegisterServerRemovalKeep / UnregisterServerRemovalKeep (a mod keeps its own objects through FGN's sliced server removal)
+        // was 6:   // 6 = SetKeepAliveSettings (the owner mod passes the keep-alive and homestead settings)
+        // was 5:   // 4 = companion keep-alive: AddKeepAlive / RemoveKeepAlive / GetKeepAliveState / GetKeepAliveCounts
+                                        // 5 = AddKeepAlive(pinned), homesteads (AddHomestead / RemoveHomestead / GetHomesteadState / GetHomesteadCounts),
+                                        //     IsServerSimulationActiveForClient / IsHomesteadAvailable
 
         // ---------------- 1. settings ----------------
 
@@ -162,7 +168,7 @@ namespace FiresGhettoNetworkMod.Api
             UnregisterRoutedRpcFilter(modGuid);
             s_filters.Add(new Filter { Mod = string.IsNullOrEmpty(modGuid) ? "an unnamed mod" : modGuid, Fn = filter, Priority = priority });
             s_filters.Sort((a, b) => b.Priority.CompareTo(a.Priority));
-            LoggerOptions.LogMessage($"[FgnApi] routed-RPC filter registered by {modGuid} (priority {priority})");
+            LoggerOptions.LogDebug($"[FgnApi] routed-RPC filter registered by {modGuid} (priority {priority})");
         }
 
         public static void UnregisterRoutedRpcFilter(string modGuid) => s_filters.RemoveAll(f => f.Mod == modGuid);
@@ -243,12 +249,192 @@ namespace FiresGhettoNetworkMod.Api
             if (prefabNames == null) return;
             int added = 0;
             foreach (string n in prefabNames) if (!string.IsNullOrEmpty(n) && global::FiresGhettoNetworkMod.ServerOwnershipPatchesV3.Exclude(n.Trim())) added++;
-            LoggerOptions.LogMessage($"[FgnApi] {(string.IsNullOrEmpty(modGuid) ? "an unnamed mod" : modGuid)} left {added} prefab(s) out of server simulation: {string.Join(", ", prefabNames)}");
+            LoggerOptions.LogDebug($"[FgnApi] {(string.IsNullOrEmpty(modGuid) ? "an unnamed mod" : modGuid)} left {added} prefab(s) out of server simulation: {string.Join(", ", prefabNames)}");
         }
 
         /// <summary>True when FGN leaves this prefab to the clients (built-in or registered with <see cref="ExcludeFromServerSimulation"/>).</summary>
         public static bool IsExcludedFromServerSimulation(string prefabName)
             => !string.IsNullOrEmpty(prefabName) && global::FiresGhettoNetworkMod.ServerOwnershipPatchesV3.IsExcluded(prefabName.Trim().GetStableHashCode());
+
+        // ---------------- 6. companion keep-alive (v4) ----------------
+
+        /// <summary>
+        /// Dedicated server with Server-Side Simulation and 'Companion Keep-Alive' on: keeps the world around <paramref name="where"/>
+        /// built and simulated like a player's area while no player is near, and the server owns the client-simulated companions
+        /// (FGN's excluded set: the Fires companions and ExcludeFromServerSimulation prefabs) inside it, handing each back to the first
+        /// player who comes in range. One call per AREA (the caller groups its companions); <paramref name="id"/> is the caller's key,
+        /// a repeat call replaces the position source. <paramref name="where"/> is read once a second on the main thread; return null
+        /// when the area is gone (it stops counting until it returns a point again, or RemoveKeepAlive). Points are not merged with each
+        /// other, only folded into a player's area. Capped by 'Max Companion Keep-Alive Areas' and FGN's frame and free-memory guards,
+        /// oldest first. False only for a null id or position source.
+        /// </summary>
+        public static bool AddKeepAlive(string id, Func<Vector3?> where) => global::FiresGhettoNetworkMod.CompanionKeepAlive.Add(id, where, ZDOID.None);
+
+        /// <summary>Stops keeping that area. Companions the server holds stay the server's until a player comes in range (then handed back).</summary>
+        public static bool RemoveKeepAlive(string id) => global::FiresGhettoNetworkMod.CompanionKeepAlive.Remove(id);
+
+        /// <summary>One area's state: "active", "covered" (a player's area has it), "settled" (idle), "refused-cap", "refused-frame",
+        /// "refused-memory", "gone" (its position is null), "off" (feature off / not a dedicated server), "unknown" (never added).</summary>
+        public static string GetKeepAliveState(string id) => global::FiresGhettoNetworkMod.CompanionKeepAlive.StateOf(id);
+
+        /// <summary>Areas kept now, areas registered, the cap (0 = off) and the guard ("ok", "frame (hold)", "frame (settling)",
+        /// "memory (hold)", "memory (settling)").</summary>
+        public static void GetKeepAliveCounts(out int active, out int registered, out int cap, out string guard)
+        {
+            active = global::FiresGhettoNetworkMod.CompanionKeepAlive.Active;
+            registered = global::FiresGhettoNetworkMod.CompanionKeepAlive.Registered;
+            cap = global::FiresGhettoNetworkMod.CompanionKeepAlive.Cap;
+            guard = global::FiresGhettoNetworkMod.CompanionKeepAlive.Guard;
+        }
+
+        /// <summary>v6 (1.6.28): the keep-alive and homestead settings, from the mod that owns those config keys (FiresCompanions). Call it
+        /// once at start and again when a key changes; values are clamped to the old key ranges. Until it is called both features are off.</summary>
+        public static void SetKeepAliveSettings(bool companionOn, int maxAreas, int idleMinutes, float holdMs, float settleMs,
+            float memHoldPercent, float memHoldMinGB, float memSettlePercent, bool homeOn, int homeMax, int homesPerOwner)
+            => global::FiresGhettoNetworkMod.CompanionKeepAlive.ApplySettings(companionOn, maxAreas, idleMinutes, holdMs, settleMs,
+                memHoldPercent, memHoldMinGB, memSettlePercent, homeOn, homeMax, homesPerOwner);
+
+        // ---------------- homesteads (v5) ----------------
+
+        /// <summary>AddKeepAlive with <paramref name="pinned"/> = true: the area never idle-settles (a point that never moves stays kept).</summary>
+        public static bool AddKeepAlive(string id, Func<Vector3?> where, bool pinned) => global::FiresGhettoNetworkMod.CompanionKeepAlive.Add(id, where, ZDOID.None, pinned);
+
+        /// <summary>
+        /// Server: keep a homestead's base loaded and fully live while no player is near (dedicated server, Server-Side Simulation,
+        /// 'Homestead Keep-Alive' on). Keyed by <paramref name="centre"/>: a call within 4 m of a registered centre replaces it, so
+        /// re-register from the board ZDOs after a server start. <paramref name="radiusZones"/> is clamped to 1..3 (3 costs more than
+        /// one player). Pinned (never idle-settles); own cap 'Max Homestead Areas' and 'Homesteads Per Owner'
+        /// (<paramref name="ownerPlayerId"/>, 0 = no owner limit). Returns the state now ("new" until the next second's tick, or
+        /// "refused-owner" / "off"); false only when refused or not the server.
+        /// </summary>
+        public static bool AddHomestead(Vector3 centre, long ownerPlayerId, int radiusZones, out string state)
+        {
+            state = global::FiresGhettoNetworkMod.CompanionKeepAlive.AddHome(centre, ownerPlayerId, radiusZones, out bool ok);
+            return ok;
+        }
+
+        /// <summary>Server: stops keeping the homestead registered within 4 m of <paramref name="centre"/>.</summary>
+        public static bool RemoveHomestead(Vector3 centre) => global::FiresGhettoNetworkMod.CompanionKeepAlive.RemoveHome(centre);
+
+        /// <summary>Server: "active", "covered" (a player is there), "refused-cap", "refused-owner", "refused-frame", "refused-memory",
+        /// "new", "off" (not available on this server), "unknown" (never added).</summary>
+        public static string GetHomesteadState(Vector3 centre) => global::FiresGhettoNetworkMod.CompanionKeepAlive.HomeState(centre);
+
+        /// <summary>Server: homesteads kept now, registered, the cap (0 = off) and the zones kept live by them.</summary>
+        public static void GetHomesteadCounts(out int active, out int registered, out int cap, out int zones)
+            => global::FiresGhettoNetworkMod.CompanionKeepAlive.HomeCounts(out active, out registered, out cap, out zones);
+
+        /// <summary>Client or server: Server-Side Simulation runs on the server. A client learns it from the server's FGN hello
+        /// (false until then, and against a server older than FGN 1.5.82).</summary>
+        public static bool IsServerSimulationActiveForClient() => global::FiresGhettoNetworkMod.FgnVersionGate.ServerSimulationActive;
+
+        /// <summary>Client or server: the server keeps homestead areas (the upgrade gate). Same source as IsServerSimulationActiveForClient.</summary>
+        public static bool IsHomesteadAvailable() => global::FiresGhettoNetworkMod.FgnVersionGate.ServerHomesteadsAvailable;
+
+        // ---------------- 9. network view (v5, 1.6.11; Fires God Complex / Studio Link by reflection) ----------------
+
+        /// <summary>Version of the network-view calls below; 1 = GetPeerNetStats / GetZoneOwners / GetSimulationState.</summary>
+        public const int NetViewApiVersion = 1;
+
+        /// <summary>JSON array, one row per connected peer: peerId, name, platform (Steam / PlayFab / other), pingMs, outKBps, inKBps,
+        /// sendQueueBytes, compressionRatio / backoff / tier (null until FGN keeps them per peer), quality (good / fair / poor / unknown:
+        /// good = ping &lt; 100 ms and queue &lt; 64 KB, poor = ping &gt; 250 ms or queue &gt; 512 KB). Reads the sockets' own counters.</summary>
+        public static string GetPeerNetStats() => FgnNetView.PeerNetStats();
+
+        /// <summary>JSON array for the zones within radiusZones (max 10) of zone (cx, cz): x, z, simulatedBy (the owner of the zone's
+        /// _ZoneCtrl ZDO: a peer id, "server" on a dedicated server, or null when nobody runs it), ownerName, zdoCountByPeer {peer: n}.
+        /// Each zone is cached 2 s.</summary>
+        public static string GetZoneOwners(int cx, int cz, int radiusZones) => FgnNetView.ZoneOwners(cx, cz, radiusZones);
+
+        /// <summary>JSON: sss (Server-Side Simulation running), selectiveOwnership (the Selective toggle), serverZones [[x, z]...]
+        /// (zones near a peer whose _ZoneCtrl the server owns), homesteads, keepAlive (active counts).</summary>
+        public static string GetSimulationState() => FgnNetView.SimulationState();
+
+        // ---------------- 7. server removal keep (Version 7, 1.6.62) ----------------
+        // FGN depends on no other mod (Fire 11-08). A mod that must keep some objects loaded on a dedicated server (e.g. a companion mod's
+        // kept areas) registers here instead; FGN never looks that mod up.
+
+        /// <summary>
+        /// Version 7. FGN's sliced server removal (it replaces vanilla ZNetScene.RemoveObjects on a dedicated server) asks this before it
+        /// removes an instance: <paramref name="refresh"/> once per removal cycle (~2 s; return how many objects you keep, for the log),
+        /// then <paramref name="isKept"/> per instance (true = leave it loaded). <paramref name="owner"/> is your Harmony id: if your mod
+        /// also patches ZNetScene.RemoveObjects, registering tells FGN that patch is covered, so the sliced removal can run. Registering
+        /// the same owner again replaces its callbacks. False (and one log line) on an empty owner or a null callback.
+        /// </summary>
+        public static bool RegisterServerRemovalKeep(string owner, Func<int> refresh, Func<ZDO, bool> isKept)
+            => ServerStream.AddRemovalKeep(owner, refresh, isKept);
+
+        /// <summary>Version 7. Removes a keep registered by <paramref name="owner"/>; false when none was.</summary>
+        public static bool UnregisterServerRemovalKeep(string owner) => ServerStream.RemoveRemovalKeep(owner);
+
+        // ---------------- 8. stats rows, far-idle skip, kinematic sweep key (Version 8, 1.6.63) ----------------
+        // FGN looks up no other mod (Fire 11-08): a hub that shows stats PULLS FGN's rows; a mod whose creatures must stay full speed
+        // REGISTERS a skip; the mod that runs the kinematic sweep READS FGN's key.
+
+        /// <summary>Version 8. Suggested id, title, order and refresh (seconds) for a stats card built from <see cref="GetStatsRows"/>.</summary>
+        public const string StatsSectionId = "fgn", StatsSectionTitle = "Networking (FGN)";
+        public const int StatsSectionOrder = 200;
+        public const float StatsSectionRefreshSeconds = 1f;
+
+        /// <summary>
+        /// Version 8. FGN's stats as rows of 4 strings: label, value, state ("normal", "good", "warn", "bad", "muted"), tooltip (may be null).
+        /// Main thread; call it only while the rows are shown (it walks the peer list once). Never throws: on an error, an empty list.
+        /// </summary>
+        public static List<string[]> GetStatsRows()
+        {
+            try { return FgnStatsSection.Rows(); }
+            catch (Exception e) { LoggerOptions.LogDebug($"[FGN] stats rows failed: {e.GetType().Name}: {e.Message}"); return new List<string[]>(); }
+        }
+
+        /// <summary>
+        /// Version 8. "Slow Ticks For Far Idle Creatures" leaves a creature at full speed when <paramref name="keepFullSpeed"/> returns true
+        /// for it (e.g. a companion). Called while FGN decides whether a far, idle, owned creature may be slowed. <paramref name="owner"/>
+        /// names the caller in FGN's log; registering again replaces. A skip that throws is dropped (one Warning). False on bad args.
+        /// </summary>
+        public static bool RegisterFarIdleSkip(string owner, Func<Character, bool> keepFullSpeed) => FarIdleHandoff.ForwardSkip(owner, keepFullSpeed);   // 1.6.82: the job moved to FiresFixes
+
+        /// <summary>Version 8. Removes the skip registered by <paramref name="owner"/>; false when none was.</summary>
+        public static bool UnregisterFarIdleSkip(string owner) => FarIdleHandoff.ForwardRemove(owner);
+
+        /// <summary>Version 8. FGN's "[Performance] Kinematic sync sweep" value (restart to apply); true before FGN's config is bound.
+        /// From 1.6.64 FGN also runs the sweep itself (a mod that toggles a body can still set ZSyncTransform's flag in the same call).</summary>
+        public static bool KinematicSweepEnabled => KinematicSweepOwner.Enabled == null || KinematicSweepOwner.Enabled.Value;
+
+        // ---------------- 9. distant prefabs, auto-tune state (Version 9, 1.6.64) ----------------
+
+        /// <summary>
+        /// Version 9. Streams <paramref name="prefabName"/>'s objects out to <paramref name="maxDistanceMeters"/> (beyond the active area):
+        /// the server marks its ZDOs Distant and force-sends them; clients cache the in-range ones and hand them to vanilla's distant
+        /// creation, so vanilla creates and cleans them up. Registering again updates the distance; 0 or less unregisters. After a batch of
+        /// registrations call <see cref="RefreshDistantPrefabs"/>. False on an empty name.
+        /// </summary>
+        public static bool RegisterDistantPrefab(string prefabName, float maxDistanceMeters) => DistantPrefabs.Register(prefabName, maxDistanceMeters);
+
+        /// <summary>Version 9. Stops streaming <paramref name="prefabName"/> far; false when it wasn't registered.</summary>
+        public static bool UnregisterDistantPrefab(string prefabName) => DistantPrefabs.Unregister(prefabName);
+
+        /// <summary>Version 9. Rebuilds the client's distant cache and runs the server's mark + send now (instead of within 2 s / 10 s).</summary>
+        public static void RefreshDistantPrefabs() => DistantPrefabs.Refresh();
+
+        /// <summary>Version 9. How many prefabs are registered for distant streaming.</summary>
+        public static int DistantPrefabCount => DistantPrefabs.Count;
+
+        /// <summary>Version 9. FGN's client bandwidth auto-tune key ("Auto-Tune" / "EnableClientAutoTune").</summary>
+        public static bool IsAutoTuneEnabled => AutoTune.AutoTuneConfig.EnableClientAutoTune != null && AutoTune.AutoTuneConfig.EnableClientAutoTune.Value;
+
+        /// <summary>
+        /// Version 9. True when a bulk transfer won't skew FGN's bandwidth probe: auto-tune is off, or this session's probe has finished.
+        /// A mod that sends a large transfer at join (e.g. an asset sync) waits for this, or for <see cref="AutoTuneSettled"/>.
+        /// </summary>
+        public static bool IsAutoTuneSettled => !IsAutoTuneEnabled || AutoTune.AutoTuneProbe.ProbeCompletedThisSession;
+
+        /// <summary>Version 9. Raised (main thread) when this session's bandwidth probe finishes. Not raised when auto-tune is off: check
+        /// <see cref="IsAutoTuneSettled"/> first. A handler that throws is logged and skipped.</summary>
+        public static event Action AutoTuneSettled
+        {
+            add => AutoTune.AutoTuneProbe.Completed += value;
+            remove => AutoTune.AutoTuneProbe.Completed -= value;
+        }
 
         /// <summary>For FGN's perf report: "mod: calls, ms" per filter since the last call.</summary>
         internal static string TakeFilterReport()

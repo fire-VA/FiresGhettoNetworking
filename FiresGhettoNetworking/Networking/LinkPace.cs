@@ -60,7 +60,7 @@ namespace FiresGhettoNetworkMod
                     : SteamNetworkingSockets.GetConnectionInfo(connection, out info);
                 if (!ok) return;
                 info.m_addrRemote.ToString(out string remote, true);
-                LoggerOptions.LogMessage($"[LinkPace] connection to {who}: remote {remote}, {Flags(info.m_nFlags)}");
+                LoggerOptions.LogDebug($"[LinkPace] connection to {who}: remote {remote}, {Flags(info.m_nFlags)}");
             }
             catch (Exception e)
             {

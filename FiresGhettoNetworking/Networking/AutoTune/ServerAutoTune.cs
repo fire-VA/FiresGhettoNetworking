@@ -94,7 +94,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             if (requesterUid != _probeSlotHolderUid && !_probeSlotQueue.Contains(requesterUid))
             {
                 _probeSlotQueue.Enqueue(requesterUid);
-                LoggerOptions.LogInfo($"[AutoTune] Probe slot busy (peer {_probeSlotHolderUid}); peer {requesterUid} queued at position {_probeSlotQueue.Count}.");
+                LoggerOptions.LogDebug($"[AutoTune] Probe slot busy (peer {_probeSlotHolderUid}); peer {requesterUid} queued at position {_probeSlotQueue.Count}.");
             }
         }
 
@@ -114,7 +114,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             try
             {
                 peer.m_rpc.Invoke(AutoTuneProbe.RpcProbeSlotGrant);
-                LoggerOptions.LogInfo($"[AutoTune] Probe slot granted to peer {peerUid}.");
+                LoggerOptions.LogDebug($"[AutoTune] Probe slot granted to peer {peerUid}.");
             }
             catch (Exception ex)
             {
@@ -226,7 +226,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         // logged by AutoTuneApplier when it writes them. The zone radius is the tier's value, not EffectiveConfig's: that one
         // asks RenderLimitsCompat.Present, which caches its answer, and at Awake plugins loading after FGN are not listed yet.
         private static void LogAppliedTier(Tier tier, int cores, int ramMb)
-        {            LoggerOptions.LogMessage($"[AutoTune] SERVER auto-tune APPLIED: tier={tier} (cores={cores}, RAM={ramMb}MB). In use: "
+        {            LoggerOptions.LogDebug($"[AutoTune] SERVER auto-tune APPLIED: tier={tier} (cores={cores}, RAM={ramMb}MB). In use: "
                 + $"ZDO Throttle Distance {EffectiveConfig.ZDOThrottleDistance():0}m, "
                 + $"AI LOD Near {EffectiveConfig.AILODNearDistance():0}m / Far {EffectiveConfig.AILODFarDistance():0}m / "
                 + $"Throttle Factor {EffectiveConfig.AILODThrottleFactor():0.00}, "
@@ -249,7 +249,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             AppendDelta(sb, "RPC AoI Radius",         $"{FiresGhettoNetworkMod.ConfigRpcAoIRadius.Value:0}m",       $"{preset.RpcAoIRadius:0}m");
             AppendDelta(sb, "Extended Zone Radius",   FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value.ToString(), preset.ExtendedZoneRadius.ToString());
             sb.Append("To apply: set 'Enable Server Auto-Tune' = true OR copy individual values into the config above.");
-            LoggerOptions.LogMessage(sb.ToString());
+            LoggerOptions.LogDebug(sb.ToString());
         }
 
         private static void AppendDelta(StringBuilder sb, string label, string current, string suggested)
@@ -303,7 +303,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 ReleaseProbeSlot(peerUid);
             }
 
-            LoggerOptions.LogInfo($"[AutoTune] Client reported tier={reported} ping={pingMedianMs}ms peer={peerUid} (rolling window: {_clientReports.Count}/{ClientReportWindow})");
+            LoggerOptions.LogDebug($"[AutoTune] Client reported tier={reported} ping={pingMedianMs}ms peer={peerUid} (rolling window: {_clientReports.Count}/{ClientReportWindow})");
 
             // Log a summary on a cadence — too chatty otherwise on a busy server
             if (DateTime.UtcNow - _lastSummaryLogged >= SummaryInterval)
@@ -350,7 +350,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 AppendDelta(sb, "Extended Zone Radius",   FiresGhettoNetworkMod.ConfigExtendedZoneRadius.Value.ToString(), preset.ExtendedZoneRadius.ToString());
             }
 
-            LoggerOptions.LogMessage(sb.ToString());
+            LoggerOptions.LogDebug(sb.ToString());
         }
 
         private static Tier MedianTier(int low, int med, int high)

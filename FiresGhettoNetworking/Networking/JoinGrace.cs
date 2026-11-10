@@ -81,7 +81,7 @@ namespace FiresGhettoNetworkMod
                 joiner.Settled = true;
                 ResendJoinOnlyLists(peer);
                 if (joiner.UsedGrace)
-                    LoggerOptions.LogMessage($"[JoinGrace] {NameOf(peer)} spawned {connectedFor:F0} s after connecting; vanilla's "
+                    LoggerOptions.LogDebug($"[JoinGrace] {NameOf(peer)} spawned {connectedFor:F0} s after connecting; vanilla's "
                         + $"{vanilla:F0} s timeout applies from now.");
                 return vanilla;
             }
@@ -105,7 +105,7 @@ namespace FiresGhettoNetworkMod
             if (!joiner.UsedGrace && rpc.m_timeSinceLastPing > vanilla)
             {
                 joiner.UsedGrace = true;
-                LoggerOptions.LogMessage($"[JoinGrace] {NameOf(peer)} has sent nothing for {rpc.m_timeSinceLastPing:F0} s while joining "
+                LoggerOptions.LogInfo($"[JoinGrace] {NameOf(peer)} has sent nothing for {rpc.m_timeSinceLastPing:F0} s while joining "
                     + $"(connected {connectedFor:F0} s ago), likely still loading the world. Vanilla would drop them now; until they "
                     + $"first spawn the server allows up to {grace} s of silence (any message from them resets it).");
             }
@@ -153,7 +153,7 @@ namespace FiresGhettoNetworkMod
             if (!s_clientGraceLogged && rpc.m_timeSinceLastPing > vanilla)
             {
                 s_clientGraceLogged = true;
-                LoggerOptions.LogMessage($"[JoinGrace] Nothing from the server for {rpc.m_timeSinceLastPing:F0} s while joining. Vanilla "
+                LoggerOptions.LogInfo($"[JoinGrace] Nothing from the server for {rpc.m_timeSinceLastPing:F0} s while joining. Vanilla "
                     + $"would disconnect now; until we spawn we allow up to {grace} s of silence.");
             }
             return grace;
@@ -172,7 +172,7 @@ namespace FiresGhettoNetworkMod
             {
                 ZNet.instance.SendAdminList();
                 ZNet.instance.SendHistoricalPlayerList();
-                LoggerOptions.LogInfo($"[JoinGrace] Sent the admin list and player history again now that {NameOf(peer)} has spawned.");
+                LoggerOptions.LogDebug($"[JoinGrace] Sent the admin list and player history again now that {NameOf(peer)} has spawned.");
             }
             catch (System.Exception e)
             {

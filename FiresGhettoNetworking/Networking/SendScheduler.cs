@@ -67,7 +67,7 @@ namespace FiresGhettoNetworkMod
             if (s_yieldTo != null)
                 LoggerOptions.LogWarning($"[SendScheduler] '{s_yieldTo}' already replaces the ZDO send order, so FGN leaves sending to it.");
             else if (Active())
-                LoggerOptions.LogMessage($"[SendScheduler] every player is sent world updates at {TargetHz():F0} per second, "
+                LoggerOptions.LogDebug($"[SendScheduler] every player is sent world updates at {TargetHz():F0} per second, "
                     + $"within {Mathf.Clamp(ConfigBudgetMs.Value, MinBudgetMs, MaxBudgetMs):F1} ms per frame.");
         }
 

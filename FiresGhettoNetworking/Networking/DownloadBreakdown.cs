@@ -42,15 +42,17 @@ namespace FiresGhettoNetworkMod
                 int hash = package.ReadInt();
                 package.SetPos(position);
 
+                TryName(__instance, hash);
+                if (hash != 0 && !s_names.ContainsKey(hash)) NoteDropped(__instance, hash);   // [RpcDrops] (Info) stays on at every level
+                if (s_dropped.Count > 0 && Time.unscaledTime >= s_nextDropCheck) ReportLateHandlers();
+                // 1.5.95: the [Download] report prints only at Debug, so its per-package counters and timing run only then
+                if (!LoggerOptions.DebugEnabled) return;
                 s_totalCalls++;
                 s_totalBytes += package.Size();
                 s_calls.TryGetValue(hash, out long calls);
                 s_calls[hash] = calls + 1;
                 s_bytes.TryGetValue(hash, out long bytes);
                 s_bytes[hash] = bytes + package.Size();
-                TryName(__instance, hash);
-                if (hash != 0 && !s_names.ContainsKey(hash)) NoteDropped(__instance, hash);
-                if (s_dropped.Count > 0 && Time.unscaledTime >= s_nextDropCheck) ReportLateHandlers();
                 s_handling = package;
                 s_handlingAt = position;
                 s_handlingHash = hash;
@@ -241,14 +243,14 @@ namespace FiresGhettoNetworkMod
                 MethodInfo handler = HandlerOf(dropped.Rpc, hash);
                 bool vanilla = handler?.DeclaringType?.Assembly.GetName().Name == VanillaAssembly;
                 if (vanilla && Array.IndexOf(VanillaResentOnATimer, handler.Name) >= 0)
-                    LoggerOptions.LogInfo(line + " Valheim sends this again every couple of seconds, so nothing is lost.");
+                    LoggerOptions.LogDebug(line + " Valheim sends this again every couple of seconds, so nothing is lost.");
                 else if (vanilla && Array.IndexOf(VanillaResentByFgnAfterSpawn, handler.Name) >= 0)
-                    LoggerOptions.LogInfo(line + " Valheim sends this only at the join (player history: when it changes); an FGN 1.4.72+ "
+                    LoggerOptions.LogDebug(line + " Valheim sends this only at the join (player history: when it changes); an FGN 1.4.72+ "
                         + "server sends it again once the player has spawned, an older one leaves this client without it.");
                 else if (vanilla)
-                    LoggerOptions.LogMessage(line + " Valheim doesn't send this again on a timer, so this client is without it until it's next sent.");
+                    LoggerOptions.LogDebug(line + " Valheim doesn't send this again on a timer, so this client is without it until it's next sent.");
                 else
-                    LoggerOptions.LogMessage(line + " If the mod sent it once while the player joined, it never arrived: that mod should send it "
+                    LoggerOptions.LogDebug(line + " If the mod sent it once while the player joined, it never arrived: that mod should send it "
                         + "later or have the client ask for it.");
             }
         }

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 
 namespace FiresGhettoNetworkMod
@@ -107,7 +107,7 @@ namespace FiresGhettoNetworkMod
         {
             var zdoMan = ZDOMan.instance;
             if (zdoMan == null) return false;
-            Vector2s zone = ZoneSystem.GetZone(point);
+            Vector2s zone = FgnRing.Sector(point);
             var objects = zdoMan.m_objectsBySector[(int)ZoneSystem.SectorToIndex(zone).Sector];
             if (objects == null) return false;
             for (int i = 0; i < objects.Count; i++)
@@ -135,7 +135,7 @@ namespace FiresGhettoNetworkMod
         {
             if (Time.realtimeSinceStartup < s_nextReportTime) return;
             s_nextReportTime = Time.realtimeSinceStartup + ReportIntervalSec;
-            LoggerOptions.LogMessage(line);
+            LoggerOptions.LogDebug(line);
         }
     }
 }

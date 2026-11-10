@@ -66,6 +66,8 @@ namespace FiresGhettoNetworkMod
             return currentPos + ClampForwardOffsetToMaxZones(velocity * lookahead, maxZones);
         }
 
+        private const float TeleportSpeedSqr = 60f * 60f;   // faster than any mount or ship
+
         private static Vector3 RefreshVelocityIfMovedEnough(long uid, PeerMotionSample prev, Vector3 currentPos, float dt, float now)
         {
             Vector3 delta = currentPos - prev.Pos;
@@ -73,6 +75,12 @@ namespace FiresGhettoNetworkMod
                 return prev.Velocity;
 
             Vector3 instantVel = delta / dt;
+            // 1.6.31: a teleport is not motion: it would aim the prediction up to its cap away from the player who just arrived.
+            if (instantVel.sqrMagnitude > TeleportSpeedSqr)
+            {
+                _peerMotion[uid] = new PeerMotionSample { Pos = currentPos, Time = now, Velocity = Vector3.zero };
+                return Vector3.zero;
+            }
             Vector3 smoothed = Vector3.Lerp(prev.Velocity, instantVel, VelocityEmaWeight);
             _peerMotion[uid] = new PeerMotionSample { Pos = currentPos, Time = now, Velocity = smoothed };
             return smoothed;
@@ -90,29 +98,22 @@ namespace FiresGhettoNetworkMod
             _peerMotion.Remove(netPeer.m_uid);
         }
 
-        [HarmonyPatch(typeof(ZoneSystem), "IsActiveAreaLoaded")]
-        [HarmonyPriority(Priority.First)]
-        [HarmonyPrefix]
-        public static bool IsActiveAreaLoaded_TeleportFix(ref bool __result)
-        {
-            if (Player.m_localPlayer == null || !Player.m_localPlayer.IsTeleporting()) return true;
-            __result = true;
-            return false;
-        }
+        // 1.6.70 N1: the teleport answer for IsActiveAreaLoaded moved to TeleportCreateGate (create passes only, each object gated on its own zone).
 
         private const int ZdoScratchCapacity = 8192;
-        private static readonly List<ZDO> _cdoNearScratch = new List<ZDO>(ZdoScratchCapacity);
-        private static readonly List<ZDO> _cdoDistantScratch = new List<ZDO>(ZdoScratchCapacity);
+        internal static readonly List<ZDO> _cdoNearScratch = new List<ZDO>(ZdoScratchCapacity);
+        internal static readonly List<ZDO> _cdoDistantScratch = new List<ZDO>(ZdoScratchCapacity);
         private static int _cdoSources;   // areas collected this frame (ready peers + SSS test areas)
         private static float _cdoNextPass;   // realtime of the next server object pass ('Server Object Pass Hz')
-        private static readonly List<ZDO> _cdoNearFiltered = new List<ZDO>(ZdoScratchCapacity);
-        private static readonly List<ZDO> _cdoDistantFiltered = new List<ZDO>(ZdoScratchCapacity);
+        internal static readonly List<ZDO> _cdoNearFiltered = new List<ZDO>(ZdoScratchCapacity);
+        internal static readonly List<ZDO> _cdoDistantFiltered = new List<ZDO>(ZdoScratchCapacity);
 
         [HarmonyPatch(typeof(ZNetScene), "CreateDestroyObjects")]
         [HarmonyPrefix]
         public static bool CreateDestroyObjects_Prefix(ZNetScene __instance)
         {
-            if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetConnectedPeers().Count == 0)
+            // 1.5.75: kept companion areas count as sources too, so a world with no player online still builds them
+            if (!ZNet.instance || !ZNet.instance.IsDedicated() || (ZNet.instance.GetConnectedPeers().Count == 0 && CompanionKeepAlive.Points.Count == 0))
             {
                 ServerStatusDiagnostics.s_createDestroy_bail_noPeers++;
                 return true;
@@ -131,12 +132,15 @@ namespace FiresGhettoNetworkMod
             }
 
             SssTestAreas.RemindIfActive();
+            // 1.6.57: the event-driven server pass (ServerStream); false = it threw this session, the full pass below runs
+            if (ServerStream.Enabled && ServerStream.Pass(__instance)) return false;
             try
             {
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 CollectZdosFromAllPeerActiveAreas(SimDistance.Widened(ExtendedZoneRadius()));
                 long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
                 bool quiet = SssQuietPass.WasQuiet(_cdoZones);   // read before this pass changes anything
+                ServerStaticPieces.BeginPass(_cdoNearScratch, CompanionKeepAlive.Points, SssTestAreas.Points);   // 1.6.56: the simulated areas for this pass
                 long tQuiet = System.Diagnostics.Stopwatch.GetTimestamp();
                 FilterAndDedupeZdos(_cdoNearScratch, _cdoNearFiltered, requireLoadedZone: true);
                 long tNear = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -171,6 +175,7 @@ namespace FiresGhettoNetworkMod
                 SssQuietPass.PassDone(quiet, instancesCreated - instancesBefore, instancesCreated - __instance.m_instances.Count);
                 ServerFrameSplit.Frame(t1 - t0, t2 - t1, t3 - t2, System.Diagnostics.Stopwatch.GetTimestamp() - t3,
                     _cdoNearFiltered.Count, _cdoDistantFiltered.Count);
+                ServerStaticPieces.Report(__instance.m_instances.Count);
                 return false;
             }
             catch (System.NullReferenceException ex)
@@ -186,10 +191,10 @@ namespace FiresGhettoNetworkMod
         // source's DISTANT rings, all through one shared visited set (vanilla's own FindObjects / FindDistantObjects, which add
         // each sector they read). Each sector is read once: near wins over distant, exactly the union of the per-player calls.
         // One source still uses vanilla's FindSectorObjects unchanged.
-        private static readonly List<Vector2s> _cdoZones = new List<Vector2s>(8);
+        internal static readonly List<Vector2s> _cdoZones = new List<Vector2s>(8);
         private static readonly HashSet<ZoneSystem.SectorIndex> _cdoVisited = new HashSet<ZoneSystem.SectorIndex>();
 
-        private static void CollectZdosFromAllPeerActiveAreas(SimulationDistance simulationDistance)
+        internal static void CollectZdosFromAllPeerActiveAreas(SimulationDistance simulationDistance)
         {
             _cdoNearScratch.Clear();
             _cdoDistantScratch.Clear();
@@ -197,9 +202,10 @@ namespace FiresGhettoNetworkMod
             foreach (ZNetPeer peer in ZNet.instance.GetConnectedPeers())
             {
                 if (!peer.IsReady()) continue;
-                _cdoZones.Add(ZoneSystem.GetZone(GetPredictedRefPos(peer)));
+                _cdoZones.Add(FgnRing.Sector(GetPredictedRefPos(peer)));
             }
-            foreach (Vector3 point in SssTestAreas.Points) _cdoZones.Add(ZoneSystem.GetZone(point));
+            foreach (Vector3 point in SssTestAreas.Points) _cdoZones.Add(FgnRing.Sector(point));
+            foreach (Vector3 point in CompanionKeepAlive.Points) _cdoZones.Add(FgnRing.Sector(point));
             _cdoSources = _cdoZones.Count;
             ZDOMan zdoMan = ZDOMan.instance;
             if (_cdoSources == 1) { zdoMan.FindSectorObjects(_cdoZones[0], simulationDistance, _cdoNearScratch, _cdoDistantScratch); return; }
@@ -263,7 +269,19 @@ namespace FiresGhettoNetworkMod
         /// under it, so it waits until LoadNextZoneAround has loaded that zone. Vanilla's own active-area gate only covers
         /// the near band, not FGN's extended ring.
         /// </summary>
-        private static void FilterAndDedupeZdos(List<ZDO> source, List<ZDO> dest, bool requireLoadedZone)
+        private static int s_keptInUnloadedZone;
+        private static float s_nextKeptLog;
+        private static void NoteKeptInUnloadedZone(ZDO zdo)
+        {
+            s_keptInUnloadedZone++;
+            float now = Time.unscaledTime;
+            if (now < s_nextKeptLog) return;
+            s_nextKeptLog = now + 30f;
+            LoggerOptions.LogDebug($"[SSS] {s_keptInUnloadedZone} live instance(s) kept while their zone loads (latest at {zdo.GetPosition():F0}): not destroyed for crossing into it");
+            s_keptInUnloadedZone = 0;
+        }
+
+        internal static void FilterAndDedupeZdos(List<ZDO> source, List<ZDO> dest, bool requireLoadedZone)
         {
             dest.Clear();
             Vector2s lastSector = default;
@@ -287,8 +305,16 @@ namespace FiresGhettoNetworkMod
                     // Objects arrive grouped by sector, so the zone lookup is made once per sector run, not per object
                     Vector2s sector = zdo.GetSector();
                     if (!haveLast || sector.x != lastSector.x || sector.y != lastSector.y) { lastSector = sector; lastLoaded = loadedZones.ContainsKey(sector); haveLast = true; }
-                    if (!lastLoaded) continue;
+                    // 1.6.31: an instance that already exists stays in the list: left out, RemoveObjects destroyed it (and its ZDO if not persistent)
+                    // when it crossed into a zone still loading. Vanilla never removes one for that. Only creating a new one waits for the zone.
+                    if (!lastLoaded)
+                    {
+                        if (scene == null || !scene.HaveInstance(zdo)) continue;
+                        NoteKeptInUnloadedZone(zdo);
+                    }
                 }
+                // 1.6.56: a building piece outside every simulated area stays data only (ServerStaticPieces)
+                if (requireLoadedZone && ServerStaticPieces.LeaveOut(zdo, scene)) continue;
                 // No duplicates to drop: CollectZdosFromAllPeerActiveAreas reads each sector once across all sources.
                 dest.Add(zdo);
             }
@@ -325,10 +351,10 @@ namespace FiresGhettoNetworkMod
         private const float OrphanLogIntervalSec = 5f;
         private static float _orphanNextLogTime;
 
-        private static bool OrphanPruneEnabled()
+        internal static bool OrphanPruneEnabled()
             => FiresGhettoNetworkMod.ConfigEnableInstanceOrphanPrune?.Value ?? true;
 
-        private static void PruneOrphanInstances(ZNetScene scene)
+        internal static void PruneOrphanInstances(ZNetScene scene)
         {
             if (!OrphanPruneEnabled()) return;
             if (scene == null || scene.m_instances == null) return;
@@ -433,12 +459,16 @@ namespace FiresGhettoNetworkMod
 
         public static void ZoneSystem_Update_Postfix(ZoneSystem __instance)
         {
-            if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetPeers().Count == 0) return;
+            if (!ZNet.instance || !ZNet.instance.IsDedicated()) return;
+            CompanionKeepAlive.Update();   // 1.5.75: guards, kept areas, companion ownership (1 Hz inside)
+            if (ZNet.instance.GetPeers().Count == 0 && CompanionKeepAlive.Points.Count == 0) return;
             int radius = SimDistance.Near() + ExtendedZoneRadius();
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
                 if (peer.IsReady())
                     LoadNextZoneAround(__instance, GetPredictedRefPos(peer), radius);
             foreach (Vector3 point in SssTestAreas.Points)
+                LoadNextZoneAround(__instance, point, radius);
+            foreach (Vector3 point in CompanionKeepAlive.Points)
                 LoadNextZoneAround(__instance, point, radius);
         }
 
@@ -463,7 +493,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPrefix]
         public static bool OutsideActiveArea_Prefix(ref bool __result, Vector3 point)
         {
-            if (!ZNet.instance || !ZNet.instance.IsDedicated() || ZNet.instance.GetPeers().Count == 0)
+            if (!ZNet.instance || !ZNet.instance.IsDedicated() || (ZNet.instance.GetPeers().Count == 0 && CompanionKeepAlive.Points.Count == 0))
                 return true;
 
             int activeArea = SimDistance.Near() + ExtendedZoneRadius();
@@ -477,13 +507,14 @@ namespace FiresGhettoNetworkMod
         // against the same radial rule directly.
         private static bool IsPointInsideAnyPeerActiveArea(Vector3 point, int activeArea)
         {
-            Vector2s pointZone = ZoneSystem.GetZone(point);
+            Vector2s pointZone = FgnRing.Sector(point);
             foreach (ZNetPeer peer in ZNet.instance.GetPeers())
-                if (peer.IsReady() && SimDistance.ZoneInRadius(ZoneSystem.GetZone(GetPredictedRefPos(peer)), pointZone, activeArea))
+                if (peer.IsReady() && SimDistance.ZoneInRadius(FgnRing.Sector(GetPredictedRefPos(peer)), pointZone, activeArea))
                     return true;
             foreach (Vector3 testPoint in SssTestAreas.Points)
-                if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(testPoint), pointZone, activeArea))
+                if (SimDistance.ZoneInRadius(FgnRing.Sector(testPoint), pointZone, activeArea))
                     return true;
+            if (CompanionKeepAlive.Covers(pointZone, activeArea)) return true;
             return false;
         }
 

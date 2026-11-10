@@ -31,7 +31,7 @@ namespace FiresGhettoNetworkMod
                     catch { _present = false; }
 
                     if (_present.Value)
-                        LoggerOptions.LogInfo("Render Limits detected — FGN defers zone-load sizing to it (Extended Zone Radius treated as 0; server authority stays multi-peer).");
+                        LoggerOptions.LogDebug("Render Limits detected — FGN defers zone-load sizing to it (Extended Zone Radius treated as 0; server authority stays multi-peer).");
                 }
                 return _present.Value;
             }

@@ -81,7 +81,7 @@ namespace FiresGhettoNetworkMod
                 }
             }
             s_built = true;
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"[ServerOwnership-V3] simulated-prefab set built ({s_simulatedPrefabs.Count} entries — "
                 + (ownShips
                     ? "Character + Ship; server-side ship physics is ON"
@@ -131,11 +131,11 @@ namespace FiresGhettoNetworkMod
 
             long serverUid = ZDOMan.GetSessionID();
 
-            Vector2s zone = ZoneSystem.GetZone(refPosition);
+            Vector2s zone = FgnRing.Sector(refPosition);
 
             s_tempNearObjects.Clear();
             int nearArea = SimDistance.Near();
-            __instance.FindSectorObjects(zone, new SimulationDistance(nearArea, 0), s_tempNearObjects);
+            __instance.FindSectorObjects(zone, new SimulationDistance(nearArea, 0, SimDistance.Synced().IsClassic), s_tempNearObjects);   // 1.6.31: classic as vanilla's ReleaseNearbyZDOS passes it; without it the square's corners got no pass
             int activatedArea = nearArea - 1;
 
             s_passCount++;
@@ -156,11 +156,18 @@ namespace FiresGhettoNetworkMod
                 if (simulated && ValcastPossession.Handle(zdo)) continue;
                 owner = zdo.GetOwner();   // Handle may have cleared a stale claim; the owner itself is unchanged then
 
+                // 1.6.24: same generic opt-in as V2 - a "fgn_server_keeps" ZDO stays the server's, never handed to a peer
+                if (zdo.GetBool(ServerOwnershipPatches.ServerKeepsKey))
+                {
+                    if (owner != serverUid) zdo.SetOwner(serverUid);
+                    continue;
+                }
+
                 // Without this the server only ever gets the monsters it spawned itself. The branches below are vanilla's stale-owner rule, which never
                 // moves a creature away from a player who still covers it, and the player's own SpawnSystem makes it that
                 // player's. Selective means "the server owns monsters": a simulated (non-tamed) creature owned by the peer whose
                 // pass this is goes to the server, once, when the server has it instantiated (so it really simulates it).
-                if (simulated && uid != serverUid && owner == uid && !zdo.GetBool(ZDOVars.s_tamed)
+                if (simulated && uid != serverUid && owner == uid && !zdo.GetBool(ZDOVars.s_tamed) && !HelmOwnership.HelmsmanHolds(zdo)   // 1.6.31: never from the helmsman
                     && ZNetScene.instance != null && ZNetScene.instance.FindInstance(zdo) != null)
                 {
                     zdo.SetOwner(serverUid);
@@ -179,6 +186,15 @@ namespace FiresGhettoNetworkMod
                     continue;
                 }
 
+                // 1.6.31: a creature tamed while the server owned it stayed on the server, against the key's text. Selective never takes tames, so this only hands back.
+                if (simulated && owner == serverUid && uid != serverUid && !ServerOwnershipPatches.ServerTakesTames && zdo.GetBool(ZDOVars.s_tamed)
+                    && ZNetScene.InActiveArea(zdo.GetPosition(), zone))
+                {
+                    zdo.SetOwner(uid);
+                    ServerOwnershipPatches.NoteTameReturned(zdo.m_prefab);
+                    continue;
+                }
+
                 if (owner == uid || owner == serverUid)
                 {
                     // Caller or server owns. Release if no peer covers.
@@ -189,12 +205,13 @@ namespace FiresGhettoNetworkMod
                         foreach (var peer in ZNet.instance.GetPeers())
                         {
                             if (peer == null) continue;
-                            if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(peer.GetRefPos()), sector, nearArea))
+                            if (SimDistance.ZoneInRadius(FgnRing.Sector(peer.GetRefPos()), sector, nearArea))
                             {
                                 anyPeerCovers = true;
                                 break;
                             }
                         }
+                        if (!anyPeerCovers && CompanionKeepAlive.Covers(sector, nearArea)) anyPeerCovers = true;   // 1.5.75: a kept companion area holds it
                         if (!anyPeerCovers)
                         {
                             zdo.SetOwner(0L);
@@ -215,7 +232,7 @@ namespace FiresGhettoNetworkMod
                 foreach (var peer in ZNet.instance.GetPeers())
                 {
                     if (peer == null) continue;
-                    if (SimDistance.ZoneInRadius(ZoneSystem.GetZone(peer.GetRefPos()), sector, nearArea))
+                    if (SimDistance.ZoneInRadius(FgnRing.Sector(peer.GetRefPos()), sector, nearArea))
                     {
                         sectorCoveredByPeer = true;
                         break;
@@ -260,16 +277,6 @@ namespace FiresGhettoNetworkMod
             s_zdosProcessed += zdosThisPass;
             s_simulatedSeen += simulatedThisPass;
 
-            // First-fire confirmation — proves the patch attached.
-            if (!s_firstFireLogged)
-            {
-                s_firstFireLogged = true;
-                LoggerOptions.LogMessage(
-                    $"[ServerOwnership-V3] ReleaseNearbyZDOS_Prefix fired for the first time. "
-                    + $"serverUid={serverUid}, caller uid={uid}, refPos=({refPosition.x:F2}, {refPosition.y:F2}, {refPosition.z:F2}), "
-                    + $"connectedPeers={ZNet.instance.GetConnectedPeers().Count}, "
-                    + $"simulatedPrefabs={s_simulatedPrefabs.Count}. Patch is wired correctly.");
-            }
 
             // ~10 s rollup. simulatedSeen vs zdosProcessed tells you what
             // fraction of nearby ZDOs are even candidates for server-side

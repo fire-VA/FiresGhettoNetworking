@@ -71,7 +71,7 @@ namespace FiresGhettoNetworkMod
             long now = Stopwatch.GetTimestamp();
             if (s_nextReport != 0 && now < s_nextReport) return;
             if (s_nextReport == 0)
-                LoggerOptions.LogInfo($"[Keepalive] A keepalive went ahead of {s_deepestQueue} queued packet(s) so a busy connection is not timed out. Next report in 5 min at the earliest.");
+                LoggerOptions.LogDebug($"[Keepalive] A keepalive went ahead of {s_deepestQueue} queued packet(s) so a busy connection is not timed out. Next report in 5 min at the earliest.");
             else if (LoggerOptions.DebugEnabled)
                 LoggerOptions.LogDebug($"[Keepalive] {s_jumped} keepalive(s) went ahead of queued packets since the last report, the deepest queue {s_deepestQueue} packet(s).");
             s_jumped = 0;

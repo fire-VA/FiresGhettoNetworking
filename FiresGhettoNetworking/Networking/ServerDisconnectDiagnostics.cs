@@ -50,7 +50,7 @@ namespace FiresGhettoNetworkMod
             string name = string.IsNullOrEmpty(peer.m_playerName) ? "<no-name>" : peer.m_playerName;
             string endpoint = SafeEndpoint(peer);
 
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"[Disconnect] peer={name} uid={peer.m_uid} {endpoint} {durationText} "
                 + $"(#{burst} in last {BurstWindowSec:F0}s, {ConnectedPeerCount()} still connected).");
 

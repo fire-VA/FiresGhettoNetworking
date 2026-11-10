@@ -71,11 +71,11 @@ namespace FiresGhettoNetworkMod
             // line appears, Unity never turned it into a quit at all.
             Application.wantsToQuit += () =>
             {
-                LoggerOptions.LogMessage("[LogoutHold] dedicated server: Unity asked to quit (wantsToQuit); FGN lets it go.");
+                LoggerOptions.LogDebug("[LogoutHold] dedicated server: Unity asked to quit (wantsToQuit); FGN lets it go.");
                 return true;
             };
-            Application.quitting += () => LoggerOptions.LogMessage("[LogoutHold] dedicated server: Unity is quitting.");
-            LoggerOptions.LogInfo("[LogoutHold] dedicated server: the logout and quit holds are off here; vanilla's Ctrl+C / window close run untouched.");
+            Application.quitting += () => LoggerOptions.LogDebug("[LogoutHold] dedicated server: Unity is quitting.");
+            LoggerOptions.LogDebug("[LogoutHold] dedicated server: the logout and quit holds are off here; vanilla's Ctrl+C / window close run untouched.");
         }
 
         private static bool s_quitHolding;
@@ -107,7 +107,7 @@ namespace FiresGhettoNetworkMod
                 return false;
             s_quitHolding = true;
             bool logoutRunning = ReferenceEquals(s_holdingFor, game);
-            LoggerOptions.LogInfo($"[LogoutHold] {what} on a crossplay link: {(logoutRunning ? "the logout already under way finishes" : "logging out")} first, then the game quits.");
+            LoggerOptions.LogDebug($"[LogoutHold] {what} on a crossplay link: {(logoutRunning ? "the logout already under way finishes" : "logging out")} first, then the game quits.");
             if (!logoutRunning)
             {
                 try
@@ -136,7 +136,7 @@ namespace FiresGhettoNetworkMod
         static bool SkipEarlyQuitShutdown(Game __instance)
         {
             if (s_dedicated || __instance == null || !ReferenceEquals(s_holdingFor, __instance) || __instance.IsShuttingDown()) return true;
-            LoggerOptions.LogInfo("[LogoutHold] OnApplicationQuit arrived during the held logout; vanilla's early shutdown skipped, the held logout shuts down, then the game quits.");
+            LoggerOptions.LogDebug("[LogoutHold] OnApplicationQuit arrived during the held logout; vanilla's early shutdown skipped, the held logout shuts down, then the game quits.");
             // Last resort, once per quit: should the process end after all (an OS session end), the character is on disk. Vanilla's
             // body would have saved here. A local save only.
             // VAngarde makes this save itself and knows whether the server has the profile; saving twice costs a long frame.
@@ -188,7 +188,7 @@ namespace FiresGhettoNetworkMod
             if (game != null && !game.IsShuttingDown())
                 LoggerOptions.LogWarning($"[LogoutHold] the logout hadn't finished after {QuitAfterLogoutCapSeconds:F0} s; quitting anyway.");
             else
-                LoggerOptions.LogInfo($"[LogoutHold] logged out {clock.Elapsed.TotalMilliseconds:F0} ms after the quit was asked for; quitting now.");
+                LoggerOptions.LogDebug($"[LogoutHold] logged out {clock.Elapsed.TotalMilliseconds:F0} ms after the quit was asked for; quitting now.");
             s_quitHolding = false;
             s_quitDone = true;
             RunDeferredPartyQuit();
@@ -222,7 +222,7 @@ namespace FiresGhettoNetworkMod
                 if (s_partyQuitDeferred == null)
                 {
                     s_partyQuitClock.Restart();
-                    LoggerOptions.LogInfo("[LogoutHold] PlayFab Party teardown deferred during the held logout; it runs after the shutdown, before the quit.");
+                    LoggerOptions.LogDebug("[LogoutHold] PlayFab Party teardown deferred during the held logout; it runs after the shutdown, before the quit.");
                 }
                 s_partyQuitDeferred = __instance;
                 return false;
@@ -256,7 +256,7 @@ namespace FiresGhettoNetworkMod
         }
 
         private static void LogPartyQuitRan(string by) =>
-            LoggerOptions.LogInfo($"[LogoutHold] PlayFab Party teardown ran {s_partyQuitClock.ElapsedMilliseconds} ms after it was deferred ({by}).");
+            LoggerOptions.LogDebug($"[LogoutHold] PlayFab Party teardown ran {s_partyQuitClock.ElapsedMilliseconds} ms after it was deferred ({by}).");
 
         [HarmonyPatch(typeof(Game), "ContinueLogout"), HarmonyPrefix]
         static bool HoldLogout(Game __instance, bool save, bool shouldExit, bool changeToStartScene)
@@ -296,7 +296,7 @@ namespace FiresGhettoNetworkMod
             // Pending counts only connected links, so a link that dropped reads as "nothing pending": tell it apart.
             if (pending != null) LoggerOptions.LogWarning($"[LogoutHold] logout went ahead after {ms / 1000.0:F1} s with {pending} unacknowledged.");
             else if (CrossplaySockets().Count == 0) LoggerOptions.LogWarning($"[LogoutHold] the crossplay link was lost after {ms:F0} ms, with {lastSeen ?? "nothing"} unacknowledged when last seen.");
-            else LoggerOptions.LogInfo($"[LogoutHold] logout held {ms:F0} ms until the server had acknowledged everything sent before it.");
+            else LoggerOptions.LogDebug($"[LogoutHold] logout held {ms:F0} ms until the server had acknowledged everything sent before it.");
             s_holdingFor = null;
             s_doneFor = game;                                                // 4-5
             if (game != null) s_continueLogout.Invoke(game, new object[] { save, shouldExit, changeToStartScene });
@@ -361,7 +361,7 @@ namespace FiresGhettoNetworkMod
                     Thread.Sleep(1);
                 foreach (ZPlayFabSocket socket in sockets) s_socketLateUpdate?.Invoke(socket, null);
                 if (clock.Elapsed.TotalMilliseconds >= 1.0)
-                    LoggerOptions.LogInfo($"[LogoutHold] finished compressing before the disconnect ({clock.Elapsed.TotalMilliseconds:F0} ms).");
+                    LoggerOptions.LogDebug($"[LogoutHold] finished compressing before the disconnect ({clock.Elapsed.TotalMilliseconds:F0} ms).");
             }
             catch (Exception ex)
             {

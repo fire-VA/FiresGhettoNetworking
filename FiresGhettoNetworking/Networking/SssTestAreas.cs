@@ -44,7 +44,7 @@ namespace FiresGhettoNetworkMod
             new Terminal.ConsoleCommand(Command,
                 "FGN test (admin): the server also builds the world around N virtual players in the busiest far-apart areas, to price "
                 + "Server-Side Simulation with one client. 0 clears. Logged loudly while on; cleared when the world unloads.",
-                new Terminal.ConsoleEvent(OnCommand));
+                new Terminal.ConsoleEvent(OnCommand), isCheat: true);
         }
 
         internal static void RemindIfActive()
@@ -69,7 +69,7 @@ namespace FiresGhettoNetworkMod
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
             string reply;
-            if (!ServerClientUtils.IsAdmin(sender)) reply = "FGN: fgn_sss_areas is admin only.";
+            if (!ServerClientUtils.TestCommandAllowed(sender, "fgn_sss_areas", out string refusal)) reply = refusal;
             else if (!ServerAuthorityPatches.SimulationActive) reply = "FGN: Server-Side Simulation is off on this server; nothing to price.";
             else reply = PlaceAreas(Mathf.Clamp(count, 0, MaxAreas));
             LoggerOptions.LogWarning(reply);
@@ -85,7 +85,7 @@ namespace FiresGhettoNetworkMod
 
             var taken = new List<Vector2s>();
             foreach (var peer in ZNet.instance.GetPeers())
-                if (peer != null && peer.IsReady()) taken.Add(ZoneSystem.GetZone(peer.GetRefPos()));
+                if (peer != null && peer.IsReady()) taken.Add(FgnRing.Sector(peer.GetRefPos()));
 
             foreach (var zone in BusiestZones())
             {

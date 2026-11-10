@@ -41,6 +41,8 @@ namespace FiresGhettoNetworkMod
             new CompressionPolicy("ZDOData".GetStableHashCode(), "RoutedRPC".GetStableHashCode(), LogEncodeFailure);
 
         private static readonly Totals s_session = new Totals();
+        internal static long SessionEncodeTicks => s_session.EncodeTicks;   // 1.5.91: ZoneLoadDiag's [NetSplit]
+        internal static long SessionDecodeTicks => s_session.DecodeTicks;
         private static readonly Totals s_reported = new Totals();
         private static long s_nextReportTimestamp;
         private static long s_nextRejectWarningTimestamp;
@@ -88,7 +90,7 @@ namespace FiresGhettoNetworkMod
         private static void SetCompressionEnabledFromConfig()
         {
             CompressionStatus.ourStatus.compressionEnabled = ConfigCompressionEnabled.Value;
-            LoggerOptions.LogMessage($"Network compression: {(ConfigCompressionEnabled.Value ? "Enabled" : "Disabled")}");
+            LoggerOptions.LogDebug($"Network compression: {(ConfigCompressionEnabled.Value ? "Enabled" : "Disabled")}");
             // Re-greet every peer so a live config change re-negotiates.
             if (ZNet.instance == null || ZRoutedRpc.instance == null) return;
             foreach (var peer in ZNet.instance.GetPeers())
@@ -96,6 +98,8 @@ namespace FiresGhettoNetworkMod
                 if (peer?.m_socket == null) continue;
                 var status = CompressionStatus.GetOrAddStatus(peer.m_socket);
                 if (status == null) continue;
+                // 1.6.31: re-decide our own send too. The peer never answers this hello (helloSent), so turning it off kept us sending compressed.
+                status.sendingCompressed = Agrees(peer, status);
                 status.helloSent = true;
                 SendHelloToPeer(peer);
             }
@@ -125,7 +129,7 @@ namespace FiresGhettoNetworkMod
                 ISocket key = Key(socket);
                 if (key == null) return;
                 peerStatus[key] = new SocketStatus();
-                LoggerOptions.LogInfo($"Compression: New peer connected {key.GetEndPointString()}");
+                LoggerOptions.LogDebug($"Compression: New peer connected {key.GetEndPointString()}");
             }
 
             public static void RemovePeer(ISocket socket)
@@ -217,7 +221,7 @@ namespace FiresGhettoNetworkMod
                 yield return null;
             yield return new WaitForEndOfFrame();
             if (ZRoutedRpc.instance == null || ZNet.instance == null) yield break;
-            LoggerOptions.LogInfo($"Compression: ready gate reached (server={_isServer}).");
+            LoggerOptions.LogDebug($"Compression: ready gate reached (server={_isServer}).");
             if (_isServer) yield break;
 
             // The server drops our routed RPCs until it has accepted this client, and a password prompt alone can hold
@@ -227,7 +231,7 @@ namespace FiresGhettoNetworkMod
                 if (ZNet.instance == null || ZNet.GetConnectionStatus() > ZNet.ConnectionStatus.Connected) yield break;
                 yield return null;
             }
-            LoggerOptions.LogInfo("Compression: the server accepted this client; greeting it.");
+            LoggerOptions.LogDebug("Compression: the server accepted this client; greeting it.");
 
             float deadline = Time.time + HandshakeAnswerSeconds;
             int attempt = 0;
@@ -240,7 +244,7 @@ namespace FiresGhettoNetworkMod
                 if (status != null && status.sendingCompressed) yield break;   // negotiated — done
                 if (status != null) status.helloSent = true;
                 attempt++;
-                LoggerOptions.LogInfo($"Compression: greeting server via 0L routed RPC (attempt {attempt}).");
+                LoggerOptions.LogDebug($"Compression: greeting server via 0L routed RPC (attempt {attempt}).");
                 SendHelloToServer();
                 yield return new WaitForSeconds(HelloRetrySeconds);
             }
@@ -286,7 +290,7 @@ namespace FiresGhettoNetworkMod
 
             int version = pkg.ReadInt();
             bool enabled = pkg.ReadBool();
-            LoggerOptions.LogInfo($"Compression: CompHello received from {GetPeerName(peer)} (peer v{version} enabled={enabled}).");
+            LoggerOptions.LogDebug($"Compression: CompHello received from {GetPeerName(peer)} (peer v{version} enabled={enabled}).");
 
             var status = CompressionStatus.GetOrAddStatus(peer.m_socket);
             if (status == null) return;
@@ -295,7 +299,7 @@ namespace FiresGhettoNetworkMod
             bool agree = Agrees(peer, status);
             status.sendingCompressed = agree;
             if (!NetworkingRatesGroup.IsCrossplay(peer))
-                LoggerOptions.LogMessage($"Compression {(agree ? "ACTIVE" : "off")} with {GetPeerName(peer)} "
+                LoggerOptions.LogDebug($"Compression {(agree ? "ACTIVE" : "off")} with {GetPeerName(peer)} "
                     + $"(us v{CompressionStatus.ourStatus.version} enabled={CompressionStatus.ourStatus.compressionEnabled}, "
                     + $"peer v{version} enabled={enabled}, FGN version {(FgnVersionGate.IsMatched(peer) ? "matched" : "not matched yet")}).");
 
@@ -475,7 +479,7 @@ namespace FiresGhettoNetworkMod
             // [RpcDrops] stays at Info: test tooling reads it from the log.
             foreach (string line in DownloadBreakdown.TakeReport(period))
             {
-                if (line.StartsWith("[RpcDrops]", StringComparison.Ordinal)) LoggerOptions.LogInfo(line);
+                if (line.StartsWith("[RpcDrops]", StringComparison.Ordinal)) LoggerOptions.LogDebug(line);
                 else LoggerOptions.LogDebug(line);
             }
 
@@ -484,7 +488,7 @@ namespace FiresGhettoNetworkMod
             if (ZNet.instance != null && ZNet.instance.IsDedicated())
             {
                 string frames = ServerFrameProfile.Report();
-                if (frames != null) LoggerOptions.LogInfo(frames);
+                if (frames != null) LoggerOptions.LogDebug(frames);
             }
 
             if (interval.Sent.All(tally => tally.Packets == 0) && interval.Decoded.Packets == 0 && interval.Rejected == 0) return;

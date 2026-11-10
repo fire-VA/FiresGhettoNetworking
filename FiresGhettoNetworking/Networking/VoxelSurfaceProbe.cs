@@ -57,7 +57,7 @@ namespace FiresGhettoNetworkMod
                     new[] { typeof(float), typeof(float), typeof(float), typeof(float), typeof(float).MakeByRefType(), typeof(bool).MakeByRefType() }, null);
                 if (method == null || method.ReturnType != typeof(bool)) return false;
                 s_sample = (SampleSurface)Delegate.CreateDelegate(typeof(SampleSurface), method);
-                LoggerOptions.LogInfo("[GroundSnap] dedicated server: drops, floaters and tombstones below the heightmap rest on FiresAdminTerrain's edited voxel ground.");
+                LoggerOptions.LogDebug("[GroundSnap] dedicated server: drops, floaters and tombstones below the heightmap rest on FiresAdminTerrain's edited voxel ground.");
             }
             catch (Exception ex)
             {

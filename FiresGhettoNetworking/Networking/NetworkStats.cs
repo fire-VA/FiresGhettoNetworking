@@ -260,7 +260,7 @@ namespace FiresGhettoNetworkMod
         private static void LogPeerStatusSource(ISocket socket, bool viaGameServer)
         {
             string socketType = socket != null ? socket.GetType().Name : "null";
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 "[NetworkStats] per-peer ping/throughput source = " +
                 (viaGameServer ? "game-server interface (dedicated path)" : "vanilla GetConnectionQuality") +
                 " for " + socketType +

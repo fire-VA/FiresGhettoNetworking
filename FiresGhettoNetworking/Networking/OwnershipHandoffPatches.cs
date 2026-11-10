@@ -91,7 +91,7 @@ namespace FiresGhettoNetworkMod
             if (drift >= DriftReportMeters && Time.time >= _nextReportTime)
             {
                 _nextReportTime = Time.time + ReportIntervalSec;
-                LoggerOptions.LogInfo(
+                LoggerOptions.LogDebug(
                     $"[OwnershipHandoff] '{character.name}' was {drift:F1}m from its ZDO position when this peer took ownership; "
                     + $"pre-snapped before the physics step (vanilla would have simulated there first). "
                     + $"Further reports suppressed for {ReportIntervalSec:F0}s.");

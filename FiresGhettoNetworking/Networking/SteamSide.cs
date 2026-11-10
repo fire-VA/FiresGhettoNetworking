@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace FiresGhettoNetworkMod
 {
@@ -10,12 +10,15 @@ namespace FiresGhettoNetworkMod
     internal static class SteamSide
     {
         internal static readonly bool Present;
+        internal static readonly string Why;   // why Present is false, for the skipped-patch lines
 
         static SteamSide()
         {
             // AccessTools.TypeByName logs a HarmonyX warning when the type is missing; asking the
             // game's own assembly (and the loaded Steamworks one, if any) directly is silent
-            Present = typeof(ZNet).Assembly.GetType("ZSteamSocket", false) != null && FindLoaded("Steamworks.SteamAPI");
+            bool socket = typeof(ZNet).Assembly.GetType("ZSteamSocket", false) != null, steamworks = FindLoaded("Steamworks.SteamAPI");
+            Present = socket && steamworks;
+            Why = !socket ? "no ZSteamSocket on this game build" : !steamworks ? "no Steamworks assembly loaded" : "";
         }
 
         private static bool FindLoaded(string fullName)

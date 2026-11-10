@@ -82,7 +82,7 @@ namespace FiresGhettoNetworkMod
             s_applied = true;
             if (!(FiresGhettoNetworkMod.ConfigEnableBulkTransferBoost?.Value ?? true))
             {
-                LoggerOptions.LogMessage("Bulk-transfer gate scan skipped — ConfigEnableBulkTransferBoost = false.");
+                LoggerOptions.LogDebug("Bulk-transfer gate scan skipped — ConfigEnableBulkTransferBoost = false.");
                 return;
             }
             try
@@ -101,13 +101,13 @@ namespace FiresGhettoNetworkMod
 
             s_serverSyncCopyCount = CountServerSyncCopies();
             s_budgetedGate = GetBudgetedGate();
-            LoggerOptions.LogInfo(
+            LoggerOptions.LogDebug(
                 $"Bulk-transfer gate budget: {s_serverSyncCopyCount} ServerSync.ConfigSync copy/ies, "
                 + $"Steam buffer ceiling {GetEffectiveSendBufferCeilingBytes() / 1024}KB, "
                 + $"{FiresGhettoNetworkMod.ConfigBulkTransferBudgetPercent?.Value ?? DefaultBudgetPercent}% budget → per-mod gate "
                 + $"{s_budgetedGate} bytes (Queue Size target {target}).");
             if (s_budgetedGate <= ThirdPartyGateFloorBytes)
-                LoggerOptions.LogInfo(
+                LoggerOptions.LogDebug(
                     "Bulk-transfer budget floored the per-mod gate at the vanilla 20 KB (many ServerSync "
                     + "mods on the current Steam send buffer), so the gate is NOT raised — but the 30s "
                     + "self-disconnect is disarmed regardless, so slow/high-ping peers are never dropped. "
@@ -152,7 +152,7 @@ namespace FiresGhettoNetworkMod
                                 // An obfuscated mod's ServerSync copy can read back with a call Harmony cannot resolve, and HarmonyX
                                 // fails it with "Invalid argument for call NULL". No IL patch can land there; leave that copy as it ships.
                                 typesSkipped++;
-                                LoggerOptions.LogInfo(
+                                LoggerOptions.LogDebug(
                                     $"Bulk-transfer gate left as shipped in {asm.GetName().Name} → {inspectedType.FullName}.{m.Name}: "
                                     + $"its code is obfuscated ({unreadable}), so it cannot be patched. That mod keeps ServerSync's own "
                                     + "20 KB gate and 30s self-disconnect; nothing else changes.");
@@ -167,7 +167,7 @@ namespace FiresGhettoNetworkMod
                             if (bad != null)
                             {
                                 typesSkipped++;
-                                LoggerOptions.LogInfo(
+                                LoggerOptions.LogDebug(
                                     $"Bulk-transfer gate left as shipped in {asm.GetName().Name} → {inspectedType.FullName}.{m.Name}: "
                                     + $"its rewritten code would not be valid ({bad}). That mod keeps ServerSync's own 20 KB gate and 30s self-disconnect.");
                                 continue;
@@ -181,7 +181,7 @@ namespace FiresGhettoNetworkMod
                                         typeof(BulkTransferGatePatches),
                                         nameof(RaiseGateAndDisarmTimeout)));
                                 sitesPatched++;
-                                LoggerOptions.LogInfo(
+                                LoggerOptions.LogDebug(
                                     $"Bulk-transfer patched: {asm.GetName().Name} → {inspectedType.FullName}.{m.Name} "
                                     + $"(gate {t.VanillaConstant} → {(willRaiseGate ? s_budgetedGate : t.VanillaConstant)} bytes, "
                                     + $"30s self-disconnect disarmed at {s_lastTimeoutSitesDisarmed} site(s)).");
@@ -197,17 +197,17 @@ namespace FiresGhettoNetworkMod
 
                 totalTypesFound += typesFound;
                 totalSitesPatched += sitesPatched;
-                LoggerOptions.LogInfo(
+                LoggerOptions.LogDebug(
                     $"Bulk-transfer scan for {t.TypeName}: {typesFound} copies found, {sitesPatched} gate sites patched.");
             }
 
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"Bulk-transfer scan complete: {totalTypesFound} third-party copies found across loaded assemblies, "
                 + $"{totalSitesPatched} gate sites patched (per-mod gate {s_budgetedGate} bytes, 30s self-disconnect disarmed)"
                 + (typesSkipped > 0 ? $", {typesSkipped} obfuscated copy/ies left as shipped." : "."));
 
             ApplyJotunnTimeout();
-            LoggerOptions.LogInfo(s_jotunnTimeoutField != null
+            LoggerOptions.LogDebug(s_jotunnTimeoutField != null
                 ? $"Jotunn CustomRPC self-disconnect disarmed (Timeout -> {DisconnectTimeoutSeconds}s)."
                 : "Jotunn CustomRPC not present — no Jotunn timeout to disarm.");
         }

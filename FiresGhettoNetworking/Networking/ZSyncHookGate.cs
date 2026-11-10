@@ -59,13 +59,13 @@ namespace FiresGhettoNetworkMod
                 if (want) s_handoffHarmony.Patch(target, prefix: new HarmonyMethod(AccessTools.Method(typeof(OwnershipHandoffPatches), nameof(OwnershipHandoffPatches.ZSyncTransform_CustomFixedUpdate_Prefix))));
                 else s_handoffHarmony.Unpatch(target, HarmonyPatchType.Prefix, HandoffId);
                 s_handoffAttached = want;
-                FiresGhettoNetworkMod.Log?.LogInfo($"[ZSyncHooks] handoff prefix {(want ? "attached" : "detached")} ({why}; {(dedicated ? "dedicated" : peersAfter + " peer(s)")})");
+                FiresGhettoNetworkMod.Log?.LogDebug($"[ZSyncHooks] handoff prefix {(want ? "attached" : "detached")} ({why}; {(dedicated ? "dedicated" : peersAfter + " peer(s)")})");
             }
             catch (Exception ex) { FiresGhettoNetworkMod.Log?.LogWarning($"[ZSyncHooks] handoff gate failed ({why}): {ex.GetType().Name}: {ex.Message}"); }
         }
 
         [HarmonyPatch(typeof(ZNet), "Awake"), HarmonyPostfix]
-        private static void SessionStart() { RefreshHandoff("session start", ZNet.instance != null ? ZNet.instance.GetPeers().Count : 0); FgnStatsSection.TryRegister(); }
+        private static void SessionStart() { RefreshHandoff("session start", ZNet.instance != null ? ZNet.instance.GetPeers().Count : 0); }   // 1.6.63: stats are pulled through FgnApi.GetStatsRows
 
         [HarmonyPatch(typeof(ZNet), "OnNewConnection"), HarmonyPostfix]
         private static void PeerJoined() => RefreshHandoff("a peer connected", ZNet.instance != null ? ZNet.instance.GetPeers().Count : 1);
@@ -93,7 +93,7 @@ namespace FiresGhettoNetworkMod
                 if (want) s_harmony.Patch(target, prefix: new HarmonyMethod(AccessTools.Method(typeof(TransformWriteRate), nameof(TransformWriteRate.OwnerSync_Prefix))));
                 else s_harmony.Unpatch(target, HarmonyPatchType.Prefix, HarmonyId);
                 s_attached = want;
-                FiresGhettoNetworkMod.Log?.LogInfo($"[ZSyncHooks] OwnerSync {(want ? "attached" : "detached")} ({why}; {features})");
+                FiresGhettoNetworkMod.Log?.LogDebug($"[ZSyncHooks] OwnerSync {(want ? "attached" : "detached")} ({why}; {features})");
             }
             catch (Exception ex)
             {

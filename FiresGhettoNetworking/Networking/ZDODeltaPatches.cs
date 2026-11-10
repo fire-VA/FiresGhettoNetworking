@@ -247,12 +247,15 @@ namespace FiresGhettoNetworkMod
             ForgetObjectsIn(pkg, peerMap);
         }
 
+        private const int ZdoIdBytes = 12;   // a ZDOID on the wire: long user id + uint id
+
         private static void ForgetObjectsIn(ZPackage pkg, Dictionary<ZDOID, ZDOSnapshot> peerMap)
         {
             int start = pkg.GetPos();
             try
             {
                 int invalidated = pkg.ReadInt();
+                if (invalidated < 0 || invalidated > (pkg.Size() - pkg.GetPos()) / ZdoIdBytes) { peerMap.Clear(); return; }
                 for (int i = 0; i < invalidated; i++) pkg.ReadZDOID();
                 for (ZDOID id = pkg.ReadZDOID(); !id.IsNone(); id = pkg.ReadZDOID())
                 {
@@ -261,6 +264,7 @@ namespace FiresGhettoNetworkMod
                     pkg.ReadLong();
                     pkg.ReadVector3();
                     int dataBytes = pkg.ReadInt();
+                    if (dataBytes < 0 || dataBytes > pkg.Size() - pkg.GetPos()) { peerMap.Clear(); return; }
                     pkg.SetPos(pkg.GetPos() + dataBytes);
                     peerMap.Remove(id);
                 }

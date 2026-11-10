@@ -1,4 +1,4 @@
-﻿using BepInEx.Logging;
+using BepInEx.Logging;
 
 namespace FiresGhettoNetworkMod
 {
@@ -34,7 +34,7 @@ namespace FiresGhettoNetworkMod
 
         public static void LogInfo(object data)
         {
-            if (logger != null && FiresGhettoNetworkMod.ConfigLogLevel != null && FiresGhettoNetworkMod.ConfigLogLevel.Value >= LogLevel.Info)
+            if (logger != null && FiresGhettoNetworkMod.ConfigLogLevel != null && FiresGhettoNetworkMod.ConfigLogLevel.Value >= LogLevel.Message)
                 logger.LogInfo(data);
         }
 
@@ -44,10 +44,12 @@ namespace FiresGhettoNetworkMod
         public static bool DebugEnabled =>
             FiresGhettoNetworkMod.ConfigLogLevel != null && FiresGhettoNetworkMod.ConfigLogLevel.Value >= LogLevel.Debug;
 
+        // 1.5.97 (team rule, Fire 10-27: proof/periodic lines are Debug, never Info): written at BepInEx Debug now. The rig records
+        // Debug on every peer ([Logging.Disk] LogLevels = All), so nothing is lost there; players at the default level never see them.
         public static void LogDebug(object data)
         {
             if (logger != null && DebugEnabled)
-                logger.LogInfo(data);
+                logger.LogDebug(data);
         }
     }
 }

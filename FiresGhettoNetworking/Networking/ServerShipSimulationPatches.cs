@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
 
@@ -25,6 +25,7 @@ namespace FiresGhettoNetworkMod
         // a few short parks during zone loads is the fix working; long or repeated parks while
         // sailing would mean zone readiness is flapping and needs a hysteresis pass.
         private static readonly Dictionary<Ship, float> _parkedByUs = new Dictionary<Ship, float>();
+        private static readonly Dictionary<Ship, CollisionDetectionMode> _parkedMode = new Dictionary<Ship, CollisionDetectionMode>();   // 1.6.31
 
         private static int _nextLogFrame;
         private const int LogIntervalFrames = 1800;
@@ -49,7 +50,7 @@ namespace FiresGhettoNetworkMod
             // The full check is costly per physics step and hull, so a hull found ready stays ready while it
             // stays in that zone, so the full check (zone loaded + water + ground) runs again only on a zone change
             // or every ReadyRecheckSteps steps.
-            Vector2s zone = ZoneSystem.GetZone(__instance.transform.position);
+            Vector2s zone = FgnRing.Sector(__instance.transform.position);
             ReportChecks();
             if (_ready.TryGetValue(__instance, out ReadyCache cache) && cache.Zone.x == zone.x && cache.Zone.y == zone.y
                 && cache.StepsLeft > 0)
@@ -103,10 +104,12 @@ namespace FiresGhettoNetworkMod
         public static void ZNetScene_Shutdown_ClearParked()
         {
             _parkedByUs.Clear();
+            _parkedMode.Clear();
             _ready.Clear();
             _fullChecks = _skippedChecks = 0;
             _nextCheckReport = -1f;
             SssTestAreas.Clear();
+            CompanionKeepAlive.Clear();
         }
 
         private static bool IsEnvironmentReady(Ship ship)
@@ -137,7 +140,10 @@ namespace FiresGhettoNetworkMod
             // Unity from warning on every park.
             if (body.collisionDetectionMode == CollisionDetectionMode.Continuous
                 || body.collisionDetectionMode == CollisionDetectionMode.ContinuousDynamic)
+            {
+                _parkedMode[ship] = body.collisionDetectionMode;
                 body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+            }
 
             body.isKinematic = true;
             _parkedByUs[ship] = Time.time;
@@ -145,7 +151,7 @@ namespace FiresGhettoNetworkMod
             if (Time.frameCount >= _nextLogFrame)
             {
                 _nextLogFrame = Time.frameCount + LogIntervalFrames;
-                LoggerOptions.LogMessage(
+                LoggerOptions.LogDebug(
                     $"[ShipSim] PARKED '{ship.name}' at {ship.transform.position} — its zone/water is not resolvable yet, "
                     + "so its physics is held rather than left to free-fall into the seabed. It resumes when the area finishes loading.");
             }
@@ -157,13 +163,16 @@ namespace FiresGhettoNetworkMod
             if (!_parkedByUs.TryGetValue(ship, out parkedAt)) return;
             _parkedByUs.Remove(ship);
             body.isKinematic = false;
+            // 1.6.31: Park's switch to speculative was never undone, so a parked hull kept the weaker collision mode for good
+            bool restored = _parkedMode.TryGetValue(ship, out CollisionDetectionMode mode);
+            if (restored) { body.collisionDetectionMode = mode; _parkedMode.Remove(ship); }
 
             // Always reported, unlike the park side: the resume is the half that proves the hull
             // was handed back to normal physics rather than left frozen, and it carries the
             // duration that tells us whether zone readiness is behaving or flapping.
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"[ShipSim] RESUMED '{ship.name}' after {(Time.time - parkedAt):F1}s parked — zone and water resolved, "
-                + "physics handed back. (Short parks during zone loads are the fix working; long or repeated "
+                + "physics handed back" + (restored ? $", collision mode back to {mode}" : "") + ". (Short parks during zone loads are the fix working; long or repeated "
                 + "parks while under way would mean zone readiness is flapping.)");
         }
     }

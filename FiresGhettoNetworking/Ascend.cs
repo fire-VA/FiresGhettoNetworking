@@ -13,12 +13,19 @@ namespace FiresGhettoNetworkMod
     [BepInPlugin(PluginGUID, PluginName, PluginVersion)]
     [BepInDependency(ValheimCommunityPatchCompat.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
     [BepInDependency(ValheimPerformanceOptimizationsGuid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency("Azumatt.MaxPlayerCount", BepInDependency.DependencyFlags.SoftDependency)]   // 1.6.31: load order only. The player-limit transpiler runs in Awake and reads PluginInfos, so a MaxPlayerCount loading after FGN was missed and both patched the cap.
 
     public class FiresGhettoNetworkMod : BaseUnityPlugin
     {
         public const string PluginGUID = "com.Fire.FiresGhettoNetworkMod";
         public const string PluginName = "FiresGhettoNetworkMod";
-        public const string PluginVersion = "1.5.73";
+        public const string PluginVersion = "1.6.84";   // 1.6.84 ([fgn], [wishbone] round 2): congested re-sort keeps creatures and players owned by others first (key on); Creature Ownership In Fights (Vanilla / LowestPing / FirstFighter, default Vanilla).   // was 1.6.83:   // 1.6.83 ([fgn], [generator] review): far idle handoff guarded and finds FiresFixes without a Harmony type search.   // was 1.6.82: 1.6.82 ([fgn], lead audit 11-09): owner-safe write hooks skip with no peers (key), hosts build the leave cleanup list at first join (key), Self Cost Census timers start after arrival (key).   // was 1.6.81: 1.6.81 ([fgn], Fire SP split, second move, with FiresFixes 0.1.91): ground snap on clients and hosts, invulnerable support skip, cape and fall-through diagnostics moved to FiresFixes; a dedicated server keeps its ground snap. SelfCost names its allocation counter.   // was 1.6.80: 1.6.80 ([fgn], lead): Self Cost Census self-tests its allocation counter (falls back to the Mono heap size; names which).   // was 1.6.79: 1.6.79 ([fgn], lead/[visual] 11-08 SP split, never both): FGN's client create pacer stands aside only while EBM's says it is ready (EbmApi.StreamPacerReady, by name, re-read each pass); missing or false = FGN paces as 1.6.77. + SelfCost per-hook allocation bytes. (1.6.78's unconditional strip is superseded.)   // was 1.6.77: 1.6.77 ([fgn], lead SelfCost: CreateObjects prefix 0.683 ms/frame settled): the distant create pass walks a 4,000-entry round-robin window per pass instead of the whole distant list.   // was 1.6.76: 1.6.76 ([fgn], Fire 11-08 SP split): 9 single-player features moved to FiresFixes 0.1.84 (fireplace fuel, sleep skip, spawn / terrain-compiler guards, terrain rebuild spread, dungeon spread, ZDO read, fgn_tamecheck, rebuild census); the ZdoValueWriteNoBox duplicate of FF SetValueNoBox removed.   // was 1.6.75: 1.6.75 ([fgn], lead SelfCost 11-08: Sweeper.Update 0.734 ms/frame): the kinematic sync sweep walks only live ZSyncTransforms (OnEnable/OnDisable registry), a slice a frame, instead of every ZNetScene instance with a GetComponent each every 2 s.   // was 1.6.74: 1.6.74 ([fgn], lead 11-08 615 fill 183 s): with Adaptive Fill Budget the create queue also runs on every frame (not only vanilla's 30 Hz tick), a standing player fills up to ~45 ms frames even when the town runs below target, one Info [Fill] line per drained fill.   // was 1.6.73: 1.6.73 ([fgn], Fire 11-08 "adjust our throttle to the machine's abilities"): Adaptive Fill Budget (on): create budget = target frame (vsync / fps cap / refresh) minus measured other work, cap = budget / measured ms per create; still or loading up to 40 ms, moving headroom only; [Fill] census.   // was 1.6.72: 1.6.72 ([ghost], study N4): Send Portal Destination Early (OFF): a client at a connected portal names the PORTAL; the server checks it and appends the destination 3x3 terrain/solid ZDOs after vanilla's sync list for 8 s (spare budget, max 128 per list).   // was 1.6.71: 1.6.71 ([ghost], study F2): a feature class that fails to attach is rolled back (its already-attached parts removed) and named with the innermost cause; one startup [PatchSafety] summary line.   // was 1.6.70: 1.6.70 ([saddles] N1): the teleport answer for IsActiveAreaLoaded is given only inside ZNetScene.CreateObjects, and each object there also needs its own zone loaded (TeleportCreateGate); every other caller gets the real answer.   // was 1.6.69: 1.6.69 ([fgn] + [ghost], SpreadTheLoad study ideas, our own code): Server Simulation Distance Ceiling (-1 = vanilla), Resources Go To Whoever Hits Them (off), Judge Peers By Update Gaps (off, feeds the creature balancer), [ghost] Server Hands Ship To Helmsman For Unmodded Owners (on) + Creatures Go To The Player Touching Them (off) + in-use veto.   // was 1.6.68: 1.6.68 ([fgn], lead: Fire's one-session A/B): console "fgn_eventarea [on|off|cfg]" flips Event Driven Object Area live for this session only (cfg never written); the next tick runs a full gather.   // was 1.6.67: 1.6.67 ([fgn], VPO study row 1 step 2): clients in one zone run a LIGHT object-area pass (vanilla CreateObjects with the event queue + last full gather's uncreated distant objects, no FindSectorObjects) and the full gather at most once per "Event Driven Object Area Full Pass Seconds" (1 s) and on any change; key "Event Driven Object Area" (OFF until the A/B); proof in the 30 s [Stream] line.   // was 1.6.66: 1.6.66 ([fgn], VPO study row 1): the client removal scan marks in-area objects with the game's own TempRemoveEarmark byte instead of copying ~134k ZDOs into a HashSet up to 10x a second; key "Removal Scan Without Area Set" (on); Debug proof in the 30 s [CleanupThrottle] line.   // was 1.6.65: 1.6.65 ([fgn], VPO_LEVERS / lead audit, VPO's ZNetScene object-management idea, our code): clients skip vanilla's 30 Hz CreateDestroyObjects pass (FindSectorObjects over every nearby ZDO) on idle ticks: zone unchanged, event queue empty and seeded, nothing pending removal, the 10 Hz removal pass not due; key "Skip Idle Object Area Passes" on.   // was 1.6.64: 1.6.64 ([fgn], lead audit M6/M10/M18/FLIP, Fire 11-08 no mod relies on another): FGN runs the kinematic sync (prefix or 2 s sweep from its own key); FgnApi 9: RegisterDistantPrefab etc. (distant prefab streaming, server mark + force-send, client-only injection) for mods that patched the streaming path themselves; IsAutoTuneEnabled / IsAutoTuneSettled / AutoTuneSettled instead of reflecting a private field.   // was 1.6.63: 1.6.63 ([fgn], lead + Fire 11-08 "FGN relies on no other mod"): the last 3 lookups of another mod by type name are gone. Stats are pulled through FgnApi.GetStatsRows, far-idle creature skips are registered through FgnApi.RegisterFarIdleSkip, the kinematic sweep key is read through FgnApi.KinematicSweepEnabled (API Version 8). FGN names no other mod anywhere.   // was 1.6.62: 1.6.62 ([fgn], lead + Fire 11-08): RPC census names come from names seen in use (InvokeRoutedRPC / non-generic Register, observe-only postfixes), the IL literal scan (GetILAsByteArray + ResolveString over every assembly) is gone; server removal keep is FGN's own FgnApi.RegisterServerRemovalKeep (API 7), FGN no longer looks up Core's CompanionKeep.   // was 1.6.61: 1.6.61 ([fgn] + [generator], log-proven on the IsoDedi 10:52-11:00: 1.6.60's sliced removal fell back to the whole vanilla RemoveObjects every 2 s, a 17-20 ms pass, because Core's TamedCompanionZoneLoader patches it): with Core 0.2.1213's another mod's Npc.CompanionKeep (Refresh once a removal cycle, IsKept per ZDO) the walk keeps Core's companion set itself and stays sliced; Core's patch still counts as foreign without the API. Upkeep line adds the companion keep count / refresh ms.   // was 1.6.60: 1.6.60 ([fgn], [lead] / [classes-ui] 11-08 TOWN50 new baseline, IsoDedi log-proven: settled town, "whole pass 16.86 ms, create 0.00, keep-list 10.20, remove 2.71" at ~7 passes a second over 59,517 instances): the server queue's removal pass (keep-list + vanilla RemoveObjects) runs every 2 s and at once after a reseed, and the simulated area (creatures / ships among the live instances) is rebuilt every 0.5 s, instead of both every pass. "[SSS] server queue upkeep" Debug line.   // was 1.6.59: 1.6.59 ([fgn], lead 11-08; replaces the withdrawn, never-deployed 1.6.57 / 1.6.58 and carries both): cell 0 on 1.6.56 proved the pieces rule ran but its 3x3-zone areas covered the town (39 zones from 12 simulated objects; instances 11k -> 59k), so a building piece now gets a server instance only within 40 m of a simulated object or kept / test point (16 m cell set; one lookup per piece). Plus 1.6.57's key "Server Event-Driven Create Queue" (the SSS pass without walking every nearby object) and 1.6.58's removal of ServerStabilityPatches (its three fixes re-derived from vanilla: not needed).   // was 1.6.58: 1.6.58 ([fgn], lead 11-08 approved the rewrite of ServerStabilityPatches, "carried over from Serverside Simulations"): each of its three fixes re-derived from vanilla 1.0 and found not needed, so the file is removed (no third-party code left): (1) the UpdateAttack "stale Attack" guard: Attack.m_character is set in Attack.Start to the attacking Humanoid itself, so it cannot point at a destroyed character while that Humanoid runs; (2) the UpdateSupport collider re-init: vanilla SetupColliders writes m_colliders and m_bounds back to back and UpdateSupport calls it whenever m_colliders is null, so "colliders set, bounds null" is unreachable; (3) the server-side "RequestRespons" ownership hand-off: HelmOwnership already hands the ship to the helmsman on the owning game (RPC_RequestControl postfix), where its physics runs; the in-transit SetOwner on the server only raced it. No log ever showed an NRE on (1) / (2) (client, dedi and F:\ archives searched).   // was 1.6.57: 1.6.57 ([fgn], lead 11-08 SSS option (b)): key "Server Event-Driven Create Queue" (a fix, ON): the SSS server pass seeds one create queue and the area's sector sets when the players' zones change, adds new ZDOs from ZDOMan.AddToSector, sweeps 4,000 a pass, creates in waves under the server budget, and builds the RemoveObjects keep-list from live instances only (no walk of every nearby object). Keeps 1.6.56's pieces-only-where-simulated rule. "[SSS] server queue" Debug line + self-check.   // was 1.6.56: 1.6.56 ([fgn], lead 11-08 relaying Fire, IsoDedi BlumpkinPre town ~15 fps, 131k near objects, ~12.5k instances a minute): key "Server Builds Pieces Only Where It Simulates" (a fix, ON): with SSS the server instantiates building pieces only in the 3x3 zones around the creatures / ships it simulates (and kept areas); elsewhere pieces stay data only as on a vanilla server; pieces already built are released at most 100 a pass. "[SSS] pieces where simulated" Debug line. AutoTune "Link never settled" is Info (handled: the tier is held, the sample not cached).   // was 1.6.55: 1.6.55 ([fgn], Fire 11-08 "correct and performative and the best solution", log-proven on 0108k BlueHills): the create queue fills in waves (zone ring + type rank: the player's zone first, a ring's terrain/solid before the inner ring's loose items), a bucket waiting over 10 s gets a quarter of the frame's creates (no starving), and the budget comes from the measured frame (arrival: up to 120 ms frames, 8-40 ms; play with a backlog: 25 % of the other work, tier budget to 16 ms, 40 ms unfocused; a spike backs off for 30 frames). Proof: our pass avg/worst, frames over 150 ms and whose they were, zone settle time avg/max, "[Stream] arrival: the player's 3x3 zones settled N s".   // was 1.6.54: 1.6.54 ([fgn], Fire 11-08 "close it fix it and relaunch"): key "Event-Driven Create Queue" (a fix, ON) replaces 1.6.53's cached order: one event-driven queue (seeded per zone change, fed by ZDOMan.AddToSector, a round-robin safety sweep), vanilla's order by type and zone ring, a burst behind the loading screen, a frame budget in play with a backlog burst; publishes FgnStreaming.ZoneFilling / ZoneSettled + StreamingSignalActive (client / local host); "[Stream]" Debug proof line; Self-Check key (off).   // was 1.6.53: 1.6.53 ([fgn], Fire 11-08 shots 604-606 "we shouldnt be waiting minutes for it to load", log-proven: the time slice made 1 create a frame, ~22/s, on a 174k-object town because re-picking every nearby object took ~12 ms of its 5 ms budget each frame): key "Time-Slice Cached Create Order" (a fix, ON): the pick is kept across frames (rebuilt every 0.5 s / 4 m / when used up) and the budget counts creating only, so a dense town fills at vanilla's pace or faster; Debug proof line compares the walk with vanilla's per-frame full sort.   // was 1.6.52: 1.6.52 ([fgn], lead 11-08): key "Merge Edited Terrain First Build" (OFF until A/B + VegAB): an edited tile loading away from you is built once with its edits (vanilla built it plain, then again when its terrain compiler loaded).   // was 1.6.51: 1.6.51 ([fgn], lead 11-07): Fast Leave Cleanup finds ZDOPool.Release(Dictionary) in code (Hexium flagged the attribute on Steam dedi 26266951, which has it); if a build lacks it, Fast Leave Cleanup turns off for the session.   // was 1.6.50: 1.6.50 ([fgn], lead 11-07): Regenerate Census names who asked for each rebuild Spread Terrain Rebuilds queued ("Drain for [asker]"), so its same-tile repeats can be traced. Debug tool, key default off.   // was 1.6.49: 1.6.49 ([fgn], lead 11-07): the WackysDatabase null-ItemDrop snapshot skip logs one Info line then Debug (it was a Warning every time; handled, nothing lost). Named broken-prefab cases stay Warning.   // was 1.6.48: 1.6.48 ([fgn], lead 11-07): Regenerate Census counts a call Spread Terrain Rebuilds queued apart (1.6.47 counted it AND the later build, which showed as a repeat), checks every repeat for a real terrain edit in between, and reads the late paths through the Harmony wrapper name.   // was 1.6.47: 1.6.47 ([fgn], lead 11-07): Patch Timer also runs on a dedicated server (it waited for a local player, so the server never reported).   // was 1.6.46:   // 1.6.46 ([fgn], lead 11-06): Patch Timer skips a missing or ambiguous name with one warning (overloads take parameter types) and never writes its cfg; Regenerate Census (Debug, off) names who asks for terrain tile rebuilds.   // was 1.6.45:   // 1.6.45 ([fgn]+[visual] 11-06, one pacing owner): arrival (no player, teleporting) creates at vanilla speed; no x3 widening during play; the near pass picks only the first objects in vanilla's order and the pick counts in the budget.   // was 1.6.44:   // 1.6.44 ([fgn], Fire 11-05): Fast Leave Cleanup on by default, its self-check off by default.   // was 1.6.43:   // 1.6.43 ([fgn], trial 11-05): Call RPC Handlers Directly casts 4-6 argument RPCs to vanilla's own delegate types (ChatMessage threw); a value that doesn't fit hands that RPC to vanilla with one warning.   // was 1.6.42:   // 1.6.42 ([fgn], Fire 11-05): Remote Motion (experimental) defaults to off again, and its one-time switch-on of old cfgs is gone.   // was 1.6.41:   // 1.6.41 ([fgn], Fire 11-05 group D): Fast Leave Cleanup (off) with self-check.   // was 1.6.40:   // 1.6.40 ([fgn], Fire 11-05 group B): ZDO.Deserialize without its fourteen delegates per object (off).   // was 1.6.39:   // 1.6.39 ([fgn], Fire 11-05 group B): received RPC arguments read into one kept list; RPC handlers called directly (off by default).   // was 1.6.38:   // 1.6.38 ([fgn], Fire 11-05): a patch skipped on a game build without Steam logs one Info line with the reason; ZoneLoadDiag's Steam timing guarded.   // was 1.6.37:   // 1.6.37 ([fgn], Fire 11-05): Info shows at the default level, one-time events and state changes; test and repeating lines print only at Log Level Debug. // was 1.6.33:   // 1.6.33 ([fgn]): test commands need cheats; water depth check names each tile; fgn_tamecheck. // was 1.6.32:   // 1.6.32 ([fgn]): spread keeps a queued full rebuild, ForceGenerateAll takes the queue, water depth check. // was 1.6.31:   // 1.6.31 ([fgn], read from NPS gap review 11-05): station requests aimed at a headless server reach the router; Fermenter, cooking station and shield generator refunds name their item; RoutedSenderGuard checks in place without copying; Log Allocation Sites census (off); final read fixes: classic zone tests are the real square, far-idle covers the whole kept area, throttles leave a skipped step alone, pending server keys expire after 30 s, client creates are budgeted after the sort, hand-off answers only from the asked owner, instances kept while their zone loads, parked hulls get their collision mode back, TPP portals follow the peer rule, live compression toggle, Patch Timer no longer repatches. Fire's decisions: broad ownership asks for ships back only with Server-Side Ship Simulation on; the server no longer takes a ship from its helmsman; with Server Simulates Tamed Creatures Too off, a server-held tame goes to the player in range; key Raid Monsters Need A Player In The Raid Area (ON). Player report: tiles never built, the teleport target and ForceGenerateAll are no longer spread; key Map Icons Jump With Teleports (ON); Fix Ground Snap Through Floors no longer stops vanilla's lift of a character under the terrain.   // 1.6.30 ([fgn], lead 11-04): far-idle ticks test the owner first; non-owned copies skip the state lookup. Same behaviour.
+        // was 1.6.28:   // 1.6.28 ([fgn], Fire 11-02): the 11 keep-alive + homestead keys leave FGN for FiresCompanions; FgnApi.SetKeepAliveSettings receives the values (API v6).
+        // was 1.6.27:   // 1.6.27 ([fgn], Fire 10-31 "Fix it"): Creature/HelmOwnership pick up prefabs other mods register after the first scan (only the new tail of ZNetScene.m_prefabs is scanned when it grows). Includes 1.6.26 (never deployed).
+        // was 1.6.26:   // 1.6.26 ([fgn], Fire 10-31 event-driven/cache rule, SAME BEHAVIOUR only): FarIdle reads m_nview/m_character fields instead of GetComponent per tick; ShipFixes cached FieldRefs; RandEvent delegates instead of MethodInfo.Invoke.
+        // was 1.6.25:   // 1.6.25 ([fgn], lead 10-31 perf routing): FGN owns [Performance] Kinematic sync sweep (default on; value copied once from FiresCompanions/Core cfg; provided to Core at priority 10).
+        // was 1.6.24:   // 1.6.24 ([lead] + [ghost] 10-30): a ZDO flagged bool "fgn_server_keeps" (set server side by its spawner) stays server-owned under broad server ownership and is never handed to a peer; Debug "[ServerOwnership] kept by the server". One generic flag; Core's CompanionOwnershipKeeper honours the same.1.6.23 ([lead] 10-30, Fire's one-implementation rule): REMOVED the client [FrameSplit] (FDT's stall ledger already splits each frame) and the F5 fgn_tame_ownership_test (unreliable; follow / stay is a hand check). No behaviour change. 1.6.22 ([lead] 10-30): with "Server Simulates Tamed Creatures Too" on, a tame that is FOLLOWING a player stays with / goes back to that player; only idle or staying tames and tamed NPCs go to the server (Debug why per decision, Info once). Tame test runs follow twice. 1.6.21 ([lead] 10-30): fgn_tame_ownership_test only: logs the wolf's ZDO follow, AI follow target and patrol point around follow / stay. 1.6.20 ([lead] 10-30): fgn_tame_ownership_test only: the follow step walks the player away (body moved each physics step) instead of one 12 m teleport. 1.6.19 ([lead] 10-30): fgn_tame_ownership_test only: the player moves with vanilla TeleportTo and follow / stay are judged on the wolf's own movement. 1.6.18 ([lead] 10-30): fgn_tame_ownership_test fixes only: claims the test wolf before taming (vanilla Tame acts on the owner), finds the Dverger hover / interact on children. 1.6.17 ([lead] 10-30, rig A/B): key "Server Simulates Tamed Creatures Too" (off): with broad server ownership, tamed non-companion creatures go to the server too. 1.6.16 ([lead] 10-30): Debug "[ServerOwnership] kept by players" names why a player keeps a creature (tamed / possessed / not in the simulated set / key off). 1.6.15 ([lead] 10-30): Debug [FrameSplit] fixed / update / render per frame + worst frame; broad server ownership also takes a creature back from the player whose game owns it (Server Takes Creatures Back From Players, ON; tames stay); Debug [OwnerClaim] names the code that made a client own a creature. 1.6.14 ([lead] 10-30): Patch Timer handles up to 48 patches per kind (ZNet.Update has 25 postfixes) and also times VisEquipment.UpdateVisuals. 1.6.13 ([lead] 10-29): Debug Patch Timer (14 - Diagnostics, off by default): marker patches on the vanilla method time every mod's prefix/postfix on a cfg list of methods (VisEquipment.UpdateEquipmentVisuals;ZNet.Update), one line per method every 10 s. 1.6.12 ([lead] 10-29): Debug-only [NetSplit] sub-timers (ZDOMan.Update, UpdateSave, UpdatePeers, sockets, rest). 1.6.11 (Fire 10-29, God Complex): FgnApi v5 network view, read-only: GetPeerNetStats / GetZoneOwners (zone owner = its _ZoneCtrl ZDO owner) / GetSimulationState, JSON for reflection; F5 fgn_netview_test. 1.6.10:1.6.10 ([lead] + [visual] 10-29): Redraw Feasts When Their Stack Arrives (ON): a feast another peer owns is redrawn once its new portion count arrives (the eat RPC can beat the ZDO update with server ownership); Info proof once, then Debug.1.6.9 (Fire 10-28): Spread Dungeon Room Spawns (ON): a loading dungeon places its saved rooms a few per frame (6 ms), same rooms and positions, zone held as loading until all are in (1.6.7/1.6.8 held: the loading-priority cap was based on a wrong reading). 1.6.6 ([lead] dnfly87): Time-Slice on the client learns each prefab's create cost and a known-heavy object (one Instantiate over the budget: locations, dungeon rooms) goes first and alone in a frame instead of after other creates; Debug "[TimeSlice] heavy creates". 1.6.5 (Fire 10-28): Time-Slice Instantiation also runs on a game hosted from the client (local host), not only on a client joined to a dedicated server; Debug "[TimeSlice] path: ..." names the path once. 1.5.96 ([fgn] + [ghost], Fire 10-28): Slow Ticks For Far Idle Creatures (owned, idle, >60 m, off-screen, never companions/tames/keep-alive areas); default off.
+        // was 1.5.95:
 
         // ValheimPerformanceOptimizations (ontrigger) replaces ZNetScene.CreateDestroyObjects (always skipping vanilla, around
         // ZNet's reference position) and ZDOMan.ReleaseNearbyZDOS, the two methods Server-Side Simulation and ZDO ownership
@@ -36,6 +43,7 @@ namespace FiresGhettoNetworkMod
 
         public static ConfigEntry<LogLevel> ConfigLogLevel;
         public static ConfigEntry<bool> ConfigEnableCompression;
+        public static ConfigEntry<bool> ConfigServerTestCommands;
         public static ConfigEntry<UpdateRateOptions> ConfigUpdateRate;
         // KB/s as a plain NUMBER, not a dropdown. Auto-Tune writes the exact measured value; a fixed
         // list forced it to snap down to the nearest option and threw away up to half a thin line.
@@ -67,6 +75,9 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<int> ConfigZoneLoadBatchSize;
         public static ConfigEntry<int> ConfigZPackageReceiveBufferSize;
         public static ConfigEntry<bool>  ConfigEnableTimeSliceInstantiation;
+        public static ConfigEntry<bool>  ConfigEventCreateQueue;       // 1.6.54
+        public static ConfigEntry<bool>  ConfigAdaptiveFill;           // 1.6.73
+        public static ConfigEntry<bool>  ConfigEventQueueSelfCheck;    // 1.6.54
         public static ConfigEntry<int>   ConfigInstantiationBudgetMs;
         public static ConfigEntry<int>   ConfigMaxInstancesPerFrame;
         public static ConfigEntry<int>   ConfigServerInstantiationBudgetMs;
@@ -80,11 +91,11 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<bool> ConfigEnableInvulnerableSupportSkip;
         public static ConfigEntry<bool> ConfigEnableInstanceOrphanPrune;
         public static ConfigEntry<bool> ConfigFixTeleportGhosts;
-        public static ConfigEntry<bool> ConfigFixSlowSleep;
         public static ConfigEntry<bool> ConfigKeepaliveFirst;
         public static ConfigEntry<bool> ConfigKeepWorldClockAtRealTime;
         public static ConfigEntry<bool> ConfigSmoothServerClockCorrections;
         public static ConfigEntry<bool> ConfigFixGroundSnapThroughFloors;
+        public static ConfigEntry<float> ConfigCartPushUpWheelDepth;   // 1.5.87
         public static ConfigEntry<bool> ConfigEnableRpcRouter;
         public static ConfigEntry<bool> ConfigEnableRpcAoI;
         public static ConfigEntry<float> ConfigRpcAoIRadius;
@@ -94,6 +105,8 @@ namespace FiresGhettoNetworkMod
         public static ConfigEntry<bool> ConfigEnableServerAuthority;
         public static ConfigEntry<bool> ConfigEnableServerOwnership;
         public static ConfigEntry<bool> ConfigEnableServerOwnershipSelective;
+        public static ConfigEntry<bool> ConfigServerPiecesOnlyWhereSimulated;   // 1.6.56
+        public static ConfigEntry<bool> ConfigServerEventQueue;   // 1.6.57
         public static ConfigEntry<bool> ConfigShowAILODInServerStatus;
         public static ConfigEntry<bool> ConfigEnableBootPatchVerification;
         public static ConfigEntry<bool> ConfigEnableLargeZdoDiagnostics;
@@ -109,11 +122,28 @@ namespace FiresGhettoNetworkMod
         // body lives in AwakeCore (never inlined) and a load failure is caught and logged here instead of silently killing FGN.
         private void Awake()
         {
+            // 1.6.84 ([fgn], [release]'s F44 finding): BepInEx rewrites the whole cfg on every new Bind (Entries starts empty each launch), so ~194 binds = ~194 full writes.
+            // With the key on, binds during Awake don't save, and the file is written once at the end: the same file the last of those writes would have produced.
+            var saveOnce = Config.Bind("12 - Advanced", "Save Config Once At Startup", false, "FGN writes its settings file once at startup instead of once per setting. Same file. Off until tested.");
+            bool holdSaves = saveOnce.Value && Config.SaveOnConfigSet;
+            int entriesBefore = Config.Count;
+            var startupTimer = System.Diagnostics.Stopwatch.StartNew();
+            if (holdSaves) Config.SaveOnConfigSet = false;
             try { AwakeCore(); }
             catch (Exception ex) when (ex is TypeLoadException || ex is MissingMemberException || ex is System.IO.FileNotFoundException)
             {
                 Logger.LogError($"FiresGhettoNetworkMod could not finish loading on this game build ({ex.GetType().Name}: {ex.Message}). " +
                                 "Please report it with this log.");
+            }
+            finally
+            {
+                if (holdSaves)
+                {
+                    Config.SaveOnConfigSet = true;
+                    var writeTimer = System.Diagnostics.Stopwatch.StartNew();
+                    try { Config.Save(); } catch (Exception ex) { Logger.LogWarning($"Saving the config once at startup failed: {ex.Message}"); }
+                    LoggerOptions.LogDebug($"[Startup] config written once: {Math.Max(0, Config.Count - entriesBefore - 1)} full write(s) avoided, one write {writeTimer.Elapsed.TotalMilliseconds:0.0} ms, Awake {startupTimer.Elapsed.TotalMilliseconds:0} ms");
+                }
             }
         }
 
@@ -180,16 +210,19 @@ namespace FiresGhettoNetworkMod
             InvokeStaticInitByTypeName("FiresGhettoNetworkMod.CompressionGroup", "InitConfig", new object[] { Config });
             InvokeStaticInitByTypeName("FiresGhettoNetworkMod.NetworkingRatesGroup", "Init", new object[] { Config });
             InvokeStaticInitByTypeName("FiresGhettoNetworkMod.DedicatedServerGroup", "Init", new object[] { Config });
-            SendQueueHeadroomMonitor.InitConfig(Config);
+            SendQueueHeadroomMonitor.InitConfig(Config); AllocationSiteCensus.InitConfig(Config);
             AdaptiveSendRate.InitConfig(Config);
             LinkController.InitConfig(Config);
             SendScheduler.InitConfig(Config);
             StationRouter.InitConfig(Config);
             CreatureOwnership.InitConfig(Config);
             HelmOwnership.InitConfig(Config);
+            OwnershipSteady.InitConfig(Config);   // [wishbone] ownstab N22/N23: Ownership Move Hysteresis, Ownership Idle Gate (off)
+            PortalAhead.InitConfig(Config);   // 1.6.72 ([ghost]): Send Portal Destination Early (off; needs it on server and client); [wishbone] arrival: + On Use (off)
+            ArrivalGate.InitConfig(Config);   // [wishbone] arrival N42: Refuse Empty Teleport Arrival + census (off)
             TargetSync.InitConfig(Config);
+            FightHandoff.InitConfig(Config);   // [wishbone] handoff (N6/N7/N8): all off
             SectorChangeTracker.InitConfig(Config);
-            FireplaceFuelTicks.InitConfig(Config);
             TransformWriteRate.InitConfig(Config);
             SyncListRefPosPatches.InitConfig(Config);
             JoinGrace.InitConfig(Config);
@@ -198,21 +231,52 @@ namespace FiresGhettoNetworkMod
             LogoutHold.InitConfig(Config);
             RemoteMotion.InitConfig(Config);
             RemoteArrows.InitConfig(Config);
+            MapPinJump.InitConfig(Config);   // 1.6.31
             FgnVersionGate.InitConfig(Config);
             OwnerSafeRevisions.InitConfig(Config);
+            SendZdoPackagePool.InitConfig(Config);   // 1.6.38
+            RpcArgumentList.InitConfig(Config);   // 1.6.39
+            RpcTypedInvoke.InitConfig(Config);   // 1.6.39
+            DisconnectSweep.InitConfig(Config);   // 1.6.41
+            FeastRedraw.InitConfig(Config);   // 1.6.10
+            PatchTimer.InitConfig(Config);   // 1.6.13
+            ServerOwnershipPatches.InitConfig(Config);   // 1.6.15: Server Takes Creatures Back From Players
+            ZDOThrottlingPatches.InitConfig(Config);   /* 1.6.84 */ MonsterAIPatches.InitConfig(Config);   // 1.6.31: Raid Monsters Need A Player In The Raid Area
+            // 1.6.82: FarIdleCreatureTicks moved to FiresFixes (FarIdleHandoff tells it about keep-alive areas)
+            KinematicSweepOwner.InitConfig(Config);   // 1.6.25
+            KinematicSweepOwner.Apply(Harmony);       // 1.6.64: FGN runs the kinematic sync itself (audit M10)
+            // 1.6.83: ClientCleanupThrottle moved to EasyBakeMeshes;   // 1.6.65: skip idle object-area passes on clients
+            GhostOwner169.InitConfig(Config);   // 1.6.69 ([ghost]): server hands ships to the helmsman for non-FGN owners (on), touch rule (off), in-use veto
+            ServerSimCeiling.InitConfig(Config);   // 1.6.69: dedicated-server simulation distance ceiling (-1 = vanilla)
+            ResourceOwnership.InitConfig(Config);   // 1.6.69: resources go to whoever hits them (off until the A/B)
+            PeerStalls.InitConfig(Config);   // 1.6.69: judge peers by update gaps (feeds the creature balancer; off until the A/B)
+            SelfCost.InitConfig(Config);   // 1.6.73: Self Cost Census (off; measuring aid)
+            LoggerOptions.LogDebug("[EventDriven] 1.6.26 caches on: FarIdle component fields, ShipFixes FieldRefs, RandEvent delegates (no behaviour change)");
             PickupClaimGuard.InitConfig(Config);
             Api.FgnApi.InitConfig(Config);
+            FightNet.InitConfig(Config);   // [wishbone] fight census (Debug) + Fight Traffic First (in-scheduler order only; the Steam-queue reorder is not taken, see FightNet.cs header); all off
+            SendLater.InitConfig(Config);   // [wishbone] sendeff N28: Send Far Idle Changes Later (off)
+            ServerSweep.InitConfig(Config);   // [wishbone] server N39/N43: Spread Server Ownership Sweep, Hold Outer Ghost Zones On Full Queue, Server Sweep Census (all off)
             DropStaleConfigKeys();   // after every key is bound, so moved values carry over
             try { Config.Save(); } catch (Exception ex) { Logger.LogWarning($"Failed to save the tidied config: {ex.Message}"); }
 
             if (!SteamSide.Present)
+                {
                 LoggerOptions.LogMessage("Steam networking not present: FGN's Steam features off, the rest on");
+                Log?.LogInfo($"[{PluginName}] skipped ZSteamSocketSend, ZSteamSocketRecv: {SteamSide.Why}, Steam socket send and receive hooks off.");
+            }
 
+            TryPatchAll(typeof(RoutedSenderGuard));   // 1.6.31: was never attached, so FGN without Core trusted the packet's sender. Core's copy claims the marker first when present.
+            if (AllocationSiteCensus.ConfigEnabled != null && AllocationSiteCensus.ConfigEnabled.Value) TryPatchAll(typeof(AllocationSiteCensus));
+            // Attached only when one of its keys is on at start.
+            if (FightNet.AnyKeyOn) { TryPatchAll(typeof(FightNet)); LoggerOptions.LogDebug("[FightNet] attached: hit census " + FightNet.ConfigHitCensus.Value + ", stagger census " + FightNet.ConfigStaggerCensus.Value + ", fight traffic first " + FightNet.ConfigFightFirst.Value + "."); }
+            // [wishbone] server: attached only on a headless process with one of its keys on at start; never on a client.
+            if (ServerSweep.ShouldAttach()) { TryPatchAll(typeof(ServerSweep)); ServerSweep.NoteAttached(); }
             TryPatchAll(typeof(CompressionGroup));
             TryPatchAll(typeof(NetworkingRatesGroup));
-            if (SteamSide.Present) TryPatchAll(typeof(NetworkingRatesGroup.SteamConnectPatch));   // Steam-only (the Xbox build has no ZSteamSocket)
+            TryPatchSteam(typeof(NetworkingRatesGroup.SteamConnectPatch), "Steam send rates on connect");   // Steam-only (the Xbox build has no ZSteamSocket)
             TryPatchAll(typeof(DedicatedServerGroup));
-            if (SteamSide.Present) TryPatchAll(typeof(DedicatedServerGroup.SteamPatches));   // Steam-only (the Xbox build has no ZSteamSocket)
+            TryPatchSteam(typeof(DedicatedServerGroup.SteamPatches), "Steam lobby and server player limits");   // Steam-only (the Xbox build has no ZSteamSocket)
             TryPatchAll(typeof(PlayFabJoinCodeGuard));   // crossplay join-code check (null lobby entry), servers and hosts
             TryPatchAll(typeof(ServerSafePick));   // a server-owned Pickable no longer throws in RPC_Pick (no local player)
             TryPatchAll(typeof(SyncListRefPosPatches));
@@ -223,19 +287,17 @@ namespace FiresGhettoNetworkMod
 
             if (ConfigEnableFallThroughDiagnostics.Value)
             {
-                TryPatchAll(typeof(FallThroughProbe));
-                TryPatchAll(typeof(PieceTypeAudit));
+                
             }
 
             TryPatchAll(typeof(ServerDisconnectDiagnostics));
-            if (SteamSide.Present) TryPatchAll(typeof(CloseWithoutSleep));   // Steam-only (the Xbox build has no ZSteamSocket)
+            TryPatchSteam(typeof(CloseWithoutSleep), "closing Steam connections without the 100 ms wait");   // Steam-only (the Xbox build has no ZSteamSocket)
             PlayFabZlibWorker.Apply();
 
             TryPatchAll(typeof(BulkTransferGatePatches));
 
             TryPatchAll(typeof(BigZdoDiagnostic));
 
-            TryPatchAll(typeof(FireplaceFuelTicks));
             // OwnerSync's prefix attaches only while one of its features is on (ZSyncHookGate)
             ZSyncHookGate.Init(TransformWriteRate.ConfigEnabled, TransformWriteRate.ConfigPrefabs, TransformWriteRate.ConfigWritesPerSecond, RemoteMotion.ConfigSendStamps);
 
@@ -249,7 +311,7 @@ namespace FiresGhettoNetworkMod
             }
 
             TryPatchAll(typeof(DisarmOverloadTest));
-            if (SteamSide.Present) TryPatchAll(typeof(DisarmOverloadTest.SteamPatch));   // Steam-only (the Xbox build has no ZSteamSocket)
+            TryPatchSteam(typeof(DisarmOverloadTest.SteamPatch), "the overload test's Steam queue check");   // Steam-only (the Xbox build has no ZSteamSocket)
 
             TryPatchAll(typeof(CompressionRoundTripTest));
 
@@ -263,6 +325,7 @@ namespace FiresGhettoNetworkMod
 
             TryPatchAll(typeof(LogoutHold));
             TryPatchAll(typeof(RemoteArrows));
+            TryPatchAll(typeof(MapPinJump));   // 1.6.31: Map Icons Jump With Teleports
 
             TryPatchAll(typeof(SendScheduler));
 
@@ -271,10 +334,20 @@ namespace FiresGhettoNetworkMod
             TryPatchAll(typeof(CreatureOwnership));
 
             TryPatchAll(typeof(HelmOwnership));
+            TryPatchAll(typeof(PortalAhead));   // 1.6.72 ([ghost])
+            if (ArrivalGate.KeyOnAtStart) TryPatchAll(typeof(ArrivalGate));   // [wishbone] arrival: attached only when a key is on at start
+            if (OwnershipSteady.AnyKeyOn) TryPatchAll(typeof(OwnershipSteady));   // [wishbone] ownstab: census hooks attached only when a key is on at start
+            if (SendLater.KeyOnAtStart) TryPatchAll(typeof(SendLater));   // [wishbone] sendeff: attached only when on at start
+            TryPatchAll(typeof(SelfCost.InstallOnWorldLoad));   // 1.6.73
 
             TryPatchAll(typeof(TargetSync));
+            if (FightHandoff.AnyKeyOn())   // [wishbone] handoff: attached only when one of its keys is on at start
+            {
+                TryPatchAll(typeof(FightHandoff));
+                FightHandoff.MarkAttached();
+            }
 
-            if (SteamSide.Present) TryPatchAll(typeof(KeepaliveFirst));   // Steam-only (the Xbox build has no ZSteamSocket)
+            TryPatchSteam(typeof(KeepaliveFirst), "keepalives jumping the Steam send queue");   // Steam-only (the Xbox build has no ZSteamSocket)
 
             TryPatchAll(typeof(JoinGrace));
 
@@ -293,11 +366,23 @@ namespace FiresGhettoNetworkMod
 
             TryPatchAll(typeof(PlayerPositionSyncPatches));
 
-            TryPatchAll(typeof(WearNTearClientSupportPatches));
+            
+            
 
-            TryPatchAll(typeof(ClientCleanupThrottle));
-
-            TryPatchAll(typeof(GroundSnapPatches));
+            if (isDedicated) TryPatchAll(typeof(GroundSnapPatches));   // 1.6.81: clients and hosts are FiresFixes
+            TryPatchAll(typeof(CartSnapTest));   // 1.5.90: its InitTerminal postfix registers fgn_cartsnap_test (1.5.86-1.5.89 never patched it, so the command did not exist)
+            TryPatchAll(typeof(ZoneLoadDiag)); TryPatchSteam(typeof(ZoneLoadDiag.SteamPatch), "Steam socket timing in [ZoneLoad]");
+            TryPatchAll(typeof(SendZdoPackagePool));   // 1.6.38
+            TryPatchAll(typeof(RpcArgumentList));   // 1.6.39
+            TryPatchAll(typeof(RpcTypedInvoke));   // 1.6.39
+            TryPatchAll(typeof(DisconnectSweep));   // 1.6.41
+            TryPatchAll(typeof(DisconnectSweep.ReleaseAllHook));   // 1.6.51: the Release(Dictionary) prefix, target found in code (store-check safe)
+            TryPatchAll(typeof(FeastRedraw));   // 1.6.10: Redraw Feasts When Their Stack Arrives
+            TryPatchAll(typeof(PatchTimer));   // 1.6.13: Debug patch timer (markers on the vanilla method only)
+            TryPatchAll(typeof(OwnershipClaimProbe));   // 1.6.15: Debug, which code makes this client own a creature
+            TryPatchAll(typeof(Api.FgnNetView));   // 1.6.11: FgnApi v5 network view; only its F5 command is a patch
+            TryPatchAll(typeof(RpcCensus));   // 1.5.92: [RpcCensus] routed RPCs handled, by handler, every 5 s (Debug only)
+               // 1.5.93: per-frame breakdown for [ZoneLoad]'s worst frame (Debug only)
 
             TryPatchAll(typeof(ZSyncHookGate));   // the handoff prefix is attached by its session gate (off for a solo host), not here
 
@@ -319,7 +404,6 @@ namespace FiresGhettoNetworkMod
 
             try
             {
-                TryPatchAll(typeof(TerrainCompInitRace));
             }
             catch (System.Exception ex)
             {
@@ -329,29 +413,21 @@ namespace FiresGhettoNetworkMod
             // Always attached: it must run on clients too, not only with the server-only MonsterAIPatches.
             try
             {
-                TryPatchAll(typeof(SpawnHeightmapGuard));
             }
             catch (System.Exception ex)
             {
                 LoggerOptions.LogWarning($"[Spawn] heightmap guard could not be attached; vanilla behaviour is unchanged. {ex.Message}");
             }
 
-            TryPatchAll(typeof(SleepTimeSkipFix));
 
             if (!isDedicated)
                 TryPatchAll(typeof(WorldClock));
 
-            if (!isDedicated && ConfigEnableCapeCrashDiagnostics.Value)
-            {
-                TryPatchAll(typeof(CapeCrashDiagnostics));
-                TryPatchAll(typeof(MagicaColliderRegistrationDiagnostics));
-                TryPatchAll(typeof(MagicaClothLifecycleDiagnostics));
-                LoggerOptions.LogWarning("[CapeDiag] Cape crash diagnostics are ON; turn 'Enable Cape Crash Diagnostics' off once the crash is found.");
-            }
-
+            
             // Auto-tune: probe on clients, self-tune on servers.
             TryPatchAll(typeof(AutoTuneProbeHooks));
-            TryPatchAll(typeof(ZoneLoadPatches));
+            TryPatchAll(typeof(ZoneLoadPatches));   TryPatchAll(typeof(EbmBridge));   // 1.6.54: the queue's AddToSector events
+               // 1.6.70 N1: IsActiveAreaLoaded's teleport answer, create passes only, per-object zone gate
             ServerAutoTune.InitServerSide();
 
             if (isDedicated)
@@ -445,8 +521,11 @@ namespace FiresGhettoNetworkMod
 
             TryPatchAll(typeof(ServerAuthorityPatches));
             TryPatchAll(typeof(SssQuietPass));   // quiet-pass counter for the [SSS] line
-            TryPatchAll(typeof(ServerStabilityPatches));
+            TryPatchAll(typeof(ServerStream));   // 1.6.57: the server create queue's AddToSector events
             TryPatchAll(typeof(MonsterAIPatches));
+            TryPatchAll(typeof(FarIdleHandoff));   // 1.6.82: far idle moved to FiresFixes
+            
+            
 
             if (ConfigEnableServerOwnershipSelective.Value)
             {
@@ -458,28 +537,27 @@ namespace FiresGhettoNetworkMod
                 TryPatchAll(typeof(ServerOwnershipPatchesV3));
                 CreatureOwnership.ServerOwnsCreatures = true;
                 HelmOwnership.ServerOwnsShips = ConfigEnableServerSideShipSimulation.Value;
-                LoggerOptions.LogMessage(
+                LoggerOptions.LogDebug(
                     "Server ZDO ownership (V3 SELECTIVE) ENABLED — Character/Ship only; drops/voxel/interactables/carts stay peer-owned.");
             }
             else if (ConfigEnableServerOwnership.Value)
             {
                 TryPatchAll(typeof(ServerOwnershipPatches));
                 CreatureOwnership.ServerOwnsCreatures = true;
-                HelmOwnership.ServerOwnsShips = true;
-                LoggerOptions.LogMessage(
+                HelmOwnership.ServerOwnsShips = ConfigEnableServerSideShipSimulation.Value;   // 1.6.31: was always true. With ship sim off the simulated set leaves ships to the peers, so asking for them back flipped an empty moored boat's owner every 7-10 s.
+                LoggerOptions.LogDebug(
                     "Server ZDO ownership (V2 BROAD SSS-exact) ENABLED — every persistent ZDO in any peer's active area will be claimed by the server.");
-                if (!ConfigEnableServerSideShipSimulation.Value)
-                    LoggerOptions.LogWarning(
-                        "V2 BROAD claims SHIPS as well, regardless of 'Server-Side Ship Simulation' being off — it is a "
-                        + "deliberate verbatim port with no per-prefab exclusions. A server-owned hull runs its own physics, "
-                        + "and ImpactEffect only fires for the owner, so boats can take phantom damage on calm water. "
-                        + "Use the Selective (V3) toggle instead if your players sail; it honours that setting.");
+                LoggerOptions.LogDebug(ConfigEnableServerSideShipSimulation.Value
+                    ? "[ServerOwnership] Ships: 'Server-Side Ship Simulation' is on, so the server sails empty ships and takes them back at rest."
+                    : "[ServerOwnership] Ships: 'Server-Side Ship Simulation' is off, so ships stay with the players and the server never asks for them back.");
             }
             else
             {
-                LoggerOptions.LogInfo(
+                LoggerOptions.LogDebug(
                     "Server ZDO ownership transfer disabled (both V2 and V3 flags = false). Vanilla peer ownership in effect.");
             }
+
+            PatchSafety.Summary();   // 1.6.71 ([ghost]): one line: classes attached / methods patched / failed
 
             if (ConfigEnableBootPatchVerification.Value)
             {
@@ -630,6 +708,8 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogInfo("WackyDatabase compatibility patch applied — will skip snapshots for invalid/broken clones.");
             }
 
+            private static int s_nullSkips;   // 1.6.49
+
             // Prefix for SnapshotItem(ItemDrop item, ...)
             [HarmonyPrefix]
             public static bool SnapshotItem_Prefix(ref ItemDrop item) // Use ref to allow null check + early exit
@@ -637,7 +717,11 @@ namespace FiresGhettoNetworkMod
                 // First and most important: null item
                 if (item == null)
                 {
-                    LoggerOptions.LogWarning("WDB: Skipping snapshot for null ItemDrop (likely broken clone).");
+                    // 1.6.49 ([lead] 11-07): handled, so not a player warning; there is no name to give (the ItemDrop itself is null).
+                    // One Info line the first time, then a Debug line per skip with the running count.
+                    s_nullSkips++;
+                    if (s_nullSkips == 1) LoggerOptions.LogInfo("WDB: skipping snapshots WackysDatabase asks for with a null ItemDrop (likely a broken clone; handled, nothing lost). Each one is counted at Debug.");
+                    LoggerOptions.LogDebug($"WDB: skipped snapshot for null ItemDrop #{s_nullSkips}");
                     return false; // Skip original
                 }
 
@@ -668,6 +752,13 @@ namespace FiresGhettoNetworkMod
         /// it is logged and that feature stays off, instead of the exception leaving Awake and skipping everything after it
         /// (which would leave every peer running a half-initialised FGN).
         /// </summary>
+        // Steam-only patch classes: one Info line with the reason when skipped (Fire 11-05). Error stays for real failures, in TryPatchAll.
+        private static void TryPatchSteam(Type type, string whatIsOff)
+        {
+            if (SteamSide.Present) TryPatchAll(type);
+            else Log?.LogInfo($"[{PluginName}] skipped {(type.DeclaringType != null ? type.DeclaringType.Name + "." : "")}{type.Name}: {SteamSide.Why}, {whatIsOff} off.");
+        }
+
         private static void TryPatchAll(Type type)
         {
             if (type == null)
@@ -677,14 +768,16 @@ namespace FiresGhettoNetworkMod
             }
             try
             {
-                Harmony.PatchAll(type);
+                PatchSafety.NoteAttached(Harmony.CreateClassProcessor(type, true).Patch());   // 1.6.71 ([ghost]): exactly what Harmony.PatchAll(type) runs (0Harmony 2.9 IL), now with its count
                 FgnHooks.NoteAttached(type);
             }
             catch (Exception ex)
             {
                 Exception cause = ex.InnerException ?? ex;
+                int undone = PatchSafety.RollBack(Harmony, type);   // 1.6.71 ([ghost]): parts it had already attached are removed again
+                while (cause.InnerException != null) cause = cause.InnerException;
                 Log?.LogError($"[{PluginName}] couldn't attach {type.Name} ({cause.GetType().Name}: {cause.Message}); that feature is off, "
-                    + "the rest of FGN loads normally.");
+                    + "the rest of FGN loads normally." + (undone > 0 ? $" {undone} part(s) it had already attached were removed again, so it never runs half-way." : ""));
             }
         }
 
@@ -701,25 +794,25 @@ namespace FiresGhettoNetworkMod
             var mi = AccessTools.Method(type, methodName);
             if (mi == null)
             {
-                LoggerOptions.LogMessage($"[PatchVerify] {type.FullName}.{methodName} â†’ method NOT FOUND by AccessTools.");
+                LoggerOptions.LogDebug($"[PatchVerify] {type.FullName}.{methodName} â†’ method NOT FOUND by AccessTools.");
                 return;
             }
             var info = HarmonyLib.Harmony.GetPatchInfo(mi);
             if (info == null)
             {
-                LoggerOptions.LogMessage($"[PatchVerify] {type.FullName}.{methodName} â†’ NO patches attached (info=null).");
+                LoggerOptions.LogDebug($"[PatchVerify] {type.FullName}.{methodName} â†’ NO patches attached (info=null).");
                 return;
             }
             int total = (info.Prefixes?.Count ?? 0)
                       + (info.Postfixes?.Count ?? 0)
                       + (info.Transpilers?.Count ?? 0)
                       + (info.Finalizers?.Count ?? 0);
-            LoggerOptions.LogMessage($"[PatchVerify] {type.FullName}.{methodName} â†’ total={total} (prefixes={info.Prefixes?.Count ?? 0}, postfixes={info.Postfixes?.Count ?? 0}, transpilers={info.Transpilers?.Count ?? 0}, finalizers={info.Finalizers?.Count ?? 0}).");
+            LoggerOptions.LogDebug($"[PatchVerify] {type.FullName}.{methodName} â†’ total={total} (prefixes={info.Prefixes?.Count ?? 0}, postfixes={info.Postfixes?.Count ?? 0}, transpilers={info.Transpilers?.Count ?? 0}, finalizers={info.Finalizers?.Count ?? 0}).");
             void DumpList(string kind, System.Collections.Generic.IEnumerable<HarmonyLib.Patch> ps)
             {
                 if (ps == null) return;
                 foreach (var p in ps)
-                    LoggerOptions.LogMessage($"[PatchVerify]   [{kind}] owner='{p.owner}' method={p.PatchMethod.DeclaringType?.FullName}.{p.PatchMethod.Name} prio={p.priority}");
+                    LoggerOptions.LogDebug($"[PatchVerify]   [{kind}] owner='{p.owner}' method={p.PatchMethod.DeclaringType?.FullName}.{p.PatchMethod.Name} prio={p.priority}");
             }
             DumpList("Prefix",     info.Prefixes);
             DumpList("Postfix",    info.Postfixes);
@@ -849,6 +942,11 @@ namespace FiresGhettoNetworkMod
                 "Log Level",
                 LogLevel.Message,
                 Cfg.Basic("How much FGN writes to the log. Message is normal; Info and Debug are for troubleshooting."));
+            ConfigServerTestCommands = Config.Bind(
+                "01 - General",
+                "Server test commands",
+                false,
+                Cfg.Adv("Lets admins run FGN's stress and test commands on this server (object floods, send-queue overloads, socket floods). Off on live servers."));
 
             // ConfigManager sections render in first-Bind() order. The priming
             // binds + Init calls below set sections 02..08 to match the "NN - "
@@ -942,9 +1040,29 @@ namespace FiresGhettoNetworkMod
             ConfigEnableTimeSliceInstantiation = Config.Bind(
                 "02 - Client Performance",
                 "Enable Time-Slice Instantiation",
-                false,
+                true,   // 1.6.4 (Fire 10-28): ON by default
                 Cfg.Adv("Spreads loading a busy area over several frames instead of one big hitch."));
+            // 1.6.4: one-time migration of cfgs left on the old off default (marker; the player's later choice is kept)
+            var timeSliceMigrated = Config.Bind("12 - Advanced", "Time-Slice Default Migrated", false, Cfg.Hidden("Internal: the 1.6.4 default change was applied once."));
+            if (!timeSliceMigrated.Value)
+            {
+                if (!ConfigEnableTimeSliceInstantiation.Value) { ConfigEnableTimeSliceInstantiation.Value = true; LoggerOptions.LogDebug("[FGN] 'Enable Time-Slice Instantiation' is now on by default; you can still turn it off."); }
+                timeSliceMigrated.Value = true;
+            }
 
+            // 1.6.54 ([fgn], Fire 11-08 "close it fix it and relaunch"): a fix, ON. Replaces 1.6.53's "Time-Slice Cached Create Order".
+            ConfigAdaptiveFill = Config.Bind("02 - Client Performance", "Adaptive Fill Budget", true,
+                Cfg.Adv("Objects around you are created as fast as this PC can manage: the budget comes from your frame time target, the frame time actually left over and the measured cost of each create (more while you stand still or load, only the headroom while you move). Off = the fixed pacing as before."));
+            ConfigEventCreateQueue = Config.Bind(
+                "02 - Client Performance",
+                "Event-Driven Create Queue",
+                true,
+                Cfg.Adv("Towns load fast: nearby objects are created from one queue kept up to date as objects arrive, instead of re-sorting every nearby object each frame. Behind the loading screen it creates in a big burst; in play it stays inside the frame budget and bursts while a lot is waiting. Also tells other mods when a zone has finished loading. Off = the older time slice."));
+            ConfigEventQueueSelfCheck = Config.Bind(
+                "02 - Client Performance",
+                "Event-Driven Create Queue Self-Check",
+                false,
+                Cfg.Adv("Test tool: every 10 s, checks the create queue against the game's own list of nearby objects and logs any it missed (Log Level Debug)."));
             ConfigInstantiationBudgetMs = Config.Bind(
                 "02 - Client Performance",
                 "Instantiation Budget Ms",
@@ -963,7 +1081,7 @@ namespace FiresGhettoNetworkMod
                 "02 - Client Performance",
                 "Safety Fallback Enabled",
                 true,
-                Cfg.Adv("Loads faster when a huge backlog is waiting, like after teleporting into a big base."));
+                Cfg.Adv("Kept for old configs. Since 1.6.45 arriving (loading screen or teleport) uses vanilla's fast creation, so this no longer widens the budget while you play."));
 
             ConfigSafetyFallbackThreshold = Config.Bind(
                 "02 - Client Performance",
@@ -988,7 +1106,7 @@ namespace FiresGhettoNetworkMod
                 "11 - Ship Fixes",
                 "Server-Side Ship Simulation",
                 false,
-                Cfg.Adv("Lets the server run ship physics too (with Selective ownership). Restart."));
+                Cfg.Adv("Lets the server run ship physics too (needs server ownership on). Restart."));
 
             ConfigEnableRpcAoI = Config.Bind(
                 "10 - Server Authority",
@@ -1020,7 +1138,12 @@ namespace FiresGhettoNetworkMod
                 "12 - Advanced",
                 "Fix Ground Snap Through Floors",
                 true,
-                Cfg.Adv("Stops creatures and tombstones popping up through floors built below ground."));
+                Cfg.Adv("Stops tombstones and dropped items popping up through floors built below ground. Players and creatures that really are under the terrain are still lifted."));
+            ConfigCartPushUpWheelDepth = Config.Bind(
+                "12 - Advanced",
+                "Cart push-up wheel depth (m)",
+                0.5f,
+                Cfg.Adv("A cart is only pushed back up out of the ground when one of its WHEELS is at least this far below the terrain under it (handles and the body never count; carts on or against build pieces, or hung tilted on walls, are never moved).", new AcceptableValueRange<float>(0.1f, 5f)));
 
             ConfigShowAILODInServerStatus = Config.Bind(
                 "01 - General",
@@ -1079,6 +1202,20 @@ namespace FiresGhettoNetworkMod
                 "Enable Server ZDO Ownership Transfer — Selective (EXPERIMENTAL)",
                 false,
                 Cfg.Adv("Server runs wild creatures near players; everything else stays with players. Restart."));
+
+            // 1.6.56 ([fgn], lead 11-08 relaying Fire): a fix, ON
+            ConfigServerPiecesOnlyWhereSimulated = Config.Bind(
+                "10 - Server Authority",
+                "Server Builds Pieces Only Where It Simulates",
+                true,
+                Cfg.Adv("With Server-Side Simulation on, the server builds walls, floors and other building pieces only around the creatures and ships it runs, instead of every town near a player. Big towns stop slowing the server down and it uses far less memory. Players see no difference: their own game builds everything as before. Off = the server builds every piece near a player."));
+
+            // 1.6.57 ([fgn], lead 11-08): a fix, ON
+            ConfigServerEventQueue = Config.Bind(
+                "10 - Server Authority",
+                "Server Event-Driven Create Queue",
+                true,
+                Cfg.Adv("With Server-Side Simulation on, the server keeps one queue of what it still has to build near players, updated as objects arrive, instead of checking every nearby object several times a second. Busy towns cost the server far less. Off = the full check every pass."));
 
             ConfigExtendedZoneRadius = Config.Bind(
                 "10 - Server Authority",
@@ -1223,11 +1360,7 @@ namespace FiresGhettoNetworkMod
                 true,
                 Cfg.Adv("Fixes players staying visible, frozen, after they teleport away."));
 
-            ConfigFixSlowSleep = Config.Bind(
-                "12 - Advanced",
-                "Fix Slow Sleep On Busy Servers",
-                true,
-                Cfg.Adv("Morning arrives on time when sleeping on a laggy server."));
+            // 1.6.76 (Fire 11-08 SP split): "Fix Slow Sleep On Busy Servers" moved to FiresFixes 0.1.84 with its fix.
 
             ConfigKeepaliveFirst = Config.Bind(
                 "12 - Advanced",
@@ -1306,7 +1439,6 @@ namespace FiresGhettoNetworkMod
         ConfigEnableInvulnerableSupportSkip,
         ConfigEnableInstanceOrphanPrune,
         ConfigFixTeleportGhosts,
-        ConfigFixSlowSleep,
         ConfigKeepaliveFirst,
         ConfigKeepWorldClockAtRealTime,
         ConfigSmoothServerClockCorrections,
@@ -1329,7 +1461,7 @@ namespace FiresGhettoNetworkMod
                     {
                         string side = (ZNet.instance != null && ZNet.instance.IsServer()) ? "SERVER" : "CLIENT";
                         var cfg = (ConfigEntryBase)sender;
-                        LoggerOptions.LogInfo($"[{side}] Config changed: {cfg.Definition.Section} â†’ {cfg.Definition.Key} = {cfg.BoxedValue}");
+                        LoggerOptions.LogDebug($"[{side}] Config changed: {cfg.Definition.Section} â†’ {cfg.Definition.Key} = {cfg.BoxedValue}");
                     });
                     settingChanged.AddEventHandler(baseCfg, handler);
                 }
@@ -1393,7 +1525,7 @@ namespace FiresGhettoNetworkMod
         steamworks
     }
 
-    /// <summary>Tags Configuration Manager and Fires Core read by field name (reflection): Browsable, IsAdvanced, Order.</summary>
+    /// <summary>Tags that Configuration Manager and other hubs read by field name (reflection): Browsable, IsAdvanced, Order.</summary>
     internal sealed class ConfigurationManagerAttributes
     {
         public bool? Browsable;

@@ -117,6 +117,23 @@ namespace FiresGhettoNetworkMod.AutoTune
         private static int _nextSeq = 1;
         private static bool _probeRunning;
         private static bool _probeCompletedThisSession;
+
+        // 1.6.64 ([lead] audit FLIP): other mods waited on this PRIVATE field by reflection. FgnApi.IsAutoTuneSettled /
+        // FgnApi.AutoTuneSettled now publish it; every "completed" write goes through here so the event fires once per session.
+        internal static bool ProbeCompletedThisSession => _probeCompletedThisSession;
+        internal static event Action Completed;
+        private static void SetProbeCompleted()
+        {
+            if (_probeCompletedThisSession) return;
+            _probeCompletedThisSession = true;
+            var handlers = Completed;
+            if (handlers == null) return;
+            foreach (Action h in handlers.GetInvocationList())
+            {
+                try { h(); }
+                catch (Exception e) { LoggerOptions.LogWarning($"[AutoTune] an AutoTuneSettled handler threw: {e.GetType().Name}: {e.Message}"); }
+            }
+        }
         private static bool _sampleWasUnsettled;
         private static bool _probeSlotGranted;
 
@@ -302,7 +319,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         {
             _playerArrivedInWorld = true;
             UnsubscribePlayerArrival();
-            LoggerOptions.LogInfo("[AutoTune] Game.m_playerInitialSpawn fired — player is in the world.");
+            LoggerOptions.LogDebug("[AutoTune] Game.m_playerInitialSpawn fired — player is in the world.");
         }
 
         /// <summary>
@@ -375,8 +392,16 @@ namespace FiresGhettoNetworkMod.AutoTune
             RoundTripTrace.SendAnswerLeg(rpc, RoundTripTrace.RpcProbeStages, seq, leg);
         }
 
+        private const float BwReplyIntervalSeconds = 1f;
+        private const int MaxTrackedBwPeers = 256;
+        private static readonly Dictionary<ZRpc, float> s_nextBwReply = new Dictionary<ZRpc, float>();
+
         private static void OnRpcBwReq(ZRpc rpc, int seq, int requestedBytes)
         {
+            float now = Time.realtimeSinceStartup;
+            if (rpc == null || (s_nextBwReply.TryGetValue(rpc, out float next) && now < next)) return;
+            s_nextBwReply[rpc] = now + BwReplyIntervalSeconds;
+            if (s_nextBwReply.Count > MaxTrackedBwPeers) s_nextBwReply.Clear();
             // Anti-abuse: never allocate more than the cap, whatever the client asked for.
             int safeBytes = Mathf.Clamp(requestedBytes, BwPayloadMinBytes, BwPayloadMaxBytes);
 
@@ -464,11 +489,11 @@ namespace FiresGhettoNetworkMod.AutoTune
 
             if (_probeSlotGranted)
             {
-                LoggerOptions.LogInfo($"[AutoTune] Server granted the probe slot after {waitedForGrant:0.0}s.");
+                LoggerOptions.LogDebug($"[AutoTune] Server granted the probe slot after {waitedForGrant:0.0}s.");
                 yield break;
             }
 
-            LoggerOptions.LogInfo(
+            LoggerOptions.LogDebug(
                 $"[AutoTune] No probe slot granted within {grantTimeout:0}s — the server may not run this mod. "
                 + "Probing anyway; this sample may not lower the applied tier.");
             _sampleWasUnsettled = true;
@@ -529,7 +554,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
             else
             {
-                LoggerOptions.LogInfo($"[AutoTune] Player arrived after {arrivalWait:0.0}s — settling before probe.");
+                LoggerOptions.LogDebug($"[AutoTune] Player arrived after {arrivalWait:0.0}s — settling before probe.");
             }
 
             // ---- 2. Post-arrival settle ----
@@ -601,13 +626,13 @@ namespace FiresGhettoNetworkMod.AutoTune
                 }
                 if (cached != null)
                 {
-                    LoggerOptions.LogInfo($"[AutoTune] Using cached tier for {serverKey}: {cached.Tier} (probed {(int)(DateTime.UtcNow - cached.TimestampUtc).TotalDays}d ago)");
+                    LoggerOptions.LogDebug($"[AutoTune] Using cached tier for {serverKey}: {cached.Tier} (probed {(int)(DateTime.UtcNow - cached.TimestampUtc).TotalDays}d ago)");
                     AutoTuneState.SetClientUplink(cached.UplinkBytes, cached.UplinkIsLimit);
                     AutoTuneState.SetClient(cached.Tier, cached.PingMedianMs);
                     CapeCrashDiagnostics.Log($"AutoTune using cached tier {cached.Tier}");
                     ApplyClientTier(cached.Tier);
                     SendTierReport(serverPeer, cached.Tier, cached.PingMedianMs);
-                    _probeCompletedThisSession = true;
+                    SetProbeCompleted();   // 1.6.64: raises FgnApi.AutoTuneSettled
                     _probeRunning = false;
                     VAGhettoLoadSummary.EmitAutoTune("cached", cached.Tier.ToString());
 
@@ -626,7 +651,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 }
             }
 
-            LoggerOptions.LogInfo($"[AutoTune] Starting probe — cores={cores}, RAM={ramMb}MB, GPU={gpu}");
+            LoggerOptions.LogDebug($"[AutoTune] Starting probe — cores={cores}, RAM={ramMb}MB, GPU={gpu}");
             CapeCrashDiagnostics.Log("AutoTune probe starting");
 
             // Stash session-scoped state so the rolling monitor can reuse it
@@ -650,12 +675,12 @@ namespace FiresGhettoNetworkMod.AutoTune
                 latencyAttempt++;
                 if (latencyAttempt > LatencyProbeMaxRetries)
                 {
-                    LoggerOptions.LogInfo($"[AutoTune] Latency probe aborted on all {latencyAttempt} attempt(s) (raw=[{string.Join(",", _latencyRawSamplesMs)}]) — defaulting to LOW tier, skipping bandwidth probe.");
+                    LoggerOptions.LogDebug($"[AutoTune] Latency probe aborted on all {latencyAttempt} attempt(s) (raw=[{string.Join(",", _latencyRawSamplesMs)}]) — defaulting to LOW tier, skipping bandwidth probe.");
                     Finalize(serverKey, hwHash, Tier.Low, _latencyMedianMs, serverPeer);
                     yield break;
                 }
 
-                LoggerOptions.LogInfo($"[AutoTune] Latency probe attempt {latencyAttempt} aborted (raw=[{string.Join(",", _latencyRawSamplesMs)}]) — " +
+                LoggerOptions.LogDebug($"[AutoTune] Latency probe attempt {latencyAttempt} aborted (raw=[{string.Join(",", _latencyRawSamplesMs)}]) — " +
                                       $"the main thread is still busy loading; retrying in {LatencyProbeRetryDelaySeconds:0}s.");
                 yield return new WaitForSeconds(LatencyProbeRetryDelaySeconds);
 
@@ -666,7 +691,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             int  pingMedian = _latencyMedianMs;
             Tier netTier    = _latencyTier;
 
-            LoggerOptions.LogInfo(
+            LoggerOptions.LogDebug(
                 $"[AutoTune] Latency: raw=[{string.Join(",", _latencyRawSamplesMs)}] trimmed→ median={pingMedian}ms "
                 + $"p95={_latencyP95Ms}ms iqrJitter={_latencyJitterMs}ms → {netTier} "
                 + $"(transport ping {DescribeTransportPing(serverPeer)})");
@@ -692,7 +717,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     float fpsMedian = MedianFloat(trimmedFrameMs);
                     float fpsP95    = P95Float(trimmedFrameMs);
                     fpsTier         = ScoreFpsTier(fpsMedian, fpsP95);
-                    LoggerOptions.LogInfo(
+                    LoggerOptions.LogDebug(
                         $"[AutoTune] Frame time: median={fpsMedian:0.0}ms p95={fpsP95:0.0}ms "
                         + $"(raw p95={rawP95:0.0}ms, dropped {droppedFrames}/{frameMs.Count} worst) → {fpsTier}");
                 }
@@ -769,11 +794,11 @@ namespace FiresGhettoNetworkMod.AutoTune
                     foreach (var v in bwSamples) if (v > peak) peak = v;
                     bwKbPerSec = peak;
                     bwProbeCompleted = true;
-                    LoggerOptions.LogInfo($"[AutoTune] Bandwidth: samples=[{string.Join(",", bwSamples.ConvertAll(v => v.ToString("0")))}] KB/s, peak={bwKbPerSec:0} KB/s, timeouts={timeouts}");
+                    LoggerOptions.LogDebug($"[AutoTune] Bandwidth: samples=[{string.Join(",", bwSamples.ConvertAll(v => v.ToString("0")))}] KB/s, peak={bwKbPerSec:0} KB/s, timeouts={timeouts}");
                 }
                 else if (timeouts > 0)
                 {
-                    LoggerOptions.LogInfo($"[AutoTune] Bandwidth probe: all {timeouts} samples timed out — treated as bandwidth-bad signal.");
+                    LoggerOptions.LogDebug($"[AutoTune] Bandwidth probe: all {timeouts} samples timed out — treated as bandwidth-bad signal.");
                     bwKbPerSec = 0f;
                     bwProbeCompleted = true;
                 }
@@ -831,24 +856,24 @@ namespace FiresGhettoNetworkMod.AutoTune
                 {
                     // Silence means UNKNOWN, never thin: an older FGN server has no handler for this RPC.
                     AutoTuneState.SetClientUplink(-1, false);
-                    LoggerOptions.LogInfo($"[AutoTune] Upload: no answer ({upTimeouts} timeout(s)) - server may predate the "
+                    LoggerOptions.LogDebug($"[AutoTune] Upload: no answer ({upTimeouts} timeout(s)) - server may predate the "
                         + "upload probe. Treating upload as unknown; tier values stand.");
                 }
                 else if (upPeak < 0f || upInstant == upAnswered)
                 {
                     AutoTuneState.SetClientUplink(-1, false);
-                    LoggerOptions.LogInfo("[AutoTune] Upload: payload cleared within one round trip - not the limit.");
+                    LoggerOptions.LogDebug("[AutoTune] Upload: payload cleared within one round trip - not the limit.");
                 }
                 else if (upPeak >= capBytes * UplinkSaturatedFraction)
                 {
                     AutoTuneState.SetClientUplink((int)upPeak, false);
-                    LoggerOptions.LogInfo($"[AutoTune] Upload: at least {upPeak / 1024f:0} KB/s (reached the "
+                    LoggerOptions.LogDebug($"[AutoTune] Upload: at least {upPeak / 1024f:0} KB/s (reached the "
                         + $"{capBytes / 1024} KB/s send cap) - not the limit.");
                 }
                 else
                 {
                     AutoTuneState.SetClientUplink((int)upPeak, true);
-                    LoggerOptions.LogInfo($"[AutoTune] Upload: {upPeak / 1024f:0} KB/s against a {capBytes / 1024} KB/s "
+                    LoggerOptions.LogDebug($"[AutoTune] Upload: {upPeak / 1024f:0} KB/s against a {capBytes / 1024} KB/s "
                         + "send cap - the line is the limit.");
                 }
             }
@@ -861,7 +886,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             // Stash for the rolling monitor — machine tier is fixed for the session.
             _sessionMachineTier = machineTier;
 
-            LoggerOptions.LogInfo($"[AutoTune] Final tier: machine={machineTier} (cpu={cpuTier} fps={fpsTier}) latency={latencyTier} bw={(bwProbeCompleted ? bwKbPerSec.ToString("0") + "KB/s" : "n/a")} → {finalTier}");
+            LoggerOptions.LogDebug($"[AutoTune] Final tier: machine={machineTier} (cpu={cpuTier} fps={fpsTier}) latency={latencyTier} bw={(bwProbeCompleted ? bwKbPerSec.ToString("0") + "KB/s" : "n/a")} → {finalTier}");
 
             Finalize(serverKey, hwHash, finalTier, pingMedian, serverPeer);
 
@@ -902,7 +927,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                     // and send queueing. Medium is enough to stop the downgrade without claiming the link
                     // is pristine — a genuinely bad path cannot produce this throughput to begin with.
                     linkTier = Tier.Medium;
-                    LoggerOptions.LogMessage(
+                    LoggerOptions.LogDebug(
                         $"[AutoTune] Latency scored Low but the link sustained {bwKbPerSec:0} KB/s — treating the link as Medium. "
                         + "A round trip inflated by scheduling is not a bad connection.");
                 }
@@ -1086,7 +1111,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 $"[count] FGN diagnostic: time round trips to the server (default {ManualTracePingCount}) and split each into its "
                 + "stages: this client's send queue, the server's wait for its next frame, the reply's queue on the server and this "
                 + "client's wait for its own frame. Results go to this console and LogOutput.log.",
-                new Terminal.ConsoleEvent(OnRoundTripCommand));
+                new Terminal.ConsoleEvent(OnRoundTripCommand), isCheat: true);
         }
 
         private static void OnRoundTripCommand(Terminal.ConsoleEventArgs args)
@@ -1174,7 +1199,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             _pendingRollingTier = AutoTuneState.ClientTier;
             _pendingRollingObservations = 0;
 
-            LoggerOptions.LogInfo($"[AutoTune] Rolling monitor started — re-probe every {intervalMin:0}min, window={windowSize}");
+            LoggerOptions.LogDebug($"[AutoTune] Rolling monitor started — re-probe every {intervalMin:0}min, window={windowSize}");
 
             while (_probeCompletedThisSession)
             {
@@ -1241,7 +1266,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
                     if (_pendingRollingObservations >= required)
                     {
-                        LoggerOptions.LogMessage($"[AutoTune] Rolling tier change: {currentApplied} → {consensus} ({_pendingRollingObservations} consecutive obs; this probe: latency={_latencyTier} median={_latencyMedianMs}ms; window=[{string.Join(",", _rollingTiers)}])");
+                        LoggerOptions.LogDebug($"[AutoTune] Rolling tier change: {currentApplied} → {consensus} ({_pendingRollingObservations} consecutive obs; this probe: latency={_latencyTier} median={_latencyMedianMs}ms; window=[{string.Join(",", _rollingTiers)}])");
                         AutoTuneState.SetClient(consensus, _latencyMedianMs);
                         ApplyClientTier(consensus);
                         try { AutoTuneCache.Save(_sessionServerKey, consensus, _latencyMedianMs, _sessionHwHash, AutoTuneState.ClientUplinkBytes, AutoTuneState.ClientUplinkIsLimit); }
@@ -1313,7 +1338,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             AutoTuneState.SetClient(appliedTier, pingMedianMs);
             if (_sampleWasUnsettled)
             {
-                LoggerOptions.LogInfo("[AutoTune] Unsettled sample not cached — the next login probes again rather than inheriting this reading.");
+                LoggerOptions.LogDebug("[AutoTune] Unsettled sample not cached — the next login probes again rather than inheriting this reading.");
             }
             else
             {
@@ -1322,7 +1347,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
             ApplyClientTier(appliedTier);
             SendTierReport(serverPeer, appliedTier, pingMedianMs);
-            _probeCompletedThisSession = true;
+            SetProbeCompleted();   // 1.6.64: raises FgnApi.AutoTuneSettled
             _probeRunning = false;
             VAGhettoLoadSummary.EmitAutoTune("probed", tier.ToString());
         }
@@ -1332,7 +1357,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             LoggerOptions.LogWarning($"[AutoTune] Probe aborted: {reason} — defaulting to LOW tier.");
             AutoTuneState.SetClient(Tier.Low, 0);
             ApplyClientTier(Tier.Low);
-            _probeCompletedThisSession = true;
+            SetProbeCompleted();   // 1.6.64: raises FgnApi.AutoTuneSettled
             _probeRunning = false;
         }
 
@@ -1363,7 +1388,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             catch (Exception ex) { LoggerOptions.LogWarning($"[AutoTune] ApplyRecvMaxMessageSize failed: {ex.Message}"); }
 
             CapeCrashDiagnostics.Log($"AutoTune client tier {tier} applied");
-            LoggerOptions.LogInfo($"[AutoTune] Applied client tier {tier}");
+            LoggerOptions.LogDebug($"[AutoTune] Applied client tier {tier}");
         }
 
         private static void SendTierReport(ZNetPeer serverPeer, Tier tier, int pingMedianMs)
@@ -1417,7 +1442,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             Tier heldTier = AutoTuneState.HasClientResult ? AutoTuneState.ClientTier : _sessionMachineTier;
             if (probedTier >= heldTier) return probedTier;
 
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"[AutoTune] Sample scored {probedTier} but was taken on a busy link — holding {heldTier}. "
                 + "A reading taken while the link is saturated may not lower the tier.");
             return heldTier;

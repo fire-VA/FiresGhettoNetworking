@@ -64,7 +64,7 @@ namespace FiresGhettoNetworkMod
                 + "20 KB gate for N seconds to test the 30 s self-disconnect disarm. Add 'arm' to "
                 + "momentarily restore the real 30 s timeout as a control — a client reconnecting then "
                 + "SHOULD drop at 30 s, proving the test path is live.",
-                new Terminal.ConsoleEvent(OnCommand));
+                new Terminal.ConsoleEvent(OnCommand), isCheat: true);
         }
 
         // Client side: relay the request to the server.
@@ -89,20 +89,13 @@ namespace FiresGhettoNetworkMod
         private static void RPC_Start(long sender, int seconds, int arm)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!SenderIsAdmin(sender)) { Reply(sender, "FGN overload test denied — admin only."); return; }
+            if (!ServerClientUtils.TestCommandAllowed(sender, "overload test", out string refusal)) { Reply(sender, refusal); return; }
             if (s_active) { Reply(sender, "FGN overload test already running."); return; }
             seconds = Mathf.Clamp(seconds, MinSeconds, MaxSeconds);
             if (FiresGhettoNetworkMod.Instance != null)
                 FiresGhettoNetworkMod.Instance.StartCoroutine(Run(seconds, sender, arm == 1));
         }
 
-        private static bool SenderIsAdmin(long sender)
-        {
-            ZNetPeer peer = ZNet.instance.GetPeer(sender);
-            if (peer == null) return true; // originated locally on the server/host — the host is admin
-            string host = peer.m_rpc?.GetSocket()?.GetHostName();
-            return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
-        }
 
         private static IEnumerator Run(int secs, long requester, bool arm)
         {
@@ -119,7 +112,7 @@ namespace FiresGhettoNetworkMod
                   + $"which proves the test path is live. Peers at start: {startPeers}."
                 : $"[OverloadTest] OVERLOAD ON — forcing every send queue >= {ForcedQueueBytes} B (gate 20000) "
                   + $"for {secs}s. Reconnect a client now; with the disarm it stays. Peers at start: {startPeers}.";
-            LoggerOptions.LogMessage(head);
+            LoggerOptions.LogDebug(head);
             Reply(requester, head);
 
             float elapsed = 0f;
@@ -135,7 +128,7 @@ namespace FiresGhettoNetworkMod
                 {
                     dropSeen = true;
                     string note = $"[OverloadTest] Peer count dropped at ~{elapsed:F0}s ({startPeers} -> {now}).";
-                    LoggerOptions.LogWarning(note);
+                    LoggerOptions.LogDebug(note);
                     Reply(requester, note);
                 }
             }
@@ -162,12 +155,12 @@ namespace FiresGhettoNetworkMod
                       + $"To prove the test bites, run 'fgn_overload {secs} arm' and reconnect — that should drop at ~30s."
                     : $"[OverloadTest] FAIL — a peer dropped during a DISARMED run (start={startPeers} min={minPeers} "
                       + $"end={endPeers}, {forced}). Check the scan log for 'disarmed at 0 site(s)' on ServerCharacters.Shared.";
-            if (arm ? dropSeen : !dropSeen) LoggerOptions.LogMessage(result); else LoggerOptions.LogWarning(result);
+            if (arm ? dropSeen : !dropSeen) LoggerOptions.LogDebug(result); else LoggerOptions.LogDebug(result);
             Reply(requester, result);
         }
 
         // Client side: echo a server message into the local console.
-        private static void RPC_Result(long sender, string msg) => AdminConsoleEcho.Print(msg);
+        private static void RPC_Result(long sender, string msg) { if (RoutedSenderGuard.FromServer(sender)) AdminConsoleEcho.Print(msg); }
 
         private static void Reply(long target, string msg)
         {

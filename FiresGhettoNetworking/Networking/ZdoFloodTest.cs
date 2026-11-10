@@ -57,7 +57,7 @@ namespace FiresGhettoNetworkMod
                 + "(default 500 Wood) so your client must instantiate the whole batch at once — the "
                 + "teleport-into-a-megabase path. Your client reports its worst frame hitch + fps; the "
                 + "server cleans the objects up after. Pass a static piece prefab for a pure-instantiation test.",
-                new Terminal.ConsoleEvent(OnCommand));
+                new Terminal.ConsoleEvent(OnCommand), isCheat: true);
         }
 
         private static void OnCommand(Terminal.ConsoleEventArgs args)
@@ -79,7 +79,7 @@ namespace FiresGhettoNetworkMod
         private static void RPC_Start(long sender, int count, string prefabName, Vector3 pos)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!ServerClientUtils.IsAdmin(sender)) { Msg(sender, "FGN zdoflood denied — admin only."); return; }
+            if (!ServerClientUtils.TestCommandAllowed(sender, "zdoflood", out string refusal)) { Msg(sender, refusal); return; }
             if (s_busy) { Msg(sender, "FGN zdoflood already running."); return; }
             count = Mathf.Clamp(count, 1, MaxCount);
 
@@ -173,11 +173,11 @@ namespace FiresGhettoNetworkMod
             string msg = $"[ZdoFlood] client over {windowSecs:F0}s (~{count} objs): worst frame {worstMs:F0} ms, "
                 + $"{hitches} hitches (>{HitchMs:F0} ms), avg {avgFps:F0} fps. {verdict}";
             if (Console.instance != null) Console.instance.AddString(msg);
-            LoggerOptions.LogMessage(msg);
+            LoggerOptions.LogDebug(msg);
             s_sampling = false;
         }
 
-        private static void RPC_Msg(long sender, string msg) => AdminConsoleEcho.Print(msg);
+        private static void RPC_Msg(long sender, string msg) { if (RoutedSenderGuard.FromServer(sender)) AdminConsoleEcho.Print(msg); }
 
         // ---- helpers ----
         private static void Msg(long target, string msg) => AdminConsoleEcho.Send(RpcMsg, target, msg);

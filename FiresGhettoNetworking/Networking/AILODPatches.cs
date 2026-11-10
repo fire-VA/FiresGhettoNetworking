@@ -96,7 +96,8 @@ namespace FiresGhettoNetworkMod
 
         private static bool DecideFarBandTickOrSkip(Character mob, float dt)
         {
-            float throttleInterval = 1f / EffectiveConfig.AILODThrottleFactor();
+            // 1.6.31: the factor is the share of ticks that run (0.5 = half). 1 / factor gave a 2 s interval, about 1 tick in 100.
+            float throttleInterval = dt / Mathf.Max(0.01f, EffectiveConfig.AILODThrottleFactor());
             float jitteredPhase = Time.time + mob.GetHashCode() * PerInstanceHashJitterMultiplier;
             bool shouldSkipThisTick = jitteredPhase % throttleInterval > dt;
 

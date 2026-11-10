@@ -87,7 +87,7 @@ namespace FiresGhettoNetworkMod
                 + "(compressible, incompressible, mixed with gzip data, frame-marker escape, damaged frame), then the server "
                 + "bursts N packets cycling compressible / incompressible / mixed (default 100 x 64KB, up to 10000 x 128KB) and "
                 + "verifies every one arrived intact.",
-                new Terminal.ConsoleEvent(OnCommand));
+                new Terminal.ConsoleEvent(OnCommand), isCheat: true);
         }
 
         private static void OnCommand(Terminal.ConsoleEventArgs args)
@@ -184,16 +184,21 @@ namespace FiresGhettoNetworkMod
                 + $"(compressible {s_receivedByKind[0]}, incompressible {s_receivedByKind[1]}, mixed with gzip {s_receivedByKind[2]}), "
                 + $"corrupt={s_corrupt}, out-of-order={s_outOfOrder}. {tail}";
             ctx?.AddString(msg);
-            LoggerOptions.LogMessage(msg);
+            LoggerOptions.LogDebug(msg);
         }
 
         // ---- server side ----
+        private const float BusySeconds = 60f;   // one burst at a time: a new start is refused for this long
+        private static float s_busyUntil;
+
         private static void RPC_Start(long sender, int count, int sizeKB, long nonce)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!SenderIsAdmin(sender)) { Status(sender, "FGN comptest denied — admin only."); return; }
+            if (!ServerClientUtils.TestCommandAllowed(sender, "comptest", out string refusal)) { Status(sender, refusal); return; }
+            if (Time.realtimeSinceStartup < s_busyUntil) { Status(sender, "FGN comptest: a test is already running."); return; }
             count = Mathf.Clamp(count, 1, MaxCount);
             sizeKB = Mathf.Clamp(sizeKB, 1, MaxSizeKB);
+            s_busyUntil = Time.realtimeSinceStartup + BusySeconds;
             if (FiresGhettoNetworkMod.Instance != null)
                 FiresGhettoNetworkMod.Instance.StartCoroutine(SendBurst(sender, count, sizeKB, nonce));
         }
@@ -221,7 +226,7 @@ namespace FiresGhettoNetworkMod
             float deadline = Time.time + HandshakeWaitSeconds;
             while (!IsCompressionActive(target) && Time.time < deadline) yield return null;
             bool active = IsCompressionActive(target);
-            LoggerOptions.LogMessage($"[CompTest] diag: target={target} peers={ZNet.instance.GetPeers().Count} "
+            LoggerOptions.LogDebug($"[CompTest] diag: target={target} peers={ZNet.instance.GetPeers().Count} "
                 + $"anyStarted={ZNet.instance.GetPeers().Any(p => p.m_socket != null && CompressionGroup.CompressionStatus.GetSendCompressionStarted(p.m_socket))} "
                 + $"uidMatch={ZNet.instance.GetPeers().Any(p => p.m_uid == target)} active={active}");
             Status(target, $"FGN comptest: server bursting {count} x {sizeKB}KB to you (compression to you: "
@@ -271,7 +276,7 @@ namespace FiresGhettoNetworkMod
             }
         }
 
-        private static void RPC_Status(long sender, string msg) => AdminConsoleEcho.Print(msg);
+        private static void RPC_Status(long sender, string msg) { if (RoutedSenderGuard.FromServer(sender)) AdminConsoleEcho.Print(msg); }
 
         // Outbound queued bytes to the target peer (m_sendQueue + Steam pending) — for flow control.
         private static int GetTargetQueueBytes(long target)
@@ -292,13 +297,6 @@ namespace FiresGhettoNetworkMod
             catch { }
         }
 
-        private static bool SenderIsAdmin(long sender)
-        {
-            ZNetPeer peer = ZNet.instance.GetPeer(sender);
-            if (peer == null) return true; // local server/host
-            string host = peer.m_rpc?.GetSocket()?.GetHostName();
-            return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);
-        }
 
         // Compressible: a 256-byte ramp. Incompressible: a slice of the high-entropy block. With gzip: length-prefixed ramp
         // chunks alternating with length-prefixed Utils.Compress output of high-entropy data, laid out exactly as ZPackage

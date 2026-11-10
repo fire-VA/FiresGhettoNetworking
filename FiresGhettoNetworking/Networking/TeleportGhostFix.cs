@@ -165,12 +165,12 @@ namespace FiresGhettoNetworkMod
                         if (_competitorToggle == null)
                             return StandDown($"{who} already re-runs the check");
 
-                        LoggerOptions.LogMessage($"[TeleportGhostFix] {who} already re-runs the check; deferring to it while its '{CompetitorToggleKey}' is on (currently {(CompetitorToggleOn() ? "on" : "off")}).");
+                        LoggerOptions.LogDebug($"[TeleportGhostFix] {who} already re-runs the check; deferring to it while its '{CompetitorToggleKey}' is on (currently {(CompetitorToggleOn() ? "on" : "off")}).");
                         return Mode.DeferToCompetitor;
                     }
                 }
 
-                LoggerOptions.LogMessage("[TeleportGhostFix] active: re-running vanilla's sector invalidation with the new position after every zone change.");
+                LoggerOptions.LogDebug("[TeleportGhostFix] active: re-running vanilla's sector invalidation with the new position after every zone change.");
                 return Mode.Active;
             }
             catch (Exception ex)
@@ -181,7 +181,7 @@ namespace FiresGhettoNetworkMod
 
         private static Mode StandDown(string reason)
         {
-            LoggerOptions.LogMessage($"[TeleportGhostFix] standing down: {reason}.");
+            LoggerOptions.LogDebug($"[TeleportGhostFix] standing down: {reason}.");
             return Mode.StoodDown;
         }
 
@@ -249,7 +249,7 @@ namespace FiresGhettoNetworkMod
             if (!ReferenceEquals(_firstCatchReportedFor, _decidedFor))
             {
                 _firstCatchReportedFor = _decidedFor;
-                LoggerOptions.LogMessage($"[TeleportGhostFix] first catch this session: '{PrefabName(prefab)}' left the area of {notices} peer(s), who were told to drop it. Vanilla's check, still testing where it came from, sent nothing.");
+                LoggerOptions.LogInfo($"[TeleportGhostFix] first catch this session: '{PrefabName(prefab)}' left the area of {notices} peer(s), who were told to drop it. Vanilla's check, still testing where it came from, sent nothing.");
             }
 
             _windowObjects++;
@@ -290,7 +290,7 @@ namespace FiresGhettoNetworkMod
         private static void PeerCountersUnavailable(Exception ex)
         {
             _peerCountersBroken = true;
-            LoggerOptions.LogMessage($"[TeleportGhostFix] peer counters unavailable ({ex.GetType().Name}); the fix still runs, its reports are off.");
+            LoggerOptions.LogInfo($"[TeleportGhostFix] peer counters unavailable ({ex.GetType().Name}); the fix still runs, its reports are off.");
         }
 
         // The only code that names ZDOMan's private nested ZDOPeer type. A runtime access check here can switch

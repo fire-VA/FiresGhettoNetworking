@@ -33,7 +33,7 @@ namespace FiresGhettoNetworkMod
         internal static IEnumerator Run(MonoBehaviour host)
         {
             yield return null; yield return null;   // after every plugin's Awake and Start
-            if (!Present) { LoggerOptions.LogInfo("[TmlGuard] TML not present (TooManyLags FGN Addon): nothing to do."); yield break; }
+            if (!Present) { LoggerOptions.LogDebug("[TmlGuard] TML not present (TooManyLags FGN Addon): nothing to do."); yield break; }
             // People may try mods: one clear WARNING with what it overrides (read from FGN's own entries vs what is active
             // now), nothing restored or unpatched.
             Warn();

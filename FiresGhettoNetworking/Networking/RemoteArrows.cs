@@ -127,7 +127,8 @@ namespace FiresGhettoNetworkMod
             float dt = Time.fixedDeltaTime;
             for (int steps = 0; flight.Time + dt <= senderNow && steps < MaxStepsPerFixedUpdate; steps++)
             {
-                Vector3 velocity = flight.Velocity + Vector3.down * (__instance.m_gravity * dt);
+                // 1.5.78 halo ring: gravity along the ring's down there (Core makes owned projectiles fall that way too); world down elsewhere.
+                Vector3 velocity = flight.Velocity + FgnRing.Down(flight.Position) * (__instance.m_gravity * dt);
                 velocity += Mathf.Pow(velocity.magnitude, 2f) * __instance.m_drag * dt * -velocity.normalized;
                 Vector3 next = flight.Position + velocity * dt;
                 int mask = flight.Time - flight.Launched < LeaveBowSeconds ? SolidMask : HitMask;

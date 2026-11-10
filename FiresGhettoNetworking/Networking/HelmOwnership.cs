@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
@@ -70,7 +70,7 @@ namespace FiresGhettoNetworkMod
             {
                 s_lastWaterImpactTime(ship) = Time.time;
                 HandoffSlamsHeld++;
-                LoggerOptions.LogInfo($"[HelmOwnership] took over '{ship.name}': its water-impact slam waits vanilla's 2 s while the hull settles into this peer's sea.");
+                LoggerOptions.LogDebug($"[HelmOwnership] took over '{ship.name}': its water-impact slam waits vanilla's 2 s while the hull settles into this peer's sea.");
             }
             s_wasOwner[id] = owner;
         }
@@ -103,7 +103,7 @@ namespace FiresGhettoNetworkMod
             s_handedOff[zdo.m_uid] = new HandOff { Helmsman = sender, At = Time.realtimeSinceStartupAsDouble };
             s_emptyShips.Remove(zdo.m_uid);
             var helmsman = Player.GetPlayer(playerID);
-            LoggerOptions.LogMessage($"[Helm] Handed the {PrefabName(zdo)} to "
+            LoggerOptions.LogDebug($"[Helm] Handed the {PrefabName(zdo)} to "
                 + $"{(helmsman != null ? helmsman.GetPlayerName() : sender.ToString())}, who took its helm.");
         }
 
@@ -119,6 +119,48 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch(typeof(Ship), "RPC_Rudder"), HarmonyPrefix]
         static bool OnRudder(ZNetView ___m_nview, long sender, float value) => !PassOnSteering(___m_nview, sender, "Rudder", value);
 
+        // 1.6.31: with ship sim on, both ownership passes took a player-owned ship back on the next pass, helm or not, so the helmsman lost it within 2 s.
+        private static float s_nextHeldLog;
+        /// <summary>True for a ship with someone at its helm: it stays with its owner. Behind "Give The Ship To Its Helmsman".</summary>
+        private const float AboardMetres = 15f, MovedMetres = 0.5f, RestSeconds = 5f;
+        private struct ShipSeen { internal Vector3 Pos; internal float MovedAt; }
+        private static readonly Dictionary<ZDOID, ShipSeen> s_shipSeen = new Dictionary<ZDOID, ShipSeen>();
+
+        // The ZDO has no speed: moved since it was last looked at, or within the last few seconds. A boat bobbing at anchor stays under MovedMetres.
+        private static bool ShipIsMoving(ZDO zdo)
+        {
+            float now = Time.realtimeSinceStartup;
+            Vector3 pos = zdo.GetPosition();
+            if (!s_shipSeen.TryGetValue(zdo.m_uid, out ShipSeen seen)) { s_shipSeen[zdo.m_uid] = new ShipSeen { Pos = pos, MovedAt = now }; return true; }
+            if ((pos - seen.Pos).sqrMagnitude > MovedMetres * MovedMetres) { s_shipSeen[zdo.m_uid] = new ShipSeen { Pos = pos, MovedAt = now }; return true; }
+            return now - seen.MovedAt < RestSeconds;
+        }
+
+        // Peers report a position, not "on this deck": within a ship's length of it counts as aboard.
+        private static bool SomeoneAboard(ZDO zdo)
+        {
+            Vector3 pos = zdo.GetPosition();
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+                if (peer != null && (peer.m_refPos - pos).sqrMagnitude < AboardMetres * AboardMetres) return true;
+            return false;
+        }
+
+        internal static bool HelmsmanHolds(ZDO zdo)
+        {
+            // 1.6.31 (Fire 11-05, ships only): a ship stays with its player while someone is at the helm or aboard, or while it moves. Empty and at rest, the pass may take it.
+            if (!Active()) return false;
+            ScanShipPrefabs();
+            if (!s_shipPrefabs.Contains(zdo.GetPrefab())) return false;
+            float now = Time.realtimeSinceStartup;
+            if (zdo.GetLong(ZDOVars.s_user) == 0L && !ShipIsMoving(zdo) && !SomeoneAboard(zdo)) return false;
+            if (LoggerOptions.DebugEnabled && now >= s_nextHeldLog)
+            {
+                s_nextHeldLog = now + 10f;
+                LoggerOptions.LogDebug($"[Helm] Left the {PrefabName(zdo)} with its owner {zdo.GetOwner()}: a player has it; someone was at its helm.");
+            }
+            return true;
+        }
+
         internal static void RegisterPeerRpcs(ZNet znet, ZNetPeer peer)
         {
             if (znet.IsServer()) return;
@@ -133,7 +175,7 @@ namespace FiresGhettoNetworkMod
             double now = Time.realtimeSinceStartupAsDouble;
             if (now < s_nextShipPass) return;
             s_nextShipPass = now + ShipPassSeconds;
-            if (!s_shipPrefabsScanned) ScanShipPrefabs();
+            ScanShipPrefabs();   // 1.6.27: first scan, then only the new tail when ZNetScene.m_prefabs grows
             if (s_shipPrefabs.Count == 0) return;
 
             long serverUid = ZDOMan.GetSessionID();
@@ -142,7 +184,7 @@ namespace FiresGhettoNetworkMod
             foreach (var peer in peers)
             {
                 if (peer == null || !peer.IsReady()) continue;
-                Vector2s zone = ZoneSystem.GetZone(peer.GetRefPos());
+                Vector2s zone = FgnRing.Sector(peer.GetRefPos());
                 for (int dy = -SectorsEachSide; dy <= SectorsEachSide; dy++)
                     for (int dx = -SectorsEachSide; dx <= SectorsEachSide; dx++)
                     {
@@ -193,7 +235,7 @@ namespace FiresGhettoNetworkMod
             if (body != null && body.linearVelocity.magnitude > AtRestSpeed) return;
             ZDOMan.instance.ForceSendZDO(id);
             zdo.SetOwner(serverPeer.m_uid);
-            LoggerOptions.LogMessage($"[Helm] Gave the empty {PrefabName(zdo)} back to the server, which sails ships nobody is aboard.");
+            LoggerOptions.LogDebug($"[Helm] Gave the empty {PrefabName(zdo)} back to the server, which sails ships nobody is aboard.");
         }
 
         private static bool AnyPlayerNear(List<ZNetPeer> peers, Vector3 position)
@@ -212,13 +254,32 @@ namespace FiresGhettoNetworkMod
             foreach (var id in s_expired) s_emptyShips.Remove(id);
         }
 
+        // 1.6.27 (Fire 10-31 "Fix it"): ships another mod registers after the first scan are picked up; only the new tail of
+        // ZNetScene.m_prefabs is scanned when its count grows (the list only grows; there is no registration event).
+        private static int s_shipScannedCount;
+        private static bool s_shipLateInfoLogged;
+
         private static void ScanShipPrefabs()
         {
-            if (ZNetScene.instance == null) return;
+            var list = ZNetScene.instance != null ? ZNetScene.instance.m_prefabs : null;
+            if (list == null) return;
+            bool first = !s_shipPrefabsScanned;
+            if (first) s_shipScannedCount = 0;
             s_shipPrefabsScanned = true;
-            foreach (var prefab in ZNetScene.instance.m_prefabs)
-                if (prefab != null && prefab.GetComponent<Ship>() != null)
-                    s_shipPrefabs.Add(prefab.name.GetStableHashCode());
+            if (list.Count <= s_shipScannedCount) return;
+            int before = s_shipPrefabs.Count;
+            for (int i = s_shipScannedCount; i < list.Count; i++)
+            {
+                var prefab = list[i];
+                if (prefab == null || prefab.GetComponent<Ship>() == null || !s_shipPrefabs.Add(prefab.name.GetStableHashCode())) continue;
+                if (!first) LoggerOptions.LogDebug($"[HelmOwnership] late ship prefab picked up: {prefab.name} (registered after the first scan)");
+            }
+            s_shipScannedCount = list.Count;
+            if (!first && s_shipPrefabs.Count > before && !s_shipLateInfoLogged)
+            {
+                s_shipLateInfoLogged = true;
+                LoggerOptions.LogDebug($"[HelmOwnership] {s_shipPrefabs.Count - before} ship prefab(s) registered late by other mods are now handled too");
+            }
         }
 
         private static string PrefabName(ZDO zdo)

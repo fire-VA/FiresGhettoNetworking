@@ -48,7 +48,7 @@ namespace FiresGhettoNetworkMod
             }
 
             if (SchedulesSceneObjects)
-                LoggerOptions.LogMessage(
+                LoggerOptions.LogDebug(
                     "[VCP] ValheimCommunityPatch schedules object creation and removal; FGN leaves that to it. Instantiation "
                     + "time-slicing and the client destroy throttle stand down, and Server-Side Simulation stays off on a "
                     + "dedicated server.");

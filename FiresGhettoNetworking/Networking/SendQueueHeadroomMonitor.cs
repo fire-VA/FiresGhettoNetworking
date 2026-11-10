@@ -72,7 +72,7 @@ namespace FiresGhettoNetworkMod
             s_sessionPeakBytes = 0; s_windowPeakBytes = 0;
             var wait = new WaitForSeconds(SampleSeconds);   // allocate once, reuse — no per-sample GC
             float lastReport = Time.time;
-            LoggerOptions.LogMessage($"[Headroom] sampler ON (sample every {SampleSeconds:F0}s, report every {ReportSeconds:F0}s).");
+            LoggerOptions.LogDebug($"[Headroom] sampler ON (sample every {SampleSeconds:F0}s, report every {ReportSeconds:F0}s).");
 
             while (ZNet.instance != null && ZNet.instance.IsServer() && ConfigEnabled != null && ConfigEnabled.Value)
             {
@@ -85,7 +85,7 @@ namespace FiresGhettoNetworkMod
                     lastReport = Time.time;
                     int bufKB = EffectiveConfig.SteamSendBufferBytes() / 1024;
                     int pct = bufKB > 0 ? (s_windowPeakBytes / 1024) * 100 / bufKB : 0;
-                    LoggerOptions.LogMessage($"[Headroom] last {ReportSeconds:F0}s peak send-queue = {s_windowPeakBytes / 1024} KB "
+                    LoggerOptions.LogDebug($"[Headroom] last {ReportSeconds:F0}s peak send-queue = {s_windowPeakBytes / 1024} KB "
                         + $"({pct}% of the {bufKB} KB buffer); session peak {s_sessionPeakBytes / 1024} KB.");
                     s_windowPeakBytes = 0;
                 }
@@ -93,7 +93,7 @@ namespace FiresGhettoNetworkMod
             }
 
             s_sampling = false;
-            LoggerOptions.LogMessage("[Headroom] sampler OFF.");
+            LoggerOptions.LogDebug("[Headroom] sampler OFF.");
         }
 
         // Reads each peer's queued outbound bytes via the ISocket interface — works for Steam AND PlayFab
@@ -128,7 +128,7 @@ namespace FiresGhettoNetworkMod
             Reply(sender, BuildSnapshot());
         }
 
-        private static void RPC_Resp(long sender, string msg) => AdminConsoleEcho.Print(msg);
+        private static void RPC_Resp(long sender, string msg) { if (RoutedSenderGuard.FromServer(sender)) AdminConsoleEcho.Print(msg); }
 
         private static string BuildSnapshot()
         {

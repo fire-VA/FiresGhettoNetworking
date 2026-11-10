@@ -23,10 +23,15 @@ namespace FiresGhettoNetworkMod
         private const int MaxPendingObjects = 4096;
         private const float ResendEverySeconds = 2f;
         private const float LogIntervalSeconds = 60f;
+        // 1.6.31: a pending key only ever cleared when the owner's copy carried its value, so an owner's later real edit (a sign to "B") was
+        // replaced by the old server value and reverted, for as long as the server ran. A server write now outranks the owner for this long.
+        private const float ExpireSeconds = 30f;
+        private const float PruneEverySeconds = 5f;
 
         private sealed class Pending
         {
             public readonly Dictionary<(int type, int hash), object> Values = new Dictionary<(int, int), object>();
+            public readonly Dictionary<(int type, int hash), float> WrittenAt = new Dictionary<(int, int), float>();
             public float LastReapply;
         }
 
@@ -91,17 +96,19 @@ namespace FiresGhettoNetworkMod
 
         private static void Wrote<T>(ZDOID zid, int type, int hash, T value)
         {
-            if (s_receiving || s_reapplying || !OwnerSafeRevisions.OnMainThread || !Active) return;
+            if (OwnerSafeRevisions.NoPeers || s_receiving || s_reapplying || !OwnerSafeRevisions.OnMainThread || !Active) return;   // 1.6.82: no peer first
             ZDO zdo = ZDOMan.instance?.GetZDO(zid);
             if (zdo == null) return;
             long owner = zdo.GetOwner();
             if (owner == 0L || owner == ZDOMan.GetSessionID()) return;
             if (!s_pending.TryGetValue(zid, out Pending p))
             {
+                if (s_pending.Count >= MaxPendingObjects) PruneExpired();
                 if (s_pending.Count >= MaxPendingObjects) return;
                 s_pending[zid] = p = new Pending();
             }
             p.Values[(type, hash)] = value;
+            p.WrittenAt[(type, hash)] = Time.unscaledTime;
         }
 
         [HarmonyPatch(typeof(ZDOMan), "RPC_ZDOData"), HarmonyPrefix]
@@ -116,6 +123,48 @@ namespace FiresGhettoNetworkMod
             s_received.Clear();
             s_receivingPending = null;
             s_receivingId = s_receiving && s_pending.Count > 0 && s_pending.TryGetValue(__instance.m_uid, out s_receivingPending) ? __instance.m_uid : ZDOID.None;
+            if (s_receivingPending != null)
+            {
+                Expire(s_receivingPending);
+                if (s_receivingPending.Values.Count == 0)
+                {
+                    s_pending.Remove(__instance.m_uid);
+                    s_receivingPending = null;
+                    s_receivingId = ZDOID.None;
+                }
+            }
+        }
+
+        private static readonly List<(int type, int hash)> s_expiredKeys = new List<(int, int)>();
+        private static readonly List<ZDOID> s_emptied = new List<ZDOID>();
+        private static long s_expired;
+        private static float s_nextExpireLog, s_nextPrune;
+
+        private static void Expire(Pending p)
+        {
+            float cutoff = Time.unscaledTime - ExpireSeconds;
+            s_expiredKeys.Clear();
+            foreach (var entry in p.WrittenAt) if (entry.Value < cutoff) s_expiredKeys.Add(entry.Key);
+            if (s_expiredKeys.Count == 0) return;
+            foreach (var key in s_expiredKeys) { p.Values.Remove(key); p.WrittenAt.Remove(key); }
+            s_expired += s_expiredKeys.Count;
+            if (Time.unscaledTime < s_nextExpireLog) return;
+            s_nextExpireLog = Time.unscaledTime + LogIntervalSeconds;
+            LoggerOptions.LogDebug($"[OwnerSafe] {s_expired} server write(s) the owner never carried within {ExpireSeconds:F0} s dropped so far: the owner's value stands from here on, a later edit of theirs is not reverted");
+        }
+
+        // at the object cap, objects whose owner never sends a copy would otherwise block tracking for good
+        private static void PruneExpired()
+        {
+            if (Time.unscaledTime < s_nextPrune) return;
+            s_nextPrune = Time.unscaledTime + PruneEverySeconds;
+            s_emptied.Clear();
+            foreach (var entry in s_pending)
+            {
+                Expire(entry.Value);
+                if (entry.Value.Values.Count == 0) s_emptied.Add(entry.Key);
+            }
+            foreach (ZDOID id in s_emptied) s_pending.Remove(id);
         }
 
         [HarmonyPatch(typeof(ZDO), nameof(ZDO.Deserialize)), HarmonyPostfix]
@@ -128,7 +177,7 @@ namespace FiresGhettoNetworkMod
             if (p == null) return;
             // acked: the owner's copy carried the server's value; those keys are done
             foreach (var key in p.Values.Keys.ToList())
-                if (s_received.TryGetValue(key, out object got) && Same(got, p.Values[key])) p.Values.Remove(key);
+                if (s_received.TryGetValue(key, out object got) && Same(got, p.Values[key])) { p.Values.Remove(key); p.WrittenAt.Remove(key); }
             if (p.Values.Count == 0) { s_pending.Remove(__instance.m_uid); s_acked++; return; }
             // still missing on the owner: resend now and then (revision only, no field change: one above the owner, see
             // OwnerSafeRevisions). An owner still changing outruns it; one that has settled takes it and the next copy acks.

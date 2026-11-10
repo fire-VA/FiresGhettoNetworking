@@ -250,7 +250,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 }
             }
             if (ok)
-                LoggerOptions.LogMessage("AutoTune VanillaFloor self-check passed: every tier is at or above vanilla.");
+                LoggerOptions.LogDebug("AutoTune VanillaFloor self-check passed: every tier is at or above vanilla.");
         }
 
         private static bool CheckFloor(Tier tier, string knob, int value, int floor)

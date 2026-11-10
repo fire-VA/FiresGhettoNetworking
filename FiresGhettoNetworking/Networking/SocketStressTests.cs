@@ -136,12 +136,12 @@ namespace FiresGhettoNetworkMod
                 "[count] [sizeKB] [raw|comp] — FGN stress (admin): server bursts count x sizeKB packets "
                 + "at you (default 1000 x 64, incompressible) and reports throughput + any loss. Pushes "
                 + "far past normal traffic to watch for drops.",
-                new Terminal.ConsoleEvent(OnFlood));
+                new Terminal.ConsoleEvent(OnFlood), isCheat: true);
             new Terminal.ConsoleCommand("fgn_socketramp",
                 "[startGB] [stepGB] [maxGB] — FGN stress (admin): temporarily lifts the send rate, then "
                 + "escalates an incompressible burst until you disconnect / data corrupts / you stop acking, "
                 + "and records the breaking point to FiresGhetto_StressResults.txt. Default 10/5/1024 (GB).",
-                new Terminal.ConsoleEvent(OnRamp));
+                new Terminal.ConsoleEvent(OnRamp), isCheat: true);
         }
 
         private static void OnFlood(Terminal.ConsoleEventArgs args)
@@ -159,7 +159,7 @@ namespace FiresGhettoNetworkMod
         private static void RPC_FloodStart(long sender, int count, int sizeKB, int raw)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!ServerClientUtils.IsAdmin(sender)) { Msg(sender, "FGN flood denied — admin only."); return; }
+            if (!ServerClientUtils.TestCommandAllowed(sender, "flood", out string refusal)) { Msg(sender, refusal); return; }
             if (s_busy) { Msg(sender, "FGN stress already running."); return; }
             count = Mathf.Clamp(count, 1, MaxCount);
             sizeKB = Mathf.Clamp(sizeKB, 1, ChunkKB);
@@ -189,7 +189,7 @@ namespace FiresGhettoNetworkMod
             else
                 verdict = $"[Flood] FAIL — incomplete/corrupt: {s_resAckBytes}/{s_resSent} bytes, corrupt={s_resCorrupt}.";
 
-            LoggerOptions.LogMessage(verdict);
+            LoggerOptions.LogDebug(verdict);
             Msg(target, verdict);
             s_busy = false;
         }
@@ -209,7 +209,7 @@ namespace FiresGhettoNetworkMod
         private static void RPC_RampStart(long sender, int startGB, int stepGB, int maxGB)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer()) return;
-            if (!ServerClientUtils.IsAdmin(sender)) { Msg(sender, "FGN ramp denied — admin only."); return; }
+            if (!ServerClientUtils.TestCommandAllowed(sender, "ramp", out string refusal)) { Msg(sender, refusal); return; }
             if (s_busy) { Msg(sender, "FGN stress already running."); return; }
             int maxGbCeil = (int)(HardMaxBytes / (1024L * 1024 * 1024));
             startGB = Mathf.Clamp(startGB, 1, maxGbCeil);
@@ -425,10 +425,15 @@ namespace FiresGhettoNetworkMod
         private static void RPC_ClientPrep(long sender, int recvBufferBytes, int recvMaxMessageBytes)
         {
             if (ZNet.instance == null || ZNet.instance.IsServer()) return;
+            if (!RoutedSenderGuard.FromServer(sender)) return;
             ZNetPeer peer = ZNet.instance.GetPeer(sender);
             if (peer == null) return;
-            NetworkingRatesGroup.OverrideConnectionRecvForStressTest(peer, recvBufferBytes, recvMaxMessageBytes);
+            NetworkingRatesGroup.OverrideConnectionRecvForStressTest(peer,
+                Mathf.Clamp(recvBufferBytes, MinPrepBytes, MaxPrepBytes), Mathf.Clamp(recvMaxMessageBytes, MinPrepBytes, MaxPrepBytes));
         }
+
+        private const int MinPrepBytes = 64 * 1024;          // a stress test never asks for less than this or more than
+        private const int MaxPrepBytes = 64 * 1024 * 1024;   // this: any other value from the network is clamped
 
         private static void RPC_ClientUnprep(long sender)
         {
@@ -438,7 +443,7 @@ namespace FiresGhettoNetworkMod
             NetworkingRatesGroup.RestoreConnection(peer);
         }
 
-        private static void RPC_Msg(long sender, string msg) => AdminConsoleEcho.Print(msg);
+        private static void RPC_Msg(long sender, string msg) { if (RoutedSenderGuard.FromServer(sender)) AdminConsoleEcho.Print(msg); }
 
         private static byte[] MakePayload(int size, int seq, bool raw)
         {

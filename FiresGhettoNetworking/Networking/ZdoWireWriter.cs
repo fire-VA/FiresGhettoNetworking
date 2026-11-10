@@ -432,7 +432,7 @@ namespace FiresGhettoNetworkMod
             {
                 s_verifiedShapes.Add(shape);
                 if (s_matchedVanilla < ChecksAgainstVanilla && ++s_matchedVanilla == ChecksAgainstVanilla)
-                    LoggerOptions.LogMessage($"[ZdoWrite] the first {ChecksAgainstVanilla} objects sent matched vanilla byte for byte; "
+                    LoggerOptions.LogDebug($"[ZdoWrite] the first {ChecksAgainstVanilla} objects sent matched vanilla byte for byte; "
                                              + "FGN writes ZDOs without vanilla's per-object lists and closures from here on, and still "
                                              + $"checks each new object shape and about 1 in {SampleOneIn} of the rest.");
                 return true;

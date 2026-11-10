@@ -103,7 +103,7 @@ namespace FiresGhettoNetworkMod.AutoTune
 
                 if (lastBlocker == null && waitedSeconds >= minimumSeconds)
                 {
-                    LoggerOptions.LogInfo(
+                    LoggerOptions.LogDebug(
                         $"[AutoTune] Link steady for {windowSeconds:0.0}s after {waitedSeconds:0.0}s "
                         + $"({DescribeWindow(throughputWindow)}) — probing now.");
                     LastOutcome = SettleOutcome.LinkWentQuiet;
@@ -111,7 +111,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 }
             }
 
-            LoggerOptions.LogWarning(
+            LoggerOptions.LogInfo(   // 1.6.56: a handled outcome (the tier is held, the sample is not cached), not a warning
                 $"[AutoTune] Link never settled within {ceilingSeconds:0}s (last blocker: {lastBlocker}). Probing anyway — "
                 + "this sample is marked unsettled and may not lower the applied tier.");
             LastOutcome = SettleOutcome.ForcedAtCeiling;

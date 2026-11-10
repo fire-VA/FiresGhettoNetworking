@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Text;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -16,6 +16,12 @@ namespace FiresGhettoNetworkMod
     {
         public static ConfigEntry<bool> ConfigEnabled;
         public static ConfigEntry<int> ConfigPingMarginMs;
+        // 1.6.84 ([fgn], Fire 11-09: "It should be configurable ... let vanilla ownership run or hand off to the lowest ping player"). Applies with Balance Creature Ownership on and
+        // server-side creature ownership off. Vanilla = a fighting creature is never moved (as before). LowestPing = fights do not block the ping hand-off. FirstFighter = a creature in a fight
+        // goes to the first player who hit it in that fight and stays there until the fight ends.
+        public enum FightMode { Vanilla, LowestPing, FirstFighter }
+        public static ConfigEntry<FightMode> ConfigFightMode;
+        private static readonly Dictionary<ZDOID, Stamp> s_firstFighter = new Dictionary<ZDOID, Stamp>();
 
         internal static bool ServerOwnsCreatures;
 
@@ -89,6 +95,8 @@ namespace FiresGhettoNetworkMod
             ConfigPingMarginMs = config.Bind("10 - Server Authority", "Ownership Ping Margin", 40,
                 Cfg.Adv("How much lower (ms) a player's ping must be to take over an idle creature.",
                     new AcceptableValueRange<int>(10, 300)));
+            ConfigFightMode = config.Bind("10 - Server Authority", "Creature Ownership In Fights", FightMode.Vanilla,
+                Cfg.Adv("Who runs a creature that is fighting, with Balance Creature Ownership on and server-side creature ownership off. Vanilla: it stays with whoever has it. LowestPing: it may move to the nearby player with clearly lower ping, fight or not. FirstFighter: it moves to the first player who hit it and stays there until the fight ends."));
         }
 
         internal static void OnNewConnection(ZNet __instance, ZNetPeer peer)
@@ -103,19 +111,30 @@ namespace FiresGhettoNetworkMod
         {
             s_owned.Clear();
             s_streaks.Clear();
-            s_lastHitBy.Clear();
+            s_lastHitBy.Clear(); s_firstFighter.Clear();
             s_pending.Clear();
+            s_askedOwner.Clear();
             s_cooldowns.Clear();
             s_handedOff.Clear();
             s_localHits.Clear();
             s_creaturePrefabs.Clear();
             s_prefabsScanned = false;
+            GhostOwner169.OnShutdown();   // 1.6.69 ([ghost])
+            OwnershipSteady.OnShutdown();   // [wishbone] ownstab
         }
+
+        /// <summary>[wishbone] ownstab census: is this owner change the hand-off the balancer asked for (sent less than 5 s ago)?</summary>
+        internal static bool IsPendingTarget(ZDOID id, long target)
+            => s_pending.TryGetValue(id, out var p) && p.Peer == target && Time.realtimeSinceStartupAsDouble - p.At < PendingSeconds;
 
         internal static void ObserveRoutedRpc(ZRoutedRpc.RoutedRPCData data)
         {
             if (data.m_methodHash != s_damageHash || data.m_targetZDO.IsNone() || !Active()) return;
-            s_lastHitBy[data.m_targetZDO] = new Stamp { Peer = data.m_senderPeerID, At = Time.realtimeSinceStartupAsDouble };
+            double at = Time.realtimeSinceStartupAsDouble;
+            s_lastHitBy[data.m_targetZDO] = new Stamp { Peer = data.m_senderPeerID, At = at };
+            // 1.6.84: the first player to hit it in this fight is kept while hits keep coming
+            if (s_firstFighter.TryGetValue(data.m_targetZDO, out var first) && at - first.At <= FightMemorySeconds) s_firstFighter[data.m_targetZDO] = new Stamp { Peer = first.Peer, At = at };
+            else s_firstFighter[data.m_targetZDO] = new Stamp { Peer = data.m_senderPeerID, At = at };
         }
 
         internal static string Report()
@@ -150,18 +169,20 @@ namespace FiresGhettoNetworkMod
         internal static void Balance(ZDOMan __instance)
         {
             HelmOwnership.ReturnEmptyShipsToServer(__instance);
+            GhostOwner169.HelmFallbackTick();   // 1.6.69 ([ghost]): nothing to do unless a helm request is pending
+            OwnershipSteady.Tick();   // [wishbone] ownstab: census flush; one bool read with its keys off
             if (!Active()) return;
             double now = Time.realtimeSinceStartupAsDouble;
             if (now < s_nextPass) return;
             s_nextPass = now + PassSeconds;
-            if (!s_prefabsScanned) ScanPrefabs();
+            if (!s_prefabsScanned) ScanPrefabs(); else ScanNewPrefabs();   // 1.6.27
             if (s_creaturePrefabs.Count == 0) return;
 
             s_candidates.Clear();
             foreach (var peer in ZNet.instance.GetPeers())
                 if (peer != null && peer.IsReady() && peer.GetRefPos() != Vector3.zero) s_candidates.Add(peer);
-            if (s_candidates.Count >= 2) BalanceCreaturesNearPlayers(__instance, now);
-            if (now >= s_nextPrune) Prune(__instance, now);
+            if (s_candidates.Count >= 2 && !OwnershipSteady.SkipPassNoSharedArea(s_candidates)) BalanceCreaturesNearPlayers(__instance, now);   // [wishbone] ownstab N23: no scan while no two players can share an area (key off = false)
+            if (now >= s_nextPrune) { Prune(__instance, now); OwnershipSteady.Prune(__instance, now); }
         }
 
         private static void BalanceCreaturesNearPlayers(ZDOMan zdoMan, double now)
@@ -172,7 +193,7 @@ namespace FiresGhettoNetworkMod
             int handOffs = 0;
             foreach (var candidate in s_candidates)
             {
-                Vector2s zone = ZoneSystem.GetZone(candidate.GetRefPos());
+                Vector2s zone = FgnRing.Sector(candidate.GetRefPos());
                 for (int dy = -1; dy <= 1; dy++)
                 {
                     for (int dx = -1; dx <= 1; dx++)
@@ -202,6 +223,7 @@ namespace FiresGhettoNetworkMod
                 s_streaks.Remove(id);
                 owned = s_owned[id];
             }
+            OwnershipSteady.NoteVisit(zdo, now);   // [wishbone] ownstab N23: revision watch for the idle test (key off = one bool read)
 
             var ownerPeer = ZNet.instance.GetPeer(owner);
             // FGN_HandOff's payload is FGN's own, so only a peer on our FGN build (FgnVersionGate) is asked or handed to.
@@ -217,13 +239,23 @@ namespace FiresGhettoNetworkMod
             // last, or to a lower ping). A creature that is fighting is never moved, and none moves more than once per
             // MinHoldSeconds (s_owned.Since restarts on every owner change), so it only changes hands while idle.
             string busy = CombatReason(zdo, now);
-            if (busy != null || now - owned.Since < MinHoldSeconds)
+            FightMode mode = ConfigFightMode != null ? ConfigFightMode.Value : FightMode.Vanilla;
+            ZNetPeer fighter = null;   // 1.6.84: set only in FirstFighter mode; before, it was never set and the fighter branch below was unreachable
+            if (busy != null && mode == FightMode.FirstFighter)
+            {
+                if (s_firstFighter.TryGetValue(id, out var first)) fighter = ZNet.instance.GetPeer(first.Peer);
+                if (fighter == null || fighter.m_uid == owner) { NoteSkip(fighter == null ? "fight, first fighter unknown or gone" : "fight, held by its first fighter", zdo, now); return false; }
+            }
+            bool fightAllowed = busy == null || mode != FightMode.Vanilla;
+            bool holdApplies = !(busy != null && mode == FightMode.FirstFighter);   // a fight's first hand-off goes now, not after 30 s
+            double hold = OwnershipSteady.HysteresisOn ? OwnershipSteady.HoldSeconds(id, MinHoldSeconds, now) : MinHoldSeconds;   // [wishbone] ownstab N22: doubling hold
+            if (!fightAllowed || (holdApplies && now - owned.Since < hold))
             {
                 s_streaks.Remove(id);
-                NoteSkip(busy ?? "held < 30 s", zdo, now);
+                if (fightAllowed && now - owned.Since >= MinHoldSeconds) OwnershipSteady.NoteHeldByDoubledHold();
+                NoteSkip(!fightAllowed ? busy : now - owned.Since < MinHoldSeconds ? "held < 30 s" : "held (doubled hold)", zdo, now);
                 return false;
             }
-            ZNetPeer fighter = null;
 
             float ownerRtt = Rtt(ownerPeer);
             ZNetPeer fastest = null;
@@ -237,21 +269,35 @@ namespace FiresGhettoNetworkMod
                 if (candidate == ownerPeer) continue;
                 if (candidate == fighter) fighterPresent = true;
                 if (!FgnVersionGate.IsMatched(candidate)) continue;
+                if (PeerStalls.IsStalling(candidate.m_uid)) continue;   // 1.6.69: a struggling game is not handed idle creatures
                 float rtt = Rtt(candidate);
                 if (rtt >= fastestRtt) continue;
                 fastest = candidate;
                 fastestRtt = rtt;
             }
             if (present < 2) return false;
+            ZNetPeer toucher = GhostOwner169.Toucher(zdo, ownerPeer, s_candidates);   // 1.6.69 ([ghost]): standing on it (key off by default)
 
             ZNetPeer target = null;
             bool forFight = false;
-            if (fighterPresent && Rtt(fighter) <= ownerRtt + FighterPingAllowanceMs)
+            if (fighterPresent && (mode == FightMode.FirstFighter || Rtt(fighter) <= ownerRtt + FighterPingAllowanceMs))
             {
                 target = fighter;
                 forFight = true;
             }
-            else if (fastest != null && fastestRtt + PingMarginMs() < ownerRtt)
+            else if (toucher != null)
+            {
+                target = toucher;
+                s_streaks.Remove(id);
+            }
+            // [wishbone] ownstab N22: time-confirmed streak with a dead band and a return penalty instead of the 2-pass streak
+            else if (OwnershipSteady.HysteresisOn)
+            {
+                s_streaks.Remove(id);
+                if (OwnershipSteady.ConfirmPingMove(zdo, fastest, fastestRtt, ownerRtt, PingMarginMs(), PeerStalls.IsStalling(owner), now)) target = fastest;
+            }
+            // 1.6.69: an idle creature run by a struggling game may go to a healthy nearby player without the ping margin (same streak / hold rules)
+            else if (fastest != null && (fastestRtt + PingMarginMs() < ownerRtt || PeerStalls.IsStalling(owner)))
             {
                 s_streaks.TryGetValue(id, out var streak);
                 streak = streak.Candidate == fastest.m_uid ? new Streak { Candidate = fastest.m_uid, Wins = streak.Wins + 1 } : new Streak { Candidate = fastest.m_uid, Wins = 1 };
@@ -263,14 +309,19 @@ namespace FiresGhettoNetworkMod
                 s_streaks.Remove(id);
             }
             if (target == null) return false;
+            bool byTouch = !forFight && target == toucher;
+            // [wishbone] ownstab N23: a ping / stall move never takes an idle creature; fights and touch pass straight through
+            if (!forFight && !byTouch && OwnershipSteady.IdleBlocks(zdo, busy, now)) return false;
 
             s_perOwner.TryGetValue(owner, out int fromOwner);
             if (fromOwner >= MaxHandOffsPerOwner) return false;
             s_perOwner[owner] = fromOwner + 1;
 
+            NoteAsked(id, ownerPeer.m_uid);
             ownerPeer.m_rpc.Invoke(HandOffRpc, id, target.m_uid);
             s_pending[id] = new Stamp { Peer = target.m_uid, At = now };
             s_streaks.Remove(id);
+            OwnershipSteady.NoteMove(id, owner, target.m_uid, forFight, byTouch, now);   // [wishbone] ownstab (returns at once with its keys off)
             if (forFight) s_toFighters++;
             else s_toLowerPing++;
             return true;
@@ -326,15 +377,50 @@ namespace FiresGhettoNetworkMod
 
         private static int PingMarginMs() => ConfigPingMarginMs != null ? ConfigPingMarginMs.Value : DefaultPingMarginMs;
 
+        private const int MaxReasonLength = 64;
+
+        private const double AskedOwnerSeconds = 60.0;
+        private static readonly Dictionary<ZDOID, Stamp> s_askedOwner = new Dictionary<ZDOID, Stamp>();
+        private static float s_nextForgedLog;
+
+        private static void NoteAsked(ZDOID id, long owner)
+        {
+            double now = Time.realtimeSinceStartupAsDouble;
+            if (s_askedOwner.Count > MaxTrackedHits) RemoveOlderThan(s_askedOwner, now - AskedOwnerSeconds);
+            s_askedOwner[id] = new Stamp { Peer = owner, At = now };
+        }
+
+        private static bool AnsweredByAskedOwner(ZRpc rpc, ZDOID id)
+        {
+            if (ZNet.instance == null || !s_askedOwner.TryGetValue(id, out Stamp asked)) return false;
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+                if (peer != null && peer.m_rpc == rpc) return peer.m_uid == asked.Peer;
+            return false;
+        }
+
         private static void OnResult(ZRpc rpc, ZDOID id, bool accepted, string reason)
         {
+            // 1.6.31: any client could answer for any hand-off, before the checks and the length cap. Only the owner that was asked counts.
+            if (reason != null && reason.Length > MaxReasonLength) reason = reason.Substring(0, MaxReasonLength);
+            if (!AnsweredByAskedOwner(rpc, id))
+            {
+                float now = Time.unscaledTime;
+                if (now >= s_nextForgedLog)
+                {
+                    s_nextForgedLog = now + 60f;
+                    LoggerOptions.LogDebug($"[CreatureOwnership] ignored a hand-off answer for {id}: the sender is not the owner this server asked");
+                }
+                return;
+            }
+            s_askedOwner.Remove(id);
             Api.FgnApi.NotifyResult(id, accepted, reason);   // hand-offs an add-on asked for (FgnApi)
             if (accepted)
             {
                 s_accepted++;
                 return;
             }
-            s_declined++;
+                        if (!s_pending.ContainsKey(id)) return;   // not a hand-off this peer asked for
+s_declined++;
             s_pending.Remove(id);
             s_cooldowns[id] = Time.realtimeSinceStartupAsDouble + DeclinedCooldownSeconds;
             string key = string.IsNullOrEmpty(reason) ? "other" : reason;
@@ -381,7 +467,9 @@ namespace FiresGhettoNetworkMod
             }
             if (zdo.GetBool(ZDOVars.s_tamed)) return "tamed";
             if (zdo.GetLong(ZDOVars.s_user) != 0L) return "in use";
+            if (GhostOwner169.InUse(zdo)) return "open (in use)";   // 1.6.69 ([ghost]): never hand an open chest / occupied station
             if (IsHeld(zdo)) return "held";
+            if (zdo.GetBool(ServerOwnershipPatches.ServerKeepsKey)) return "server keeps";   // 1.6.24: same flag as the V2/V3 rule
             if (ValcastPossession.IsPossessed(zdo)) return "possessed";
             return null;
         }
@@ -401,6 +489,7 @@ namespace FiresGhettoNetworkMod
             }
             ZNetPeer ownerPeer = ZNet.instance.GetPeer(owner);
             if (ownerPeer == null) return "owner not connected";
+            NoteAsked(id, ownerPeer.m_uid);
             ownerPeer.m_rpc.Invoke(HandOffRpc, id, target);
             return null;
         }
@@ -413,6 +502,8 @@ namespace FiresGhettoNetworkMod
             if (s_localHits.TryGetValue(zdo.m_uid, out double hitAt) && Time.realtimeSinceStartupAsDouble - hitAt <= FightMemorySeconds)
                 return "owner fighting";
             if (IsHeld(zdo)) return "held";
+            if (GhostOwner169.InUse(zdo)) return "open (in use)";   // 1.6.69 ([ghost])
+            if (zdo.GetBool(ServerOwnershipPatches.ServerKeepsKey)) return "server keeps";   // 1.6.24: same flag as the V2/V3 rule
             if (ValcastPossession.IsPossessed(zdo)) return "possessed";   // FiresValcast creature possession
             var view = ZNetScene.instance != null ? ZNetScene.instance.FindInstance(zdo) : null;
             if (view == null) return null;
@@ -431,17 +522,20 @@ namespace FiresGhettoNetworkMod
         }
 
         [HarmonyPatch(typeof(Character), "RPC_Damage"), HarmonyPrefix]
-        static bool OnDamage(Character __instance, HitData hit)
+        static bool OnDamage(Character __instance, long sender, HitData hit)
         {
             long perf = FgnPerf.Begin();
-            bool runOriginal = HandleDamage(__instance, hit);
+            bool runOriginal = HandleDamage(__instance, sender, hit);
             FgnPerf.End(FgnPerf.Point.CreatureDamage, perf);
             return runOriginal;
         }
 
-        private static bool HandleDamage(Character __instance, HitData hit)
+        private static bool HandleDamage(Character __instance, long sender, HitData hit)
         {
-            if (hit == null || Player.m_localPlayer == null) return true;
+            if (hit == null) return true;
+            // [wishbone] handoff (N6): owner-change hit forwarding/holding, also on a dedicated server (before the local player check). Off = one bool read.
+            if (FightHandoff.On && !FightHandoff.OnDamage(__instance, sender, hit)) return false;
+            if (Player.m_localPlayer == null) return true;
             // This is FGN's one Character.RPC_Damage hook; the PvP lag-fair dodge rides on it.
             if (LagFairDodge.Forgive(__instance, hit)) return false;
             var view = s_characterView(__instance);
@@ -468,12 +562,43 @@ namespace FiresGhettoNetworkMod
             foreach (var id in s_stale) s_localHits.Remove(id);
         }
 
+        // 1.6.27 (Fire 10-31 "Fix it"): prefabs another mod adds to ZNetScene.m_prefabs after the first scan were never balanced. The
+        // list only grows (mods Add to it directly, there is no event), so each pass compares its count and scans just the new tail.
+        private static int s_scannedCount;
+
+        private static void ScanNewPrefabs()
+        {
+            var list = ZNetScene.instance != null ? ZNetScene.instance.m_prefabs : null;
+            if (list == null || list.Count <= s_scannedCount) return;
+            int before = s_creaturePrefabs.Count;
+            for (int i = s_scannedCount; i < list.Count; i++)
+            {
+                var prefab = list[i];
+                if (prefab == null) continue;
+                var character = prefab.GetComponent<Character>();
+                var view = prefab.GetComponent<ZNetView>();
+                if (character == null || view == null || prefab.GetComponent<BaseAI>() == null || character is Player || character.IsBoss()) continue;
+                int hash = prefab.name.GetStableHashCode();
+                if (ServerOwnershipPatchesV3.IsExcluded(hash) || !s_creaturePrefabs.Add(hash)) continue;
+                s_creatureTypeMask |= 1 << (int)view.m_type;
+                LoggerOptions.LogDebug($"[CreatureOwnership] late prefab picked up: {prefab.name} (registered after the first scan)");
+            }
+            s_scannedCount = list.Count;
+            if (s_creaturePrefabs.Count > before && !s_lateInfoLogged)
+            {
+                s_lateInfoLogged = true;
+                LoggerOptions.LogDebug($"[CreatureOwnership] {s_creaturePrefabs.Count - before} creature prefab(s) registered late by other mods are now balanced too");
+            }
+        }
+        private static bool s_lateInfoLogged;
+
         private static void ScanPrefabs()
         {
             if (ZNetScene.instance == null) return;
             s_prefabsScanned = true;
             s_creaturePrefabs.Clear();
             s_creatureTypeMask = 0;
+            s_scannedCount = ZNetScene.instance.m_prefabs.Count;
             int bosses = 0;
             foreach (var prefab in ZNetScene.instance.m_prefabs)
             {
@@ -493,7 +618,7 @@ namespace FiresGhettoNetworkMod
                 s_creaturePrefabs.Add(prefab.name.GetStableHashCode());
                 s_creatureTypeMask |= 1 << (int)view.m_type;
             }
-            LoggerOptions.LogInfo($"[CreatureOwnership] {s_creaturePrefabs.Count} creature prefabs can be handed between players ({bosses} bosses never are).");
+            LoggerOptions.LogDebug($"[CreatureOwnership] {s_creaturePrefabs.Count} creature prefabs can be handed between players ({bosses} bosses never are).");
         }
 
         private static void Prune(ZDOMan zdoMan, double now)
@@ -508,6 +633,7 @@ namespace FiresGhettoNetworkMod
                 s_streaks.Remove(id);
             }
             RemoveOlderThan(s_lastHitBy, now - FightMemorySeconds);
+            RemoveOlderThan(s_firstFighter, now - FightMemorySeconds);
             RemoveOlderThan(s_pending, now - PendingSeconds);
             s_stale.Clear();
             foreach (var entry in s_cooldowns)

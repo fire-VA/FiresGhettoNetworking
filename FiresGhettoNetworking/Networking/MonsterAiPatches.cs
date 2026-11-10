@@ -27,6 +27,10 @@ namespace FiresGhettoNetworkMod
         private static readonly System.Reflection.FieldInfo _activeEventField    = AccessTools.Field(typeof(RandEventSystem), "m_activeEvent");
         private static readonly System.Reflection.MethodInfo _setActiveEventMethod = AccessTools.Method(typeof(RandEventSystem), "SetActiveEvent", new[] { typeof(RandomEvent), typeof(bool) });
         private static readonly System.Reflection.MethodInfo _isAnyPlayerInEventAreaMethod  = AccessTools.Method(typeof(RandEventSystem), "IsAnyPlayerInEventArea", new[] { typeof(RandomEvent) });
+        // 1.6.26: open delegates for the two per-FixedUpdate calls (was MethodInfo.Invoke + a new object[] each call)
+        private static readonly System.Func<RandEventSystem, RandomEvent, bool> s_isAnyInArea = Del<System.Func<RandEventSystem, RandomEvent, bool>>(_isAnyPlayerInEventAreaMethod) ?? ((r, e) => (bool)_isAnyPlayerInEventAreaMethod.Invoke(r, new object[] { e }));
+        private static readonly System.Action<RandEventSystem, RandomEvent, bool> s_setActive = Del<System.Action<RandEventSystem, RandomEvent, bool>>(_setActiveEventMethod) ?? ((r, e, end) => _setActiveEventMethod.Invoke(r, new object[] { e, end }));
+        private static T Del<T>(System.Reflection.MethodInfo m) where T : System.Delegate { try { return m != null ? AccessTools.MethodDelegate<T>(m) : null; } catch { return null; } }
 
 
         [HarmonyPatch(typeof(BaseAI), "UpdateAI")]
@@ -55,6 +59,18 @@ namespace FiresGhettoNetworkMod
                 ServerStatusDiagnostics.s_updateAi_bail_charNull++;
                 return false;
             }
+            // 1.5.76 ([generator]/[lead] 10-24, Gorm "sliding"): a DISABLED AI never thinks. Vanilla only updates enabled AIs
+            // (BaseAI.OnDisable leaves BaseAI.Instances), so a call that reaches here for a disabled one came from somewhere else
+            // (a mod's own loop or list); it is skipped and the caller named once per AI type, so the log proves who it was.
+            if (ServerClientUtils.ZNetIsDedicated() && !__instance.isActiveAndEnabled)   // 1.6.82: clients and hosts are FiresFixes (AiDisabledGuard)
+            {
+                ServerStatusDiagnostics.s_updateAi_bail_disabled++;
+                string type = __instance.GetType().Name;
+                if (s_disabledLogged.Add(type))
+                    LoggerOptions.LogDebug($"[AI] {type} on '{__instance.name}' was asked to think while disabled; skipped (vanilla never updates a disabled AI). "
+                        + $"Caller: {new System.Diagnostics.StackTrace(1, false).GetFrame(1)?.GetMethod()?.DeclaringType?.FullName ?? "?"}.{new System.Diagnostics.StackTrace(1, false).GetFrame(1)?.GetMethod()?.Name ?? "?"}");
+                return false;
+            }
 
             if (__instance.m_nview.IsOwner())
                 ServerStatusDiagnostics.s_updateAi_passThrough_isOwner++;
@@ -63,6 +79,8 @@ namespace FiresGhettoNetworkMod
 
             return true;
         }
+
+        private static readonly HashSet<string> s_disabledLogged = new HashSet<string>();
 
         [HarmonyPatch(typeof(MonoUpdaters), "FixedUpdate")]
         [HarmonyPostfix]
@@ -93,7 +111,7 @@ namespace FiresGhettoNetworkMod
             if (!_seenAwakeNames.Add(name)) return;
 
             _awakeLogsRemaining--;
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"[BaseAI.Awake] First-time mob '{name}' awoke server-side. "
                 + $"Post-Awake BaseAI.Instances.Count={BaseAI.Instances.Count}, "
                 + $"BaseAI.BaseAIInstances.Count={BaseAI.BaseAIInstances.Count}. "
@@ -188,9 +206,33 @@ namespace FiresGhettoNetworkMod
             return true;
         }
 
+        // 1.6.31: the dedi's active event stays set for the whole raid (the SetActiveEvent prefix below has to hold it: vanilla's body clears it every step with no local
+        // player), so with no area test raid monsters spawned around any player on the map. The test is here, where the spawners run.
+        private static BepInEx.Configuration.ConfigEntry<bool> ConfigEventSpawnsNeedPlayerInArea;
+        internal static void InitConfig(BepInEx.Configuration.ConfigFile config)
+        {
+            ConfigEventSpawnsNeedPlayerInArea = config.Bind("10 - Server Authority", "Raid Monsters Need A Player In The Raid Area", true,
+                Cfg.Adv("On a dedicated server, raid monsters only spawn around players inside the raid's area, so a raid at one base leaves players elsewhere alone. Off = they spawn around any player while a raid runs."));
+        }
+
+        private static bool AnyNearPlayerInEventArea(RandomEvent ev)
+        {
+            foreach (Player player in _playersInZoneScratch)
+                if (RandEventSystem.instance.IsInsideRandomEventArea(ev, player.transform.position)) return true;
+            return false;
+        }
+
         private static void RunEventSpawners(SpawnSystem spawnSystem, DateTime time, bool shouldLog, RandomEvent activeEvent, RandomEvent runningEvent)
         {
             if (RandEventSystem.instance == null) return;
+
+            // Random events only: a forced event has no area, and vanilla runs it with playerInArea true
+            if (activeEvent != null && activeEvent == runningEvent && (ConfigEventSpawnsNeedPlayerInArea?.Value ?? true) && !AnyNearPlayerInEventArea(activeEvent))
+            {
+                if (shouldLog && LoggerOptions.DebugEnabled)
+                    LoggerOptions.LogDebug($"[EventDiag] SpawnSystem@({spawnSystem.transform.position.x:F0},{spawnSystem.transform.position.z:F0}) no '{activeEvent.m_name}' spawns: none of its {_playersInZoneScratch.Count} near player(s) is inside the event area.");
+                return;
+            }
 
             List<SpawnSystem.SpawnData> currentSpawners = RandEventSystem.instance.GetCurrentSpawners();
             if (shouldLog)
@@ -261,7 +303,7 @@ namespace FiresGhettoNetworkMod
                 return;
             }
 
-            bool anyPlayerInEventArea = (bool)_isAnyPlayerInEventAreaMethod.Invoke(__instance, new object[] { randomEvent });
+            bool anyPlayerInEventArea = s_isAnyInArea(__instance, randomEvent);
             if (anyPlayerInEventArea)
                 _activeEventField.SetValue(__instance, randomEvent);
         }
@@ -289,11 +331,11 @@ namespace FiresGhettoNetworkMod
 
             if (randomEvent != null)
             {
-                bool anyInArea = (bool)_isAnyPlayerInEventAreaMethod.Invoke(__instance, new object[] { randomEvent });
-                _setActiveEventMethod.Invoke(__instance, new object[] { anyInArea ? randomEvent : null, false });
+                bool anyInArea = s_isAnyInArea(__instance, randomEvent);
+                s_setActive(__instance, anyInArea ? randomEvent : null, false);
                 return;
             }
-            _setActiveEventMethod.Invoke(__instance, new object[] { null, false });
+            s_setActive(__instance, null, false);
         }
     }
 }

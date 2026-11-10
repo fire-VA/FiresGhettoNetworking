@@ -19,6 +19,7 @@ namespace FiresGhettoNetworkMod
         public static int s_updateAi_bail_nviewInvalid;
         public static int s_updateAi_bail_zdoNull;
         public static int s_updateAi_bail_charNull;
+        public static int s_updateAi_bail_disabled;   // 1.5.76
         public static int s_updateAi_passThrough_isOwner;
         public static int s_updateAi_passThrough_notOwner;
 
@@ -108,13 +109,14 @@ namespace FiresGhettoNetworkMod
             sb.Append("[ServerStatus] +").Append(windowDisplay).Append("s")
               .Append(" | tick: ").Append(updateCount).Append(" (+").Append(updateDelta).Append(")")
               .Append(" | peers: ").Append(peerCount)
+              .Append(" | keep-alive: ").Append(CompanionKeepAlive.StatusSegment())
               .Append(" | ai lists: ").Append(aiList).Append(" BaseAI / ").Append(baseList).Append(" BaseAIInst / ").Append(charList).Append(" Char")
               .Append(" | BaseAI.UpdateAI: ").Append(s_updateAi_examined).Append(" ex, owner=").Append(s_updateAi_passThrough_isOwner)
                   .Append(" notOwner=").Append(s_updateAi_passThrough_notOwner)
                   .Append(" bail(nv=").Append(s_updateAi_bail_nviewNull)
                   .Append(",inv=").Append(s_updateAi_bail_nviewInvalid)
                   .Append(",zdo=").Append(s_updateAi_bail_zdoNull)
-                  .Append(",char=").Append(s_updateAi_bail_charNull).Append(")")
+                  .Append(",char=").Append(s_updateAi_bail_charNull).Append(",disabled=").Append(s_updateAi_bail_disabled).Append(")")
               .Append(" | MonsterAI.UpdateAI: ").Append(s_monsterAi_examined).Append(" ex")
               .Append(" | CreateObject: ").Append(s_createObject_calls - s_createObject_nullReturns).Append(" ok, ").Append(s_createObject_nullReturns).Append(" null")
               .Append(" | CreateDestroyObjects: ").Append(FormatCreateDestroyObjectsSegment())
@@ -127,7 +129,7 @@ namespace FiresGhettoNetworkMod
             if (FiresGhettoNetworkMod.ConfigShowAILODInServerStatus?.Value ?? true)
                 AppendAILODSegment(sb);
 
-            LoggerOptions.LogMessage(sb.ToString());
+            LoggerOptions.LogDebug(sb.ToString());
         }
 
         private static void ResetWindowCounters()
@@ -136,7 +138,7 @@ namespace FiresGhettoNetworkMod
             s_updateAi_bail_nviewNull = 0;
             s_updateAi_bail_nviewInvalid = 0;
             s_updateAi_bail_zdoNull = 0;
-            s_updateAi_bail_charNull = 0;
+            s_updateAi_bail_charNull = 0; s_updateAi_bail_disabled = 0;
             s_updateAi_passThrough_isOwner = 0;
             s_updateAi_passThrough_notOwner = 0;
 

@@ -36,7 +36,7 @@ namespace FiresGhettoNetworkMod
                     replaced++;
                 }
             }
-            LoggerOptions.LogMessage(replaced > 0
+            LoggerOptions.LogDebug(replaced > 0
                 ? $"[ServerSafePick] Pickable.RPC_Pick made server-safe ({replaced} local-player read(s))."
                 : "[ServerSafePick] Pickable.RPC_Pick: the local-player read was not found (game update?); left as vanilla.");
             return list;
@@ -49,7 +49,7 @@ namespace FiresGhettoNetworkMod
             if (!s_logged)
             {
                 s_logged = true;
-                LoggerOptions.LogMessage("[ServerSafePick] the server ran a pick RPC (it owned the Pickable); picked without a local player.");
+                LoggerOptions.LogDebug("[ServerSafePick] the server ran a pick RPC (it owned the Pickable); picked without a local player.");
             }
             return ZDOID.None;
         }

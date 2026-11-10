@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -84,10 +84,14 @@ namespace FiresGhettoNetworkMod
             data.Deserialize(package);
             long target = data.m_targetPeerID;
             CreatureOwnership.ObserveRoutedRpc(data);
+            ResourceOwnership.Observe(data);   // 1.6.69: resources go to whoever hits them (key off = returns at once)
+            GhostOwner169.ObserveRoutedRpc(data);   // 1.6.69 ([ghost]): helm requests for the server ship fallback
             if (Api.FgnApi.RunFilters(data)) return;   // add-on filters (FgnApi), before FGN routes it
 
             if (target == VanillaAccess.RoutedRpcId(routedRpc))
             {
+                // 1.6.31: a headless server has no station instance, so vanilla would drop this one. Listen hosts keep vanilla: they may run it.
+                if (ZNet.instance != null && ZNet.instance.IsDedicated() && StationRouter.TryRoute(routedRpc, data)) { StationRouter.CountServerTargeted(); return; }
                 VanillaAccess.HandleRoutedRpc(routedRpc, data);
                 return;
             }
@@ -290,7 +294,7 @@ namespace FiresGhettoNetworkMod
             bool present = owners != null;
             if (present != s_foreignRouteHooks)
             {
-                LoggerOptions.LogInfo(present
+                LoggerOptions.LogDebug(present
                     ? $"[RpcRouter] '{owners}' hooks ZRoutedRpc.RouteRPC; players' filtered broadcasts now pass through RouteRPC so those hooks see them and can cancel them."
                     : "[RpcRouter] no other mod hooks ZRoutedRpc.RouteRPC any more; players' filtered broadcasts are sent directly again.");
                 s_foreignRouteHooks = present;

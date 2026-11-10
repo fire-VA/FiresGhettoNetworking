@@ -1,4 +1,4 @@
-﻿using BepInEx.Configuration;
+using BepInEx.Configuration;
 using FiresGhettoNetworkMod.AutoTune;
 using HarmonyLib;
 using System;
@@ -25,13 +25,13 @@ namespace FiresGhettoNetworkMod
             FiresGhettoNetworkMod.ConfigQueueSize.SettingChanged += (_, __) =>
             {
                 if (!AutoTuneApplier.Writing)
-                    LoggerOptions.LogInfo("Queue size changed - live for the send window; the bulk-transfer gate picks it up on restart.");
+                    LoggerOptions.LogDebug("Queue size changed - live for the send window; the bulk-transfer gate picks it up on restart.");
             };
 
             if (FiresGhettoNetworkMod.ConfigHyperBoost != null)
                 FiresGhettoNetworkMod.ConfigHyperBoost.SettingChanged += (_, __) =>
                 {
-                    LoggerOptions.LogMessage(EffectiveConfig.HyperBoost()
+                    LoggerOptions.LogDebug(EffectiveConfig.HyperBoost()
                         ? "HYPERBOOST ENABLED — lifting send/recv rates + buffers to max and pushing live to open connections."
                         : "HYPERBOOST disabled — reverting to Auto-Tune / configured rates.");
                     ApplyEffectiveRatesLiveToAllPeers();
@@ -43,7 +43,7 @@ namespace FiresGhettoNetworkMod
 
         private static void ApplyUpdateRate()
         {
-            LoggerOptions.LogInfo($"Update rate set to {FiresGhettoNetworkMod.ConfigUpdateRate.Value}");
+            LoggerOptions.LogDebug($"Update rate set to {FiresGhettoNetworkMod.ConfigUpdateRate.Value}");
         }
 
         /// <summary>Pushes the configured rates to the global config AND to every connection already
@@ -81,7 +81,7 @@ namespace FiresGhettoNetworkMod
         {
             if (s_lastAppliedLog.TryGetValue(setting, out string last) && last == message) return;
             s_lastAppliedLog[setting] = message;
-            LoggerOptions.LogInfo(message);
+            LoggerOptions.LogDebug(message);
         }
 
         // Temporarily lift global send-rate + send-buffer above the configured tier for fgn_socketramp.
@@ -91,7 +91,7 @@ namespace FiresGhettoNetworkMod
             AdaptiveSendRate.Suspend = true;
             SetSteamConfig("k_ESteamNetworkingConfig_SendRateMax", sendRateBytesPerSec);
             SetSteamConfig("k_ESteamNetworkingConfig_SendBufferSize", sendBufferBytes);
-            LoggerOptions.LogMessage($"Stress test: send-rate Max -> {sendRateBytesPerSec / 1024} KB/s, "
+            LoggerOptions.LogDebug($"Stress test: send-rate Max -> {sendRateBytesPerSec / 1024} KB/s, "
                 + $"send buffer -> {sendBufferBytes / 1024} KB (TEMPORARY — restored when the test ends).");
         }
 
@@ -100,7 +100,7 @@ namespace FiresGhettoNetworkMod
             AdaptiveSendRate.Suspend = false;
             ApplySendRates();
             ApplySendBufferSize();
-            LoggerOptions.LogMessage("Stress test: send rate + buffer restored to configured values.");
+            LoggerOptions.LogDebug("Stress test: send rate + buffer restored to configured values.");
         }
 
         // ---- PER-CONNECTION (live) config ------------------------------------------------------------
@@ -219,7 +219,7 @@ namespace FiresGhettoNetworkMod
             bool rMax = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMax", rateMaxBytes, conn);
             bool rMin = SetConnectionConfig("k_ESteamNetworkingConfig_SendRateMin", rateMinBytes, conn);
             bool rBuf = SetConnectionConfig("k_ESteamNetworkingConfig_SendBufferSize", bufferBytes, conn);
-            LoggerOptions.LogMessage($"Stress test: live per-connection {conn} -> SendRateMax {rateMaxBytes / 1024} KB/s (ok={rMax}), "
+            LoggerOptions.LogDebug($"Stress test: live per-connection {conn} -> SendRateMax {rateMaxBytes / 1024} KB/s (ok={rMax}), "
                 + $"SendRateMin {rateMinBytes / 1024} KB/s (ok={rMin}), SendBuffer {bufferBytes / 1024 / 1024} MB (ok={rBuf}).");
         }
 
@@ -231,7 +231,7 @@ namespace FiresGhettoNetworkMod
             if (conn == 0u) return;
             bool rRb = SetConnectionConfig("k_ESteamNetworkingConfig_RecvBufferSize", recvBufferBytes, conn);
             bool rRm = SetConnectionConfig("k_ESteamNetworkingConfig_RecvMaxMessageSize", recvMaxMessageBytes, conn);
-            LoggerOptions.LogMessage($"Stress test: LIVE per-connection {conn} -> RecvBufferSize {recvBufferBytes / 1024 / 1024} MB (set ok={rRb}), "
+            LoggerOptions.LogDebug($"Stress test: LIVE per-connection {conn} -> RecvBufferSize {recvBufferBytes / 1024 / 1024} MB (set ok={rRb}), "
                 + $"RecvMaxMessageSize {recvMaxMessageBytes / 1024} KB (ok={rRm}). "
                 + (rRb && rRm ? "" : "Either failed = FiresSteamworksPatcher not installed on this side."));
         }
@@ -375,7 +375,7 @@ namespace FiresGhettoNetworkMod
         {
             AdaptiveSendRate.Suspend = false;
             ApplyEffectiveToConnection(peer);
-            LoggerOptions.LogMessage("Stress test: per-connection rates restored to configured values.");
+            LoggerOptions.LogDebug("Stress test: per-connection rates restored to configured values.");
         }
 
         // Re-assert the effective rates everywhere at once: GLOBAL (so connections opened afterwards inherit
@@ -399,7 +399,7 @@ namespace FiresGhettoNetworkMod
             }
             catch (Exception e) { LoggerOptions.LogWarning($"Live per-connection rate apply failed: {e.Message}"); }
 
-            LoggerOptions.LogMessage($"Live rates applied to {applied} open connection(s): "
+            LoggerOptions.LogDebug($"Live rates applied to {applied} open connection(s): "
                 + $"SendRateMax {EffectiveConfig.SteamSendRateMax() / 1024 / 1024} MB/s, "
                 + $"SendBuffer {EffectiveConfig.SteamSendBufferBytes() / 1024 / 1024} MB, "
                 + $"RecvBuffer {EffectiveConfig.SteamRecvBufferBytes() / 1024 / 1024} MB"
@@ -439,7 +439,7 @@ namespace FiresGhettoNetworkMod
                 _sendBufferSupported = HasSteamConfigMember("k_ESteamNetworkingConfig_SendBufferSize");
                 if (!_sendBufferSupported)
                 {
-                    LoggerOptions.LogInfo("Steam ESteamNetworkingConfigValue does not expose SendBufferSize in this game build; AutoTune buffer scaling has no effect.");
+                    LoggerOptions.LogDebug("Steam ESteamNetworkingConfigValue does not expose SendBufferSize in this game build; AutoTune buffer scaling has no effect.");
                 }
             }
             if (!_sendBufferSupported) return;
@@ -464,7 +464,7 @@ namespace FiresGhettoNetworkMod
                 _recvBufferSupported = HasSteamConfigMember("k_ESteamNetworkingConfig_RecvBufferSize");
                 if (!_recvBufferSupported)
                 {
-                    LoggerOptions.LogInfo("Steam ESteamNetworkingConfigValue does not expose RecvBufferSize in this game build; 'ZPackage Receive Buffer Bytes' setting has no effect (Valheim ships an older Steamworks SDK).");
+                    LoggerOptions.LogDebug("Steam ESteamNetworkingConfigValue does not expose RecvBufferSize in this game build; 'ZPackage Receive Buffer Bytes' setting has no effect (Valheim ships an older Steamworks SDK).");
                 }
             }
             if (!_recvBufferSupported) return;
@@ -490,7 +490,7 @@ namespace FiresGhettoNetworkMod
                 _recvMaxMessageSupported = HasSteamConfigMember("k_ESteamNetworkingConfig_RecvMaxMessageSize");
                 if (!_recvMaxMessageSupported)
                 {
-                    LoggerOptions.LogInfo("Steam ESteamNetworkingConfigValue does not expose RecvMaxMessageSize in this game build; per-message cap stays at Steam's 512 KB default (install FiresSteamworksPatcher on the server to enable).");
+                    LoggerOptions.LogDebug("Steam ESteamNetworkingConfigValue does not expose RecvMaxMessageSize in this game build; per-message cap stays at Steam's 512 KB default (install FiresSteamworksPatcher on the server to enable).");
                 }
             }
             if (!_recvMaxMessageSupported) return;
@@ -544,7 +544,7 @@ namespace FiresGhettoNetworkMod
 
             // ONE always-visible rates summary per world load; the per-knob
             // "applied" lines above are LogInfo detail.
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"Network rates applied: update rate {VanillaFloor.Percent(EffectiveConfig.UpdateRate())}%, "
                 + $"send {EffectiveConfig.SteamSendRateMin() / 1024}-{EffectiveConfig.SteamSendRateMax() / 1024} KB/s, "
                 + $"send buffer {EffectiveConfig.SteamSendBufferBytes() / 1024} KB");
@@ -591,7 +591,7 @@ namespace FiresGhettoNetworkMod
                 if (s_lastConnectionConfig.TryGetValue(conn, out string last) && last == line) continue;
                 s_lastConnectionConfig[conn] = line;
                 string who = peer.m_server ? "the server" : (string.IsNullOrEmpty(peer.m_playerName) ? peer.m_uid.ToString() : peer.m_playerName);
-                LoggerOptions.LogMessage($"[SteamConfig] connection to {who}, read back from Steam: {line}");
+                LoggerOptions.LogDebug($"[SteamConfig] connection to {who}, read back from Steam: {line}");
             }
         }
 
@@ -671,7 +671,7 @@ namespace FiresGhettoNetworkMod
             else if (!s_queueLimitAnnounced)
             {
                 s_queueLimitAnnounced = true;
-                LoggerOptions.LogInfo("ZDOMan.SendZDOs: send-queue limit follows each player's send window, packages capped at Queue Size.");
+                LoggerOptions.LogDebug("ZDOMan.SendZDOs: send-queue limit follows each player's send window, packages capped at Queue Size.");
             }
             return code;
         }

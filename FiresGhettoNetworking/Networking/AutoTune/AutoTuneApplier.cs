@@ -108,7 +108,7 @@ namespace FiresGhettoNetworkMod.AutoTune
                 changed |= Set(FiresGhettoNetworkMod.ConfigQueueSize,   w.Queue);
 
                 if (changed)
-                    LoggerOptions.LogMessage($"[AutoTune] {w.Side} {w.Tier}: {w.Reason}. Config set to "
+                    LoggerOptions.LogDebug($"[AutoTune] {w.Side} {w.Tier}: {w.Reason}. Config set to "
                         + $"Send Rate Max {w.MaxKb} KB/s, Min {w.MinKb} KB/s, ZDO Send Rate {w.Rate}, Queue Size {w.Queue}.");
             }
             finally { s_writing = false; }

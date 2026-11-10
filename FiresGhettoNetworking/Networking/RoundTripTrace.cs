@@ -381,9 +381,9 @@ namespace FiresGhettoNetworkMod
                 lines.Add(prefix + DescribeTrace(trace, stages, ProbeRoles));
             }
 
-            foreach (string line in lines) LoggerOptions.LogInfo(line);
+            foreach (string line in lines) LoggerOptions.LogDebug(line);
             string summary = Summarize(label, seqs.Count, answered, ProbeRoles);
-            LoggerOptions.LogMessage(summary);
+            LoggerOptions.LogDebug(summary);
             lines.Add(summary);
             return lines;
         }

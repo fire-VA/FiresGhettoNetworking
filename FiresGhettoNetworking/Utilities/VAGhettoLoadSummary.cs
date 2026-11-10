@@ -118,7 +118,7 @@ namespace FiresGhettoNetworkMod
         private static void EmitLine(string frame)
         {
             if (FiresGhettoNetworkMod.Log != null) FiresGhettoNetworkMod.Log.LogInfo($"{Tag} {frame}");
-            else Debug.Log($"[FiresGhettoNetworkMod] {Tag} {frame}");
+            // 1.6.34: Debug only; before the logger exists nothing is written.
         }
     }
 }

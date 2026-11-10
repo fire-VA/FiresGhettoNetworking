@@ -62,7 +62,7 @@ namespace FiresGhettoNetworkMod
             if (!s_startupReported && s_anyoneConnected && s_startupLongestMs > 0.0)
             {
                 s_startupReported = true;
-                LoggerOptions.LogMessage($"[ServerHealth] server start, before anyone connected: longest frame {s_startupLongestMs:F0} ms "
+                LoggerOptions.LogDebug($"[ServerHealth] server start, before anyone connected: longest frame {s_startupLongestMs:F0} ms "
                     + "(the world load; not counted below).");
             }
             if (s_windowStart < 0.0 || s_frames == 0) return;
@@ -77,7 +77,7 @@ namespace FiresGhettoNetworkMod
                 : addedBack >= 1.0
                     ? $"Unity's clock ran at {clockSpeed * Percent:F0}% of real time, and FGN added {addedBack:F0} s back to the world clock"
                     : $"the world clock ran at {clockSpeed * Percent:F0}% of real time, so every player's clock was pulled back at each re-sync";
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"[ServerHealth] last {seconds / 60.0:F0} min: up to {s_peakPlayers} player(s), {framesPerSecond:F1} frames a second "
                 + $"({(s_frames > 0 ? Percent * s_framesAtTimestepCap / s_frames : 0.0):F0}% at Unity's {Time.maximumDeltaTime * MsPerSecond:F0} ms "
                 + $"step limit), worst frame {s_longestMs:F0} ms ({s_longestSplit}); {clock}. Server-Side Simulation "

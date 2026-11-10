@@ -15,16 +15,16 @@ namespace FiresGhettoNetworkMod
         public static void Init(ConfigFile config)
         {
             // Configs already bound in main class
-            LoggerOptions.LogInfo("Dedicated server features initialized.");
+            LoggerOptions.LogDebug("Dedicated server features initialized.");
 
             // Detection is now done in Ascend.Awake() before this is called
             // Just read the cached result
             isDedicatedDetected = ServerClientUtils.IsDedicatedServerDetected;
 
             if (isDedicatedDetected)
-                LoggerOptions.LogInfo("Running as dedicated server (ServerClientUtils).");
+                LoggerOptions.LogDebug("Running as dedicated server (ServerClientUtils).");
             else
-                LoggerOptions.LogInfo("Running as client/listen-server (ServerClientUtils).");
+                LoggerOptions.LogDebug("Running as client/listen-server (ServerClientUtils).");
         }
 
         // ====================== FORCE CROSSPLAY ======================
@@ -35,7 +35,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPostfix]
         static void ApplyForceCrossplay()
         {
-            LoggerOptions.LogInfo($"[Crossplay] ParseServerArguments postfix: dedi={isDedicatedDetected}, "
+            LoggerOptions.LogDebug($"[Crossplay] ParseServerArguments postfix: dedi={isDedicatedDetected}, "
                 + $"config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}, backend-before={ZNet.m_onlineBackend}.");
             if (!isDedicatedDetected) return;
             switch (FiresGhettoNetworkMod.ConfigForceCrossplay.Value)
@@ -50,10 +50,10 @@ namespace FiresGhettoNetworkMod
                     LoggerOptions.LogMessage("[Crossplay] Forcing crossplay DISABLED (Steamworks backend).");
                     break;
                 default:
-                    LoggerOptions.LogInfo("[Crossplay] mode: vanilla (respecting command line).");
+                    LoggerOptions.LogDebug("[Crossplay] mode: vanilla (respecting command line).");
                     break;
             }
-            LoggerOptions.LogInfo($"[Crossplay] backend-after={ZNet.m_onlineBackend}.");
+            LoggerOptions.LogDebug($"[Crossplay] backend-after={ZNet.m_onlineBackend}.");
         }
 
         // Diagnostic: log the FINAL backend when ZNet actually starts. If it differs from what
@@ -61,8 +61,8 @@ namespace FiresGhettoNetworkMod
         // re-assert it on a later hook).
         internal static void LogBackendAtZNetStart()
         {
-            LoggerOptions.LogInfo($"[Crossplay] ZNet.Start — online backend is now {ZNet.m_onlineBackend} (dedi={isDedicatedDetected}).");
-            if (isDedicatedDetected) LoggerOptions.LogMessage($"Player limit: {DescribePlayerLimit()}.");
+            LoggerOptions.LogDebug($"[Crossplay] ZNet.Start — online backend is now {ZNet.m_onlineBackend} (dedi={isDedicatedDetected}).");
+            if (isDedicatedDetected) LoggerOptions.LogDebug($"Player limit: {DescribePlayerLimit()}.");
         }
 
         // ====================== CLIENT-SIDE FORCE ======================
@@ -86,7 +86,7 @@ namespace FiresGhettoNetworkMod
         {
             OnlineBackendType? forced = ForcedBackend();
             if (!forced.HasValue || __result == forced.Value) return;
-            LoggerOptions.LogInfo($"[Crossplay] client GetOnlineBackend {__result} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
+            LoggerOptions.LogDebug($"[Crossplay] client GetOnlineBackend {__result} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
             __result = forced.Value;
         }
 
@@ -105,7 +105,7 @@ namespace FiresGhettoNetworkMod
                     + "Join a crossplay server with its join code.");
                 return;
             }
-            LoggerOptions.LogInfo($"[Crossplay] client SetServerHost(addr) {ZNet.m_onlineBackend} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
+            LoggerOptions.LogDebug($"[Crossplay] client SetServerHost(addr) {ZNet.m_onlineBackend} -> forced {forced.Value} (config={FiresGhettoNetworkMod.ConfigForceCrossplay.Value}).");
             ZNet.m_onlineBackend = forced.Value;
         }
 
@@ -157,7 +157,7 @@ namespace FiresGhettoNetworkMod
                     if (!IsIntConstantLoad(codeList[j])) continue;
                     codeList[j].opcode = OpCodes.Ldc_I4;
                     codeList[j].operand = newLimit;
-                    LoggerOptions.LogInfo($"Player limit: ZNet.RPC_PeerInfo now turns players away at {newLimit}.");
+                    LoggerOptions.LogDebug($"Player limit: ZNet.RPC_PeerInfo now turns players away at {newLimit}.");
                     return codeList;
                 }
             }
@@ -204,7 +204,7 @@ namespace FiresGhettoNetworkMod
                 if (!isDedicatedDetected) return;
                 int target = ResolveAdvertisedLimit();
                 if (target <= 0 || cMaxMembers == target) return;
-                LoggerOptions.LogInfo($"Overriding SteamMatchmaking.CreateLobby cMaxMembers: {cMaxMembers} → {target}");
+                LoggerOptions.LogDebug($"Overriding SteamMatchmaking.CreateLobby cMaxMembers: {cMaxMembers} → {target}");
                 cMaxMembers = target;
             }
 
@@ -215,7 +215,7 @@ namespace FiresGhettoNetworkMod
                 if (!isDedicatedDetected) return;
                 int target = ResolveAdvertisedLimit();
                 if (target <= 0 || cPlayersMax == target) return;
-                LoggerOptions.LogInfo($"Overriding SteamGameServer.SetMaxPlayerCount cPlayersMax: {cPlayersMax} → {target}");
+                LoggerOptions.LogDebug($"Overriding SteamGameServer.SetMaxPlayerCount cPlayersMax: {cPlayersMax} → {target}");
                 cPlayersMax = target;
             }
         }
@@ -285,7 +285,7 @@ namespace FiresGhettoNetworkMod
                 LoggerOptions.LogWarning(
                     $"Advertised player limit: {patchedMethod} has no constant store into {fieldId}; the crossplay browser keeps vanilla's max.");
             else
-                LoggerOptions.LogMessage($"Advertised player limit: rewrote {rewritten} store(s) into {fieldId} in {patchedMethod}.");
+                LoggerOptions.LogDebug($"Advertised player limit: rewrote {rewritten} store(s) into {fieldId} in {patchedMethod}.");
 
             return code;
         }

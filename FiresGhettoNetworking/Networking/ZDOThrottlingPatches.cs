@@ -1,4 +1,4 @@
-using HarmonyLib;
+﻿using HarmonyLib;
 using System.Collections.Generic;
 using FiresGhettoNetworkMod.AutoTune;
 using UnityEngine;
@@ -56,6 +56,7 @@ namespace FiresGhettoNetworkMod
 
             bool modified = false;
 
+            bool ringOn = FgnRing.On;   // 1.5.79: once per call, not per ZDO
             foreach (ZDO zdo in objects)
             {
                 if (playerBoostEnabled && IsPlayerZDO(zdo))
@@ -77,10 +78,8 @@ namespace FiresGhettoNetworkMod
                 // the things resting on it.
                 if (throttleEnabled && zdo.Type == ZDO.ObjectType.Default)
                 {
-                    Vector3 zdoPos = zdo.GetPosition();
-                    float dx = zdoPos.x - refPos.x;
-                    float dz = zdoPos.z - refPos.z;
-                    if (dx * dx + dz * dz > throttleDistanceSqr)
+                    // 1.5.78 halo ring: distance along the ring surface (FatApi.HaloSurfaceDistance); x,z as before elsewhere.
+                    if (FgnRing.PriorityDistanceSqr(zdo.GetPosition(), refPos, ringOn) > throttleDistanceSqr)
                     {
                         zdo.m_tempSortValue += DistantSortPenalty;
                         modified = true;
@@ -92,13 +91,35 @@ namespace FiresGhettoNetworkMod
             // instantiation order (ZNetScene.ZDOCompare re-sorts on arrival) and caused a regression.
             if (modified)
             {
-                objects.Sort((x, y) => x.m_tempSortValue.CompareTo(y.m_tempSortValue));
+                if (ConfigKeepPrioritizedFirst != null && ConfigKeepPrioritizedFirst.Value && peer != null) { s_receiver = peer.m_peer.m_uid; objects.Sort(s_prioritizedFirst); }   // 1.6.84
+                else objects.Sort((x, y) => x.m_tempSortValue.CompareTo(y.m_tempSortValue));
             }
+        }
+
+        // 1.6.84 ([fgn], [wishbone] round 2, read against vanilla ZDOMan.ServerSendCompare): vanilla sends Prioritized objects another player owns (creatures and players, to the receiver) before everything else.
+        // The value-only re-sort above dropped that while a peer was congested, exactly when order matters. Their rule first; then the adjusted value, as before (type order stays out: see the note above).
+        internal static BepInEx.Configuration.ConfigEntry<bool> ConfigKeepPrioritizedFirst;
+        private static long s_receiver;
+        private static readonly System.Comparison<ZDO> s_prioritizedFirst = PrioritizedFirst;
+
+        internal static void InitConfig(BepInEx.Configuration.ConfigFile config)
+        {
+            ConfigKeepPrioritizedFirst = config.Bind("09 - Dedicated Server", "Keep Other Players Creatures First When Congested", true,
+                Cfg.Adv("When a player's connection is backed up, creatures and players run by someone else are still sent to them first, as the game intends."));
+        }
+
+        private static bool OthersPrioritized(ZDO z) => z.Type == ZDO.ObjectType.Prioritized && z.HasOwner() && z.GetOwner() != s_receiver;
+
+        private static int PrioritizedFirst(ZDO x, ZDO y)
+        {
+            bool a = OthersPrioritized(x), b = OthersPrioritized(y);
+            if (a != b) return a ? -1 : 1;
+            return x.m_tempSortValue.CompareTo(y.m_tempSortValue);
         }
 
         private static bool IsPlayerZDO(ZDO zdo)
         {
-            return zdo != null && zdo.m_prefab == PlayerPrefabHash;
+            return zdo != null && zdo.GetPrefab() == PlayerPrefabHash;   // 1.6.84 ([wishbone] spotted): the public getter, not the private field
         }
     }
 }

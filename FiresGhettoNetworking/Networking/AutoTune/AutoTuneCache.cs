@@ -54,13 +54,13 @@ namespace FiresGhettoNetworkMod.AutoTune
                     int magic = br.ReadInt32();
                     if (magic != FileMagic)
                     {
-                        LoggerOptions.LogInfo($"[AutoTune] Cache magic mismatch (0x{magic:X8} != 0x{FileMagic:X8}) — starting fresh.");
+                        LoggerOptions.LogDebug($"[AutoTune] Cache magic mismatch (0x{magic:X8} != 0x{FileMagic:X8}) — starting fresh.");
                         return;
                     }
                     int version = br.ReadInt32();
                     if (version != SchemaVersion)
                     {
-                        LoggerOptions.LogInfo($"[AutoTune] Cache schema {version} (expected {SchemaVersion}) — starting fresh.");
+                        LoggerOptions.LogDebug($"[AutoTune] Cache schema {version} (expected {SchemaVersion}) — starting fresh.");
                         return;
                     }
                     int count = br.ReadInt32();

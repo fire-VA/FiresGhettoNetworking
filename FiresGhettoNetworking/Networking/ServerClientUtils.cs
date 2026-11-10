@@ -180,11 +180,29 @@ namespace FiresGhettoNetworkMod
         /// <summary>Runtime check for patch bodies: true only once ZNet exists and reports a dedicated server.</summary>
         public static bool ZNetIsDedicated() => ZNet.instance != null && ZNet.instance.IsDedicated();
 
-        /// <summary>Admin check for routed-RPC senders. A null peer means the call originated on the server itself.</summary>
+        /// <summary>
+        /// The gate for FGN's server-side stress / test commands: only on a server with "Server test commands" on, and only for an
+        /// admin. Returns false with the reason to send back otherwise.
+        /// </summary>
+        public static bool TestCommandAllowed(long sender, string command, out string refusal)
+        {
+            refusal = null;
+            if (ZNet.instance == null || !ZNet.instance.IsServer()) refusal = $"FGN {command}: server only.";
+            else if (FiresGhettoNetworkMod.ConfigServerTestCommands == null || !FiresGhettoNetworkMod.ConfigServerTestCommands.Value)
+                refusal = $"FGN {command} is off on this server (FGN config: Server test commands).";
+            else if (!IsAdmin(sender)) refusal = $"FGN {command} denied: admin only.";
+            return refusal == null;
+        }
+
+        /// <summary>
+        /// Admin check for routed-RPC senders. Fails closed: a sender that is no connected peer is allowed only when it is this
+        /// process itself (the server's own calls); any other unknown sender id is refused.
+        /// </summary>
         public static bool IsAdmin(long sender)
         {
+            if (ZNet.instance == null) return false;
             ZNetPeer peer = ZNet.instance.GetPeer(sender);
-            if (peer == null) return true;
+            if (peer == null) return sender == ZNet.GetUID();
 
             string host = peer.m_rpc?.GetSocket()?.GetHostName();
             return !string.IsNullOrEmpty(host) && ZNet.instance.IsAdmin(host);

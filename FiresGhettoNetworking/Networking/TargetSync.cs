@@ -53,7 +53,7 @@ namespace FiresGhettoNetworkMod
             zdo.Set(s_writerKey, me);
             if (s_announced) return;
             s_announced = true;
-            LoggerOptions.LogInfo($"[FGN] target sync: on ({TargetKeyName})");
+            LoggerOptions.LogDebug($"[FGN] target sync: on ({TargetKeyName})");
         }
 
         // A pack spawned alerted and targeting would go PASSIVE when the dedi took it over. The alert

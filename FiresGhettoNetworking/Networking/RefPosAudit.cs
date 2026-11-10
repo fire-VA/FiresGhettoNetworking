@@ -69,7 +69,7 @@ namespace FiresGhettoNetworkMod
                 if (!warn && !LoggerOptions.DebugEnabled) continue;
                 string line = $"[RefPos] {peer.m_playerName} ({peer.m_uid}): reported ({reported.x:F0}, {reported.z:F0}), character ({at.x:F0}, {at.z:F0}), "
                               + $"{drift:F0} m apart";
-                if (warn) LoggerOptions.LogWarning(line + " (left as reported: within the snap distance or no character yet)");
+                if (warn) LoggerOptions.LogDebug(line + " (left as reported: within the snap distance or no character yet)");
                 else LoggerOptions.LogDebug(line);
             }
         }

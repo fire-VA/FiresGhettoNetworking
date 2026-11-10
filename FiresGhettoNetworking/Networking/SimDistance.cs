@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace FiresGhettoNetworkMod
 {
@@ -15,6 +15,7 @@ namespace FiresGhettoNetworkMod
         // SimulationDistance.OriginalDistance = (2, 2, classic).
         private const int FallbackNear = 2;
         private const int FallbackFar = 2;
+        private static bool s_classicLogged;
 
         internal static SimulationDistance Synced()
         {
@@ -51,12 +52,32 @@ namespace FiresGhettoNetworkMod
         internal static bool ZoneInRadius(Vector2s centre, Vector2s zone, int radius, bool ghostZone = false)
         {
             if (ZoneSystem.instance == null) return true;
-            if (Synced().IsClassic) return true;
+            // 1.6.31: "true" was only right inside a square sweep. Keep-alive, ownership and active-area callers ask with no sweep, so
+            // with vanilla's default classic distance every zone in the world counted as covered. Now the square itself.
+            if (Synced().IsClassic)
+            {
+                if (!s_classicLogged)
+                {
+                    s_classicLogged = true;
+                    LoggerOptions.LogDebug("[SimDistance] classic simulation distance: zone tests use the square area (x and y each within the radius)");
+                }
+                Vector2s c = FgnRing.On ? FgnRing.Delta(centre, zone) : new Vector2s(zone.x - centre.x, zone.y - centre.y);
+                return Mathf.Abs(c.x) <= radius && Mathf.Abs(c.y) <= radius;
+            }
+            // 1.5.78 halo ring: object sectors around the ring wrap at the seam; vanilla's ZonesWithinRadius (id * 64 distance)
+            // would call two neighbours either side of it 469 zones apart. Same radius rule on the wrapped delta.
+            if (FgnRing.On)
+            {
+                Vector2s d = FgnRing.Delta(centre, zone);
+                float size = ZoneSystem.instance.m_zoneSize;
+                float limit = radius * size + (ghostZone ? size * 0.8f : size * 0.5f);
+                return (float)(d.x * d.x + d.y * d.y) * size * size < limit * limit;
+            }
             return ZoneSystem.instance.ZonesWithinRadius(centre, zone, radius, ghostZone);
         }
 
         /// <summary>Is a world point within <paramref name="radius"/> zones of <paramref name="centre"/>?</summary>
         internal static bool PointInRadius(Vector3 point, Vector2s centre, int radius)
-            => ZoneInRadius(centre, ZoneSystem.GetZone(point), radius);
+            => ZoneInRadius(centre, FgnRing.Sector(point), radius);
     }
 }

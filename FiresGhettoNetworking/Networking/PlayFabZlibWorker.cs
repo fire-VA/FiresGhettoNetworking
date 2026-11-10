@@ -55,7 +55,7 @@ namespace FiresGhettoNetworkMod
             {
                 string started = StartWorkerThread();
                 if (started == null)
-                    LoggerOptions.LogInfo("[PlayFabZlib] crossplay (de)compression runs outside the shared lock; the lock only hands messages in and "
+                    LoggerOptions.LogDebug("[PlayFabZlib] crossplay (de)compression runs outside the shared lock; the lock only hands messages in and "
                         + "out (FGN's compression thread runs in place of vanilla's).");
                 else
                     LoggerOptions.LogWarning($"[PlayFabZlib] {started}; vanilla's compression loop is used this session.");

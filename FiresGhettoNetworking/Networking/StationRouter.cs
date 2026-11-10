@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
@@ -67,6 +67,14 @@ namespace FiresGhettoNetworkMod
 
         // Read on every routed RPC rather than at startup, so the fix turns on and off live.
         internal static bool Enabled => ConfigEnabled != null && ConfigEnabled.Value;
+
+        private static int s_serverTargeted;
+        // Why it acted, for the first few and then every 50th: shows how often requests really arrive aimed at the server.
+        internal static void CountServerTargeted()
+        {
+            s_serverTargeted++;
+            if (s_serverTargeted <= 5 || s_serverTargeted % 50 == 0) LoggerOptions.LogDebug($"[StationRouter] station request aimed at the headless server went to the router instead of being dropped ({s_serverTargeted} so far).");
+        }
 
         internal static bool TryRoute(ZRoutedRpc routedRpc, ZRoutedRpc.RoutedRPCData data)
         {
@@ -163,7 +171,7 @@ namespace FiresGhettoNetworkMod
                 return 0L;
             }
             zdo.SetOwner(sender);
-            LoggerOptions.LogInfo($"[StationRouter] {Describe(zdo)} had no player running it ({(owner == 0L ? "no owner" : "server")}), handed to {PeerName(sender)}.");
+            LoggerOptions.LogDebug($"[StationRouter] {Describe(zdo)} had no player running it ({(owner == 0L ? "no owner" : "server")}), handed to {PeerName(sender)}.");
             return sender;
         }
 
@@ -220,6 +228,16 @@ namespace FiresGhettoNetworkMod
         private static string ItemOf(ZRoutedRpc.RoutedRPCData request, ZDO zdo)
         {
             int m = request.m_methodHash;
+            // 1.6.31: Fermenter's RPC_AddItem sends the item's prefab hash and a bool, not a name as the cooking station does.
+            if (m == s_addItem && zdo != null && ZNetScene.instance != null)
+            {
+                var station = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+                if (station != null && station.GetComponentInChildren<Fermenter>(true) != null)
+                {
+                    try { request.m_parameters.SetPos(0); var drop = ZNetScene.instance.GetPrefab(request.m_parameters.ReadInt()); return drop != null ? drop.name : null; }
+                    catch { return null; }
+                }
+            }
             if (m == s_addOre || m == s_addItem || m == s_addAmmo)
             {
                 try { request.m_parameters.SetPos(0); return request.m_parameters.ReadString(); }
@@ -233,6 +251,11 @@ namespace FiresGhettoNetworkMod
                 if (smelter != null && smelter.m_fuelItem != null) return smelter.m_fuelItem.name;
                 Fireplace fire = prefab.GetComponentInChildren<Fireplace>(true);
                 if (fire != null && fire.m_fuelItem != null) return fire.m_fuelItem.name;
+                CookingStation cooker = prefab.GetComponentInChildren<CookingStation>(true);
+                if (cooker != null && cooker.m_fuelItem != null) return cooker.m_fuelItem.name;
+                // Several fuels are allowed and the RPC doesn't say which: only a single-fuel generator can name it.
+                ShieldGenerator shield = prefab.GetComponentInChildren<ShieldGenerator>(true);
+                if (shield != null && shield.m_fuelItems != null && shield.m_fuelItems.Count == 1 && shield.m_fuelItems[0] != null) return shield.m_fuelItems[0].name;
             }
             return null;
         }

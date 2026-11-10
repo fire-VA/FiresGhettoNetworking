@@ -42,6 +42,7 @@ namespace FiresGhettoNetworkMod.AutoTune
         private static Func<ZNetScene, bool> s_inLoadingScreen;
         private static bool s_helpersResolved;
         private static bool s_timeSliceDisabled;
+        private static bool s_pathLogged;   // 1.6.5: one Debug line naming the path taken (client joined / local host)
 
         private static readonly List<ZDO> s_pendingNear = new List<ZDO>();
 
@@ -80,108 +81,26 @@ namespace FiresGhettoNetworkMod.AutoTune
         {
             // Server: the dedicated server's CreateDestroyObjects path lives in ServerAuthorityPatches and calls
             // __instance.CreateObjects; it gets its own budget (ServerCreate), not the client's.
-            bool server;
+            // 1.6.5 (Fire 10-28): a game hosted from the client (local world / host-and-play) is a server but not dedicated;
+            // it used to fall to ServerCreate, which stands aside unless dedicated, so hosts never got the time slice.
+            // Now only a DEDICATED server takes ServerCreate; a local host takes the client time slice (its CreateObjects
+            // lists are built around its own player, like a joined client's).
+            bool dedicated;
             try
             {
-                server = ZNet.instance != null && ZNet.instance.IsServer();
+                bool server = ZNet.instance != null && ZNet.instance.IsServer();
+                dedicated = server && ZNet.instance.IsDedicated();
+                
             }
             catch
             {
                 // ZNet.instance access failed — very early in startup. Defer to vanilla.
                 return true;
             }
-            if (server)
+            if (dedicated)
                 return ServerCreate(__instance, currentNearObjects, currentDistantObjects);
-
-            if (!EffectiveConfig.TimeSliceInstantiationEnabled())
-                return true;
-
-            // ValheimCommunityPatch creates from its own queue inside the CreateObjectsSorted / CreateDistantObjects
-            // prefixes and hands CreateObjects empty lists; this pass would bypass it.
-            if (ValheimCommunityPatchCompat.SchedulesObjectCreation)
-                return true;
-
-            if (!TryResolveVanillaHelpers())
-                return true;
-
-            // Behind the loading screen vanilla creates 100 objects a frame to get the player in sooner; frame pacing
-            // only matters once they are playing.
-            if (s_inLoadingScreen(__instance))
-                return true;
-
-            int nearCount    = currentNearObjects    != null ? currentNearObjects.Count    : 0;
-            int distantCount = currentDistantObjects != null ? currentDistantObjects.Count : 0;
-            if (nearCount == 0 && distantCount == 0)
-                return false;
-
-            int budgetMs    = EffectiveConfig.InstantiationBudgetMs();
-            int maxPerFrame = EffectiveConfig.MaxInstancesPerFrame();
-
-            // Safety fallback: if the pending list is huge (teleport into megabase,
-            // freshly-loaded zones), widen the budget so we don't bleed across
-            // many seconds. Capped at SafetyBudgetMaxMs so we never burn an entire
-            // frame on instantiation alone.
-            if (EffectiveConfig.SafetyFallbackEnabled())
-            {
-                int totalPending = nearCount + distantCount;
-                if (totalPending > EffectiveConfig.SafetyFallbackThreshold())
-                {
-                    int widened = budgetMs * SafetyBudgetMultiplier;
-                    if (widened > SafetyBudgetMaxMs) widened = SafetyBudgetMaxMs;
-                    budgetMs = widened;
-                }
-            }
-
-            long budgetTicks = (long)budgetMs * Stopwatch.Frequency / 1000L;
-            var sw = Stopwatch.StartNew();
-            int created = 0;
-
-            try
-            {
-                // Vanilla's CreateObjectsSorted order: uncreated near objects, terrain first, then buildings, then the
-                // rest, nearest first, each created only once its zone is ready for that type.
-                if (nearCount > 0 && ZoneSystem.instance.IsActiveAreaLoaded())
-                {
-                    Vector3 referencePosition = ZNet.instance.GetReferencePosition();
-                    s_pendingNear.Clear();
-                    foreach (ZDO zdo in currentNearObjects)
-                    {
-                        if (zdo.Created) continue;
-                        zdo.m_tempSortValue = Utils.DistanceSqr(referencePosition, zdo.GetPosition());
-                        s_pendingNear.Add(zdo);
-                    }
-                    s_pendingNear.Sort(s_vanillaOrder);
-
-                    foreach (ZDO zdo in s_pendingNear)
-                    {
-                        if (created >= maxPerFrame || sw.ElapsedTicks >= budgetTicks) break;
-                        if (!ZoneSystem.instance.IsZoneReadyForType(zdo.GetSector(), zdo.Type)) continue;
-                        if (s_createObject(__instance, zdo) != null) created++;
-                    }
-                    s_pendingNear.Clear();
-                }
-
-                // Distant objects get what the near pass leaves, as in vanilla.
-                if (distantCount > 0)
-                {
-                    foreach (ZDO zdo in currentDistantObjects)
-                    {
-                        if (created >= maxPerFrame || sw.ElapsedTicks >= budgetTicks) break;
-                        if (zdo.Created) continue;
-                        if (s_createObject(__instance, zdo) != null) created++;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                // Objects created before the throw are marked Created, so vanilla picks up exactly where this stopped.
-                s_pendingNear.Clear();
-                s_timeSliceDisabled = true;
-                LoggerOptions.LogWarning($"[AutoTune] Time-slice instantiation threw and is off for the rest of this session; vanilla instantiation takes over. {ex}");
-                return true;
-            }
-
-            return false;
+            // 1.6.83 ([fgn], Fire 11-09 single-player split): client and local-host create pacing is EasyBakeMeshes' now; without EBM these run vanilla's pass
+            return true;
         }
 
         // Vanilla's InLoadingScreen() is true whenever there is no local player, so a dedicated server always takes the
@@ -201,6 +120,11 @@ namespace FiresGhettoNetworkMod.AutoTune
             if (created == 0) return true;
             return !s_prefabCostTicks.TryGetValue(zdo.GetPrefab(), out long cost) || elapsed + cost <= budgetTicks;
         }
+
+        /// <summary>1.6.57: the server create queue (ServerStream) creates through the same timed path, prefab costs and frame split.</summary>
+        internal static bool ServerHelpersReady() => TryResolveVanillaHelpers();
+        internal static GameObject ServerTimedCreate(ZNetScene scene, ZDO zdo, Stopwatch sw) => TimedCreate(scene, zdo, sw);
+        internal static bool ServerFits(ZDO zdo, int created, long elapsed, long budgetTicks) => FitsBudget(zdo, created, elapsed, budgetTicks);
 
         private static GameObject TimedCreate(ZNetScene scene, ZDO zdo, Stopwatch sw)
         {
@@ -391,7 +315,7 @@ namespace FiresGhettoNetworkMod.AutoTune
             }
             else if (++s_transpilerRuns == 1)
             {
-                LoggerOptions.LogInfo($"[AutoTune] ZoneLoadBatch: patched {patched} per-frame cap constant(s) (in-game cap + loading-screen cap) via runtime helper.");
+                LoggerOptions.LogDebug($"[AutoTune] ZoneLoadBatch: patched {patched} per-frame cap constant(s) (in-game cap + loading-screen cap) via runtime helper.");
             }
             else
             {

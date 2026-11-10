@@ -1,3 +1,39 @@
+## 1.6.65
+- Less work standing in big bases: when nothing near you is waiting to load or unload, the game's 30-per-second check over every nearby object runs 10 times a second instead (new setting "Skip Idle Object Area Passes", on). (performance)
+
+## 1.6.64
+- FGN now keeps network-synced bodies' kinematic state right itself (the "Kinematic sync sweep" setting works on its own). (performance)
+- Mods can ask FGN to stream chosen objects far beyond the active area, and to wait for FGN's bandwidth test before a big transfer, through FGN's own API. (network)
+
+## 1.6.63
+- FGN no longer looks for any other mod. Mods that show FGN's stats, keep their creatures at full speed, or use the kinematic sync sweep setting now read or register through FGN's own API. (network)
+
+## 1.6.62
+- RPC census names come from registrations and the RPCs this game sends, no longer from scanning loaded assemblies. (logs)
+- Server object removal no longer looks for any other mod: a mod that keeps objects loaded on a server registers through FGN's own API instead. (network)
+
+## 1.6.51
+- Fast Leave Cleanup finds its game method safely on every game build. Hexium's store check showed a false "expected to be broken" warning for 1.6.50; nothing was broken, and this version clears it. (fixes)
+
+## 1.6.50
+- **Fixed: new areas could generate with no trees, rocks or plants** in single-player or when hosting from the game (FGN 1.6.9 - 1.6.27). "Spread Terrain Rebuilds" delayed the ground of a brand-new area, and the game placed its trees before the ground existed. New areas now build their ground at once. Areas that already generated bare stay bare in that world. Dedicated servers were not affected. (fixes)
+- Companion keep-alive and homestead settings move to FiresCompanions; they arrive with its next update. Until then, server keep-alive of companion trip areas is off. (network)
+- Water and terrain at portal arrivals and teleports line up again (no seams). (fixes)
+- Fermenters, cooking stations and shield generators: refunds and requests reach a headless server and name the right item. (fixes)
+- Cleaner logs: normal play shows one-time events and warnings; test lines need Log Level Debug. (logs)
+- "Remote Motion (experimental)" is off by default again, and updates no longer switch it on. If other players looked jittery when walking, this was why. (network)
+- "Fast Leave Cleanup" is on: a player leaving no longer stalls the server (about 75-95 ms saved per leave on a big world). (performance)
+- Faster object creation when arriving in an area, and smoother play while moving. (performance)
+- Fewer warnings with WackysDatabase broken item clones (handled, nothing lost). (logs)
+
+If you can't update yet: set "Spread Terrain Rebuilds = false" under [02 - Client Performance] in BepInEx\config\com.Fire.FiresGhettoNetworkMod.cfg, with the game closed.
+
+## 1.6.44
+- Fast Leave Cleanup is now on by default: a player leaving no longer stalls the server (about 75-95 ms saved per leave on a big world).
+
+## 1.6.42
+- "Remote Motion (experimental)" was accidentally set to on by default at some point, and an older update could also switch it on by itself in settings you already had. If other players look jittery when they walk, turn it off in FGN's settings. New installs now have it off by default, and updates no longer switch it on.
+
 ## 1.5.72
 - Fires companions are never taken over by the server or moved between players any more, so a wild companion no longer T-poses or floats.
 - With "Server ZDO Ownership" on, picking up items and editing terrain work again.

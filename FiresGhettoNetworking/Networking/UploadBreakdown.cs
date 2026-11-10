@@ -44,6 +44,7 @@ namespace FiresGhettoNetworkMod
         [HarmonyPatch(typeof(ZRpc), nameof(ZRpc.Invoke)), HarmonyPostfix]
         static void AfterInvoke(string method, object[] parameters, int ___m_sentData, int __state)
         {
+            if (!LoggerOptions.DebugEnabled) return;   // 1.5.95: the [Upload] report prints only at Debug, so nothing is counted below it (every ZDOData send was walked object by object)
             int bytes = ___m_sentData - __state;
             if (bytes <= 0 || ZNet.instance == null || ZNet.instance.IsServer()) return;
             if (s_periodStart < 0f) s_periodStart = Time.unscaledTime;
@@ -62,7 +63,7 @@ namespace FiresGhettoNetworkMod
 
         [HarmonyPatch(typeof(ZRoutedRpc), nameof(ZRoutedRpc.InvokeRoutedRPC), typeof(long), typeof(ZDOID), typeof(string), typeof(object[]))]
         [HarmonyPrefix]
-        static void BeforeRoutedInvoke(string methodName) => s_routedMethods.Push(methodName);
+        static void BeforeRoutedInvoke(string methodName) { if (LoggerOptions.DebugEnabled) s_routedMethods.Push(methodName); }   // 1.5.95: Debug only, as AfterInvoke
 
         [HarmonyPatch(typeof(ZRoutedRpc), nameof(ZRoutedRpc.InvokeRoutedRPC), typeof(long), typeof(ZDOID), typeof(string), typeof(object[]))]
         [HarmonyFinalizer]
@@ -85,8 +86,6 @@ namespace FiresGhettoNetworkMod
             if (s_byRoutedMethod.Count > 0) yield return "[Upload] RoutedRPC by method: " + Top(s_byRoutedMethod, routed => routed);
             string delta = ZDODeltaPatches.TakeReportLine();
             if (delta != null) yield return delta;
-            string fires = FireplaceFuelTicks.TakeReportLine();
-            if (fires != null) yield return fires;
             string writes = TransformWriteRate.TakeReportLine();
             if (writes != null) yield return writes;
             StartPeriod();

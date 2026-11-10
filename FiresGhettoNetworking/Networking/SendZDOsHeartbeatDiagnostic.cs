@@ -64,7 +64,7 @@ namespace FiresGhettoNetworkMod
                 ? (100f * st.TicksBailedQueueFull / st.TicksAttempted)
                 : 0f;
 
-            LoggerOptions.LogMessage(
+            LoggerOptions.LogDebug(
                 $"[SendZDOsHB] peer={peerName} uid={uid} queue={queueSize}B cap={cap}B budget={budget}B "
                 + $"ticks(attempted={st.TicksAttempted},bailedQueueFull={st.TicksBailedQueueFull},bailPct={bailPct:F1}%) "
                 + $"flush={flush}.");

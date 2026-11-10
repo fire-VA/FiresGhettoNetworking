@@ -147,12 +147,12 @@ namespace FiresGhettoNetworkMod
             bool ownStall = s_reportLargestBehindSeconds >= s_reportLargestAheadSeconds
                 && s_reportLongestFrameSeconds >= s_reportLargestBehindSeconds;
             if (Math.Max(s_reportLargestBehindSeconds, s_reportLargestAheadSeconds) < NotableCorrectionSeconds)
-                LoggerOptions.LogInfo(line);
+                LoggerOptions.LogDebug(line);
             else if (ownStall)
-                LoggerOptions.LogMessage(line + " This client's own long frame covers the correction: its clock fell behind while it was "
+                LoggerOptions.LogDebug(line + " This client's own long frame covers the correction: its clock fell behind while it was "
                     + "stalled here (a load or a hitch), not because of the server.");
             else
-                LoggerOptions.LogMessage(line + " Corrections this large mean the server's frames are too slow or its link is unsteady.");
+                LoggerOptions.LogDebug(line + " Corrections this large mean the server's frames are too slow or its link is unsteady.");
 
             s_reportCount = 0;
             s_reportLargestBehindSeconds = 0.0;

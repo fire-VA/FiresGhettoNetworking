@@ -1,6 +1,6 @@
 {
     "name": "FiresGhettoNetworking",
-    "version_number": "1.5.73",
+    "version_number": "1.6.84",
     "website_url": "https://github.com/fire-VA/FiresGhettoNetworking",
     "description": "Smoother Valheim multiplayer: compression, auto-tuned send rates, optional server-side simulation, and no lost or duplicated smelter/kiln items on servers. Works server-only or on both.",
     "dependencies": [

@@ -65,7 +65,7 @@ namespace FiresGhettoNetworkMod
             ZNetPeer server = ZNet.instance.GetServerPeer();
             if (server == null || sender != server.m_uid) return;
             bool on = (rules & RuleLagFairDodge) != 0;
-            if (on) LoggerOptions.LogInfo("[LagFairDodge] this server has PvP Lag-Fair Dodge on: a player's hit that arrives within 2 × ping + 100 ms "
+            if (on) LoggerOptions.LogDebug("[LagFairDodge] this server has PvP Lag-Fair Dodge on: a player's hit that arrives within 2 × ping + 100 ms "
                 + "(at most 200 ms) of your dodge ending counts as dodged.");
             s_serverOn = on;
         }
@@ -113,7 +113,7 @@ namespace FiresGhettoNetworkMod
             if (since < 0f || since > window) return false;
             if (!me.InCutscene() && !me.IsTeleporting() && hit.m_staggerMultiplier >= FullStaggerMultiplier) me.Stagger(hit.m_dir);
             s_forgiven++;
-            LoggerOptions.LogInfo($"[LagFairDodge] {attacker.GetPlayerName()}'s hit arrived {since * MsPerSecond:F0} ms after your dodge ended "
+            LoggerOptions.LogDebug($"[LagFairDodge] {attacker.GetPlayerName()}'s hit arrived {since * MsPerSecond:F0} ms after your dodge ended "
                 + $"(window {window * MsPerSecond:F0} ms): dodged ({s_forgiven} this session).");
             return true;
         }

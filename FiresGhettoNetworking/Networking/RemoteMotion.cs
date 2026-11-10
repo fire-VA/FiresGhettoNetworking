@@ -54,8 +54,10 @@ namespace FiresGhettoNetworkMod
 
         public static void InitConfig(ConfigFile config)
         {
-            ConfigEnabled = config.Bind("03 - Player Sync", "Remote Motion (experimental)", true,
-                Cfg.Basic("Draws other players' movement smoothly."));
+            // 1.6.42 (Fire 11-05): "it's meant to be false by default". On, other players shake while they walk (player report); off until
+            // the cause is fixed. Existing cfgs keep their value (never forced at read time).
+            ConfigEnabled = config.Bind("03 - Player Sync", "Remote Motion (experimental)", false,
+                Cfg.Basic("Draws other players' movement smoothly. Experimental: can make other players shake; leave off unless testing."));
             ConfigSendStamps = config.Bind("03 - Player Sync", "Send Remote Motion Timestamps", true,
                 Cfg.Adv("Adds timestamps to your movement so others can draw you smoothly."));
             ConfigDelayMs = config.Bind("03 - Player Sync", "Remote Motion Delay (ms)", DefaultDelayMs,
@@ -66,18 +68,8 @@ namespace FiresGhettoNetworkMod
                     new AcceptableValueRange<int>(0, 500)));
             ConfigBlendMs = config.Bind("03 - Player Sync", "Remote Motion Blend (ms)", DefaultBlendMs,
                 Cfg.Adv("How long corrections take to blend in (0 = snap).", new AcceptableValueRange<int>(0, 500)));
-            // One-time migration: a cfg still holding the untouched old defaults gets the new ones; any value a player changed stays.
-            if (!ConfigEnabled.Value && ConfigDelayMs.Value == OldDefaultDelayMs && ConfigExtrapolationCapMs.Value == OldDefaultCapMs
-                && ConfigBlendMs.Value == OldDefaultBlendMs)
-            {
-                ConfigEnabled.Value = true;
-                ConfigDelayMs.Value = DefaultDelayMs;
-                ConfigExtrapolationCapMs.Value = DefaultCapMs;
-                ConfigBlendMs.Value = DefaultBlendMs;
-                LoggerOptions.LogInfo("[RemoteMotion] the untouched old defaults moved to the new ones: "
-                    + $"'{ConfigEnabled.Definition.Key}' false -> true, '{ConfigDelayMs.Definition.Key}' 40 -> {DefaultDelayMs}, "
-                    + $"'{ConfigExtrapolationCapMs.Definition.Key}' 200 -> {DefaultCapMs}, '{ConfigBlendMs.Definition.Key}' 50 -> {DefaultBlendMs}.");
-            }
+            // 1.6.42: the one-time migration that switched an untouched old cfg ON (false -> true) is removed: it turned this on for
+            // players who never chose it, which is how it shipped on.
         }
 
         private const int DefaultDelayMs = 20;

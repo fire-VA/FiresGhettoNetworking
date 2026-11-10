@@ -131,6 +131,7 @@ namespace FiresGhettoNetworkMod
             SssTestAreas.RegisterCommandAndRpcs();
             LagFairDodge.RegisterRpcs();
             NetSim.RegisterCommand();
+               // 1.6.68
             if (s_commandRegistered) return;
             s_commandRegistered = true;
             new Terminal.ConsoleCommand("fgn_links",
@@ -153,7 +154,7 @@ namespace FiresGhettoNetworkMod
             if (ZNet.instance != null && ZNet.instance.IsDedicated() && link.HasStatus)
             {
                 double span = Math.Max(0.001, Time.realtimeSinceStartupAsDouble - link.SendsSince);
-                LoggerOptions.LogInfo($"[Links] left: {Describe(link)}, sends {link.Sends / span:F1}/s"
+                LoggerOptions.LogDebug($"[Links] left: {Describe(link)}, sends {link.Sends / span:F1}/s"
                     + (link.RatePinned ? $", rate pinned {link.RateTarget / BytesPerMegabyte:F1} MB/s" : ""));
             }
             s_links.Remove(netPeer);
@@ -246,6 +247,16 @@ namespace FiresGhettoNetworkMod
                 if (link.Window > max) link.Window = max;
         }
 
+        /// <summary>[wishbone] server N43: the send window HasRoom compares against, read only (no link is created, nothing is
+        /// updated). False when this peer has no link yet; the caller then uses vanilla's 10240-byte SendZDOs gate.</summary>
+        internal static bool TryRoomLimit(ZNetPeer netPeer, out int limitBytes)
+        {
+            limitBytes = 0;
+            if (netPeer == null || !s_links.TryGetValue(netPeer, out var link)) return false;
+            limitBytes = link.Window - MinChunkBytes;
+            return true;
+        }
+
         private static Link LinkOf(ZDOMan.ZDOPeer peer) => LinkOf(peer?.m_peer);
 
         private static Link LinkOf(ZNetPeer netPeer)
@@ -326,7 +337,7 @@ namespace FiresGhettoNetworkMod
             if (!link.Peer.m_server && string.IsNullOrEmpty(link.Peer.m_playerName)) return;
             link.CrossplayNoticed = true;
             string connection = link.Peer.m_server ? "Connected to the server" : PeerName(link.Peer) + " is connected";
-            LoggerOptions.LogMessage($"[Crossplay] {connection} over crossplay (PlayFab). FGN compression, Steam send rates and the "
+            LoggerOptions.LogDebug($"[Crossplay] {connection} over crossplay (PlayFab). FGN compression, Steam send rates and the "
                 + $"adaptive send window do not apply to a crossplay connection. Holding {CrossplayInFlightKb()} KB of real "
                 + $"in-flight data (gate {CrossplayWindowBytes() / BytesPerKilobyte} KB, since PlayFab reports a quarter of "
                 + "what it has outstanding); vanilla's own 10 KB gate would allow about 40 KB.");
@@ -515,7 +526,7 @@ namespace FiresGhettoNetworkMod
                 link.NextRateStep = now + RateStepSeconds;
                 link.RatePinned = NetworkingRatesGroup.PinConnectionRate(link.Connection, start, raising: true);
                 if (LogTicks())
-                    LoggerOptions.LogMessage($"[AdaptiveRate] {Describe(link)}; rate pinned at {start / BytesPerMegabyte:F1} MB/s"
+                    LoggerOptions.LogDebug($"[AdaptiveRate] {Describe(link)}; rate pinned at {start / BytesPerMegabyte:F1} MB/s"
                         + (link.RatePinned ? "" : " [PIN FAILED]"));
                 return;
             }
@@ -576,7 +587,7 @@ namespace FiresGhettoNetworkMod
             link.RateTarget = next;
 
             if (LogTicks())
-                LoggerOptions.LogMessage($"[AdaptiveRate] {Describe(link)}; {decision}: rate {current / BytesPerMegabyte:F1} -> {next / BytesPerMegabyte:F1} MB/s"
+                LoggerOptions.LogDebug($"[AdaptiveRate] {Describe(link)}; {decision}: rate {current / BytesPerMegabyte:F1} -> {next / BytesPerMegabyte:F1} MB/s"
                     + (pinned.HasValue && !pinned.Value ? " [PIN FAILED]" : ""));
         }
 
@@ -613,7 +624,7 @@ namespace FiresGhettoNetworkMod
             }
             string report = BuildReport();
             args.Context?.AddString(report);
-            LoggerOptions.LogMessage(report);
+            LoggerOptions.LogDebug(report);
             if (!ZNet.instance.IsServer()) ZRoutedRpc.instance.InvokeRoutedRPC(RpcLinksRequest);
         }
 
@@ -624,7 +635,7 @@ namespace FiresGhettoNetworkMod
             if (ServerClientUtils.IsAdmin(sender))
             {
                 reply = BuildReport();
-                LoggerOptions.LogMessage(reply);
+                LoggerOptions.LogDebug(reply);
             }
             try { ZRoutedRpc.instance.InvokeRoutedRPC(sender, RpcLinksReply, reply); }
             catch { }
@@ -632,8 +643,9 @@ namespace FiresGhettoNetworkMod
 
         private static void RPC_LinksReply(long sender, string report)
         {
+            if (!RoutedSenderGuard.FromServer(sender)) return;
             if (global::Console.instance != null) global::Console.instance.AddString(report);
-            LoggerOptions.LogMessage(report);
+            LoggerOptions.LogDebug(report);
         }
 
         internal static void ReportPeriodically(ZNet __instance)
@@ -653,7 +665,7 @@ namespace FiresGhettoNetworkMod
             if (now < s_nextReport) return;
             s_nextReport = now + ReportSeconds;
             ServerHealth.EmitSummary();
-            LoggerOptions.LogInfo(BuildReport());
+            LoggerOptions.LogDebug(BuildReport());
         }
 
         private static string BuildReport()

@@ -45,8 +45,24 @@ namespace FiresGhettoNetworkMod
 
         public static void InitConfig(ConfigFile config)
         {
+            ConfigSkipNoPeers = config.Bind("13 - Compatibility", "Owner-Safe Writes Skip With No Peers", true,
+                Cfg.Adv("With nobody connected there is no player's copy to protect, so the per-write checks are skipped (world loading, single player, an empty host)."));
             ConfigEnabled = config.Bind("13 - Compatibility", "Owner-Safe Server Writes", true,
                 Cfg.Adv("Stops server-side world scripts overwriting a player's newer changes, like sign text."));
+        }
+
+        // 1.6.82 ([fgn], lead audit 11-09): the first test of every write hook. No peer = nothing another machine owns; a field read instead of a thread and ZNet check per write.
+        internal static ConfigEntry<bool> ConfigSkipNoPeers;
+        private static bool s_noPeersSaid;
+        internal static bool NoPeers
+        {
+            get
+            {
+                ZDOMan man = ZDOMan.instance;
+                if (man == null || s_peers(man).Count != 0 || ConfigSkipNoPeers == null || !ConfigSkipNoPeers.Value) return false;
+                if (!s_noPeersSaid) { s_noPeersSaid = true; LoggerOptions.LogDebug("[OwnerSafe] no peers connected: per-write checks skipped until one joins"); }
+                return true;
+            }
         }
 
         private static bool Active => ConfigEnabled != null && ConfigEnabled.Value && ZNet.instance != null && ZNet.instance.IsServer();
@@ -68,7 +84,7 @@ namespace FiresGhettoNetworkMod
 
         private static void Note(ZDO zdo)
         {
-            if (s_receiving || s_adjusting || !OnMainThread || !Active) return;
+            if (NoPeers || s_receiving || s_adjusting || !OnMainThread || !Active) return;
             long owner = zdo.GetOwner();
             if (owner == 0L || owner == ZDOMan.GetSessionID()) return;
             s_written.Add(zdo);
